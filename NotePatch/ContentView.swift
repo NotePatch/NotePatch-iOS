@@ -100,17 +100,7 @@ private struct AuthScreen: View {
                 VStack(spacing: 32) {
                     // Hero 区 — staggered 入场
                     VStack(spacing: 16) {
-                        ZStack {
-                            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                                .fill(.clear)
-                                .glassEffect(.regular.tint(.accentColor),
-                                             in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-                                .frame(width: 80, height: 80)
-                            Image(systemName: "doc.text.viewfinder")
-                                .font(.system(size: 34, weight: .medium))
-                                .foregroundStyle(.white)
-                                .symbolEffect(.bounce.byLayer, value: appear)
-                        }
+                        GlassAppIcon(size: 80, symbolSize: 34, bounce: true)
                         .scaleEffect(appear ? 1 : 0.80)
                         .opacity(appear ? 1 : 0)
 
@@ -176,13 +166,13 @@ private struct AuthScreen: View {
                                         .tint(.white)
                                 } else {
                                     Label("登录", systemImage: "arrow.right")
-                                        .fontWeight(.semibold)
+                                        .font(.body.weight(.semibold))
                                 }
                                 Spacer()
                             }
                             .frame(height: 50)
                         }
-                        .buttonStyle(.glassProminent)
+                        .notePatchGlassButtonStyle(prominent: true)
                         .disabled(model.isBusy)
                         .accessibilityIdentifier("loginButton")
 
@@ -194,7 +184,7 @@ private struct AuthScreen: View {
                                     .frame(maxWidth: .infinity)
                                     .frame(height: 44)
                             }
-                            .buttonStyle(.glass)
+                            .notePatchGlassButtonStyle()
                             .disabled(model.isBusy)
 
                             Button {
@@ -204,7 +194,7 @@ private struct AuthScreen: View {
                                     .frame(maxWidth: .infinity)
                                     .frame(height: 44)
                             }
-                            .buttonStyle(.glass)
+                            .notePatchGlassButtonStyle()
                             .disabled(model.isBusy)
                         }
 
@@ -298,15 +288,7 @@ private struct CompactTopBar: View {
     var body: some View {
         let workspaceName = model.workspaces.first(where: { $0.id == model.selectedWorkspaceId })?.name
         HStack(spacing: 12) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(.clear)
-                    .glassEffect(.regular.tint(.accentColor), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                    .frame(width: 38, height: 38)
-                Image(systemName: "doc.text.viewfinder")
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(.white)
-            }
+            GlassAppIcon(size: 38, symbolSize: 17)
             VStack(alignment: .leading, spacing: 2) {
                 Text("NotePatch")
                     .font(.headline)
@@ -627,14 +609,14 @@ private struct DocumentRow: View {
                         Label(processTitle, systemImage: "wand.and.stars")
                             .frame(maxWidth: .infinity)
                     }
-                    .buttonStyle(.glassProminent)
+                    .notePatchGlassButtonStyle(prominent: true)
                     .disabled(isBusy || document.status == "deleted")
 
                     Button(action: onDownload) {
                         Image(systemName: "arrow.down.to.line")
                             .frame(width: 22, height: 22)
                     }
-                    .buttonStyle(.glass)
+                    .notePatchGlassButtonStyle()
                     .disabled(isBusy || document.status == "deleted")
                     .accessibilityLabel("下载")
 
@@ -659,7 +641,7 @@ private struct DocumentRow: View {
                         Image(systemName: "ellipsis")
                             .frame(width: 22, height: 22)
                     }
-                    .buttonStyle(.glass)
+                    .notePatchGlassButtonStyle()
                     .disabled(isBusy)
                     .accessibilityLabel("更多操作")
                 }
@@ -944,7 +926,7 @@ private struct OpenClawChatTab: View {
                     ZStack(alignment: .topLeading) {
                         RoundedRectangle(cornerRadius: 10, style: .continuous)
                             .fill(.clear)
-                            .glassEffect(.clear, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                            .liquidGlassField()
                         if model.openClawInput.isEmpty {
                             Text("问 OpenClaw")
                                 .foregroundStyle(.secondary)
@@ -967,7 +949,7 @@ private struct OpenClawChatTab: View {
                             .font(.system(size: 15, weight: .bold))
                             .frame(width: 34, height: 34)
                     }
-                    .buttonStyle(.glassProminent)
+                    .notePatchGlassButtonStyle(prominent: true)
                     .clipShape(Circle())
                     .disabled(model.isOpenClawSending || model.openClawInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     .accessibilityLabel("发送")
@@ -1072,7 +1054,7 @@ private struct LearningUnitsSection: View {
                             }
                             Spacer()
                             Button { model.downloadAndPreview(note) } label: { Image(systemName: "eye") }
-                                .buttonStyle(.glass)
+                                .notePatchGlassButtonStyle()
                                 .disabled(note.preferredDownloadURL == nil)
                                 .accessibilityLabel("预览笔记")
                         }
@@ -1099,7 +1081,7 @@ private struct LearningSectionHeader: View {
             }
             Spacer()
             Button(action: onRefresh) { Image(systemName: "arrow.clockwise") }
-                .buttonStyle(.glass)
+                .notePatchGlassButtonStyle()
                 .disabled(isLoading)
                 .accessibilityLabel("刷新\(title)")
         }
@@ -1135,7 +1117,7 @@ private struct KnowledgeSearchSection: View {
                         Label("检索", systemImage: "magnifyingglass")
                             .frame(maxWidth: .infinity)
                     }
-                    .buttonStyle(.glassProminent)
+                    .notePatchGlassButtonStyle(prominent: true)
                     .disabled(model.isKnowledgeSearching || model.knowledgeQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     .accessibilityIdentifier("knowledgeSearchButton")
                 }
@@ -1172,7 +1154,7 @@ private struct KnowledgeSearchSection: View {
                                 Button { model.previewKnowledgeSource(item) } label: {
                                     Label("预览来源", systemImage: "doc.text.magnifyingglass")
                                 }
-                                .buttonStyle(.glass)
+                                .notePatchGlassButtonStyle()
                                 .disabled(model.isBusy)
                             }
                         }
@@ -1197,11 +1179,11 @@ private struct HomeworkGradingSection: View {
                 }
                 Spacer()
                 Button { isCreatingHomework = true } label: { Image(systemName: "plus") }
-                    .buttonStyle(.glassProminent)
+                    .notePatchGlassButtonStyle(prominent: true)
                     .disabled(model.homeworkDocumentCandidates.isEmpty)
                     .accessibilityLabel("创建作业")
                 Button { model.loadLearningDashboard(allowOfflineNetwork: true) } label: { Image(systemName: "arrow.clockwise") }
-                    .buttonStyle(.glass)
+                    .notePatchGlassButtonStyle()
                     .disabled(model.isHomeworkLoading)
                     .accessibilityLabel("刷新作业")
             }
@@ -1257,7 +1239,7 @@ private struct HomeworkGradingSection: View {
                         Label("保存评分配置", systemImage: "checkmark")
                             .frame(maxWidth: .infinity)
                     }
-                    .buttonStyle(.glassProminent)
+                    .notePatchGlassButtonStyle(prominent: true)
                     .disabled(model.isHomeworkLoading)
                 }
             }
@@ -1301,7 +1283,7 @@ private struct HomeworkGradingSection: View {
                     } label: {
                         Label("添加评分依据", systemImage: "plus")
                     }
-                    .buttonStyle(.glass)
+                    .notePatchGlassButtonStyle()
                     .disabled(selectedReferenceDocumentId.isEmpty || model.isHomeworkLoading)
                 }
             }
@@ -1318,7 +1300,7 @@ private struct HomeworkGradingSection: View {
                 Label("开始评分", systemImage: "checkmark.seal")
                     .frame(maxWidth: .infinity)
             }
-            .buttonStyle(.glassProminent)
+            .notePatchGlassButtonStyle(prominent: true)
             .disabled(model.isHomeworkLoading)
             .accessibilityIdentifier("gradeHomeworkButton")
         }
@@ -1434,7 +1416,7 @@ private struct OpenClawMessageBubble: View {
                 }
                 if message.status == .sending {
                     Text("思考中...")
-                        .fontWeight(.medium)
+                        .font(.body.weight(.medium))
                     ProgressView(value: Double(message.progress ?? 0), total: 100)
                 } else if message.role == .assistant {
                     LightweightMarkdownText(markdown: message.content, color: foregroundColor)
@@ -1506,7 +1488,7 @@ private struct SettingsTab: View {
                             Label("保存服务器设置", systemImage: "checkmark")
                                 .frame(maxWidth: .infinity)
                         }
-                        .buttonStyle(.glassProminent)
+                        .notePatchGlassButtonStyle(prominent: true)
                         .disabled(model.isBusy)
 
                         HStack(spacing: 8) {
@@ -1516,7 +1498,7 @@ private struct SettingsTab: View {
                                 Label("检测 API", systemImage: "network")
                                     .frame(maxWidth: .infinity)
                             }
-                            .buttonStyle(.glass)
+                            .notePatchGlassButtonStyle()
                             .disabled(model.isBusy)
 
                             Button {
@@ -1525,7 +1507,7 @@ private struct SettingsTab: View {
                                 Label("检测 tusd", systemImage: "arrow.up.circle")
                                     .frame(maxWidth: .infinity)
                             }
-                            .buttonStyle(.glass)
+                            .notePatchGlassButtonStyle()
                             .disabled(model.isBusy)
                         }
                     }
@@ -1577,7 +1559,7 @@ private struct SettingsTab: View {
                             Label("退出登录", systemImage: "rectangle.portrait.and.arrow.right")
                                 .frame(maxWidth: .infinity)
                         }
-                        .buttonStyle(.glass)
+                        .notePatchGlassButtonStyle()
                         .tint(.red)
                         .disabled(model.isBusy)
                     }
@@ -1636,7 +1618,7 @@ private struct WorkspaceManagementSection: View {
                     Label("恢复个人空间", systemImage: "arrow.triangle.2.circlepath")
                         .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(.glass)
+                .notePatchGlassButtonStyle()
                 .disabled(model.isBusy)
             }
         }
@@ -1699,7 +1681,7 @@ private struct MarkdownInlineText: View {
         case .text:
             return Text(token.text)
         case .bold:
-            return Text(token.text).fontWeight(.bold)
+            return Text(token.text).bold()
         case .code:
             return Text(token.text).font(.system(.body, design: .monospaced))
         case .link:
@@ -1840,13 +1822,13 @@ private struct ChoiceButton: View {
             Button(action: action) {
                 label
             }
-            .buttonStyle(.glassProminent)
+            .notePatchGlassButtonStyle(prominent: true)
             .disabled(!enabled)
         } else {
             Button(action: action) {
                 label
             }
-            .buttonStyle(.glass)
+            .notePatchGlassButtonStyle()
             .disabled(!enabled)
         }
     }
@@ -2313,14 +2295,14 @@ private struct UploadPreviewScreen: View {
                     Text("取消")
                         .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(.glass)
+                .notePatchGlassButtonStyle()
                 .accessibilityIdentifier("cancelPendingUploadButton")
 
                 Button(action: onUpload) {
                     Label("上传", systemImage: "arrow.up.circle.fill")
                         .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(.glassProminent)
+                .notePatchGlassButtonStyle(prominent: true)
                 .accessibilityIdentifier("confirmPendingUploadButton")
             }
         }
