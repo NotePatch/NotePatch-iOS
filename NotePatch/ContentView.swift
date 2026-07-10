@@ -1010,7 +1010,7 @@ private struct LearningUnitsSection: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             LearningSectionHeader(title: "学习单元", subtitle: "个人空间中的自动整理结果", isLoading: model.isLearningLoading) {
-                model.loadLearningUnits()
+                model.loadLearningUnits(allowOfflineNetwork: true)
             }
             if model.isLearningLoading && model.learningUnits.isEmpty {
                 ProgressView("正在加载学习单元...")
@@ -1185,7 +1185,7 @@ private struct HomeworkGradingSection: View {
                     .buttonStyle(.borderedProminent)
                     .disabled(model.homeworkDocumentCandidates.isEmpty)
                     .accessibilityLabel("创建作业")
-                Button { model.loadLearningDashboard() } label: { Image(systemName: "arrow.clockwise") }
+                Button { model.loadLearningDashboard(allowOfflineNetwork: true) } label: { Image(systemName: "arrow.clockwise") }
                     .buttonStyle(.bordered)
                     .disabled(model.isHomeworkLoading)
                     .accessibilityLabel("刷新作业")
@@ -1948,7 +1948,8 @@ private struct StatusBanner: View {
             statusMessage.contains("已删除") ||
             statusMessage.contains("artifacts") ||
             statusMessage.contains("OCR") ||
-            statusMessage.contains("在线状态")
+            statusMessage.contains("在线状态") ||
+            statusMessage.contains("离线测试")
         )
     }
 

@@ -149,6 +149,7 @@ final class NotePatchViewModel: ObservableObject {
     @Published var uploadTopic = ""
     @Published var downloadedPreview: DownloadedPreview?
     @Published var pendingUploadFile: LocalUploadFile?
+    @Published private(set) var isOfflineTestMode = false
 
     private let settings: SettingsStore
     private let backendSession: URLSession
@@ -185,35 +186,7 @@ final class NotePatchViewModel: ObservableObject {
         self.selectedWorkspaceId = loadedSession?.selectedWorkspaceId
         self.aiHistoryEnabled = loadedSession?.aiHistoryEnabled ?? true
         if ProcessInfo.processInfo.arguments.contains("-NotePatchUITestWorkbench") {
-            let uiSession = SavedSession(
-                baseURL: defaultLearningBackendBaseURL,
-                tusBaseURL: defaultTUSDBaseURL,
-                accessToken: "ui-access",
-                refreshToken: "ui-refresh",
-                expiresAt: "2026-07-09T12:00:00Z",
-                userId: "ui-user",
-                email: "ui@example.com",
-                fullName: "UI Test",
-                selectedWorkspaceId: "ui-workspace",
-                aiHistoryEnabled: true
-            )
-            self.session = uiSession
-            self.apiBaseURLText = uiSession.baseURL
-            self.tusBaseURLText = uiSession.tusBaseURL
-            self.emailText = uiSession.email
-            self.fullNameText = uiSession.fullName ?? ""
-            self.selectedWorkspaceId = uiSession.selectedWorkspaceId
-            self.workspaces = [WorkspaceItem(id: "ui-workspace", name: "My Workspace")]
-            self.learningUnits = [LearningUnit(id: "unit-1", title: "分数与比例", subject: "数学", gradeLevel: "七年级", topic: "比例")]
-            self.studyNotes = [StudyNoteVersion(id: "note-1", learningUnitId: "unit-1", versionNo: 1, title: "分数与比例笔记", markdownObjectKey: "", jsonObjectKey: "", highlightedObjectKey: nil, highlightMapObjectKey: nil, downloadURLs: [:])]
-            self.homeworks = [HomeworkItem(id: "homework-1", workspaceId: "ui-workspace", title: "代数作业 01", documentId: nil, rubricText: "每题 10 分", maxScore: 100)]
-            self.selectedHomeworkId = "homework-1"
-            self.homeworkRubricText = "每题 10 分"
-            self.gradingDocuments = [
-                LearningDocumentItem(id: "homework-doc", workspaceId: "ui-workspace", title: "代数作业", originalFilename: "homework.pdf", mimeType: "application/pdf", fileType: "pdf", documentKind: "homework", status: "ready"),
-                LearningDocumentItem(id: "answer-doc", workspaceId: "ui-workspace", title: "参考答案", originalFilename: "answer.pdf", mimeType: "application/pdf", fileType: "pdf", documentKind: "answer_key", status: "ready")
-            ]
-            self.didRestoreSession = true
+            activateOfflineTestMode()
         }
         if ProcessInfo.processInfo.arguments.contains("-NotePatchUITestPendingImage") {
             self.pendingUITestUploadFile = makeUITestPendingImage(in: cacheDirectory)
@@ -243,6 +216,7 @@ final class NotePatchViewModel: ObservableObject {
     }
 
     func handleScenePhase(_ scenePhase: ScenePhase) {
+        guard !isOfflineTestMode else { return }
         switch scenePhase {
         case .active:
             if let session {
@@ -292,9 +266,13 @@ final class NotePatchViewModel: ObservableObject {
     }
 
     func authenticate(register: Bool) {
+        let email = emailText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !register, email.lowercased() == "uitest" {
+            activateOfflineTestMode()
+            return
+        }
         let baseURL = normalizedAPIBaseURL()
         let tusBaseURL = normalizedTUSBaseURL()
-        let email = emailText.trimmingCharacters(in: .whitespacesAndNewlines)
         let password = passwordText
         let fullName = fullNameText.trimmingCharacters(in: .whitespacesAndNewlines)
         if email.isEmpty || password.isEmpty {
@@ -375,11 +353,12 @@ final class NotePatchViewModel: ObservableObject {
 
     func logout() {
         let activeSession = session
+        let wasOfflineTestMode = isOfflineTestMode
         stopPresence(activeSession: activeSession, sendOffline: true, clearClientId: true)
         clearLocalSession()
         statusMessage = ""
         errorMessage = nil
-        if let activeSession {
+        if let activeSession, !wasOfflineTestMode {
             Task {
                 try? await LearningBackendClient(baseURL: activeSession.baseURL, session: backendSession)
                     .logout(refreshToken: activeSession.refreshToken)
@@ -782,7 +761,7 @@ final class NotePatchViewModel: ObservableObject {
     }
 
     func loadChatHistory() {
-        if ProcessInfo.processInfo.arguments.contains("-NotePatchUITestWorkbench") { return }
+        if isOfflineTestMode { return }
         guard let activeSession = currentSessionOrError(), let workspaceId = selectedWorkspaceId else { return }
         Task {
             isChatHistoryLoading = true
@@ -869,8 +848,8 @@ final class NotePatchViewModel: ObservableObject {
         }
     }
 
-    func loadLearningUnits() {
-        if ProcessInfo.processInfo.arguments.contains("-NotePatchUITestWorkbench") { return }
+    func loadLearningUnits(allowOfflineNetwork: Bool = false) {
+        if isOfflineTestMode && !allowOfflineNetwork { return }
         guard let activeSession = currentSessionOrError(), let workspaceId = selectedWorkspaceId else { return }
         Task {
             isLearningLoading = true
@@ -883,8 +862,8 @@ final class NotePatchViewModel: ObservableObject {
         }
     }
 
-    func loadLearningDashboard() {
-        if ProcessInfo.processInfo.arguments.contains("-NotePatchUITestWorkbench") { return }
+    func loadLearningDashboard(allowOfflineNetwork: Bool = false) {
+        if isOfflineTestMode && !allowOfflineNetwork { return }
         guard let activeSession = currentSessionOrError(), let workspaceId = selectedWorkspaceId else { return }
         Task {
             isLearningLoading = true
@@ -1406,11 +1385,54 @@ final class NotePatchViewModel: ObservableObject {
         }
     }
 
+    private func activateOfflineTestMode() {
+        presenceTask?.cancel()
+        presenceTask = nil
+        let uiSession = SavedSession(
+            baseURL: normalizeLearningBackendBaseURL(apiBaseURLText),
+            tusBaseURL: normalizeTUSBaseURL(tusBaseURLText),
+            accessToken: "ui-access",
+            refreshToken: "ui-refresh",
+            expiresAt: "2099-12-31T23:59:59Z",
+            userId: "ui-user",
+            email: "uitest",
+            fullName: "UI Test",
+            selectedWorkspaceId: "ui-workspace",
+            aiHistoryEnabled: true
+        )
+        let sampleDocuments = [
+            LearningDocumentItem(id: "homework-doc", workspaceId: "ui-workspace", title: "代数作业", originalFilename: "homework.pdf", mimeType: "application/pdf", fileType: "pdf", documentKind: "homework", status: "ready"),
+            LearningDocumentItem(id: "answer-doc", workspaceId: "ui-workspace", title: "参考答案", originalFilename: "answer.pdf", mimeType: "application/pdf", fileType: "pdf", documentKind: "answer_key", status: "ready")
+        ]
+        isOfflineTestMode = true
+        didRestoreSession = true
+        session = uiSession
+        apiBaseURLText = uiSession.baseURL
+        tusBaseURLText = uiSession.tusBaseURL
+        emailText = "uitest"
+        passwordText = ""
+        fullNameText = uiSession.fullName ?? ""
+        selectedWorkspaceId = uiSession.selectedWorkspaceId
+        workspaces = [WorkspaceItem(id: "ui-workspace", name: "My Workspace")]
+        documents = sampleDocuments
+        learningUnits = [LearningUnit(id: "unit-1", title: "分数与比例", subject: "数学", gradeLevel: "七年级", topic: "比例")]
+        studyNotes = [StudyNoteVersion(id: "note-1", learningUnitId: "unit-1", versionNo: 1, title: "分数与比例笔记", markdownObjectKey: "", jsonObjectKey: "", highlightedObjectKey: nil, highlightMapObjectKey: nil, downloadURLs: [:])]
+        homeworks = [HomeworkItem(id: "homework-1", workspaceId: "ui-workspace", title: "代数作业 01", documentId: "homework-doc", rubricText: "每题 10 分", maxScore: 100)]
+        selectedHomeworkId = "homework-1"
+        homeworkRubricText = "每题 10 分"
+        homeworkMaxScoreText = "100"
+        gradingDocuments = sampleDocuments
+        errorMessage = nil
+        statusMessage = "UI 离线测试模式"
+    }
+
 
     private func clearLocalSession() {
         presenceTask?.cancel()
         presenceTask = nil
         settings.clearSession()
+        isOfflineTestMode = false
+        didRestoreSession = false
         session = nil
         selectedWorkspaceId = nil
         workspaces = []
@@ -1447,7 +1469,9 @@ final class NotePatchViewModel: ObservableObject {
     }
 
     private func saveSession(_ updated: SavedSession) {
-        settings.saveSession(updated)
+        if !isOfflineTestMode {
+            settings.saveSession(updated)
+        }
         session = updated
         apiBaseURLText = updated.baseURL
         tusBaseURLText = updated.tusBaseURL
@@ -1459,7 +1483,9 @@ final class NotePatchViewModel: ObservableObject {
 
     private func saveSelectedWorkspace(_ workspaceId: String?) {
         selectedWorkspaceId = workspaceId
-        settings.saveSelectedWorkspaceId(workspaceId)
+        if !isOfflineTestMode {
+            settings.saveSelectedWorkspaceId(workspaceId)
+        }
         let latest = settings.loadSession() ?? session
         if let latest {
             saveSession(
@@ -1498,6 +1524,7 @@ final class NotePatchViewModel: ObservableObject {
     }
 
     private func startPresence(activeSession: SavedSession) {
+        guard !isOfflineTestMode else { return }
         guard presenceTask?.isCancelled != false else {
             return
         }
@@ -1529,6 +1556,11 @@ final class NotePatchViewModel: ObservableObject {
     }
 
     private func stopPresence(activeSession: SavedSession?, sendOffline: Bool, clearClientId: Bool) {
+        guard !isOfflineTestMode else {
+            presenceTask?.cancel()
+            presenceTask = nil
+            return
+        }
         presenceTask?.cancel()
         presenceTask = nil
         let clientId = settings.loadPresenceClientId()

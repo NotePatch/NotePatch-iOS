@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 import Testing
 @testable import NotePatch
 
@@ -669,6 +670,49 @@ struct NotePatchTests {
         model.homeworkMaxScoreText = "0"
         model.saveGradingConfig()
         #expect(model.errorMessage == "满分必须大于 0。")
+    }
+
+    @Test @MainActor func uiTestEmail_entersEphemeralWorkbenchWithoutNetwork() async throws {
+        let suiteName = "NotePatchTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let settings = SettingsStore(defaults: defaults, keychain: KeychainStore(service: suiteName))
+        var requestCount = 0
+        let session = Self.mockSession { request in
+            requestCount += 1
+            return Self.response(request, status: 500, body: #"{"detail":"unexpected request"}"#)
+        }
+        let model = NotePatchViewModel(settings: settings, backendSession: session, tusSession: session)
+        model.emailText = "  UiTeSt  "
+        model.passwordText = ""
+        model.authenticate(register: false)
+
+        #expect(model.isOfflineTestMode)
+        #expect(model.session?.email == "uitest")
+        #expect(model.selectedWorkspaceId == "ui-workspace")
+        #expect(model.workspaces.first?.name == "My Workspace")
+        #expect(model.statusMessage == "UI 离线测试模式")
+        #expect(settings.loadSession() == nil)
+        #expect(requestCount == 0)
+
+        await model.restoreIfNeeded()
+        model.handleScenePhase(.active)
+        model.loadChatHistory()
+        model.loadLearningDashboard()
+        try await Task.sleep(nanoseconds: 20_000_000)
+        #expect(requestCount == 0)
+
+        model.logout()
+        #expect(model.session == nil)
+        #expect(!model.isOfflineTestMode)
+        #expect(settings.loadSession() == nil)
+        #expect(requestCount == 0)
+
+        model.emailText = "uitest"
+        model.passwordText = ""
+        model.authenticate(register: true)
+        #expect(model.session == nil)
+        #expect(model.errorMessage == "请输入邮箱和密码。")
     }
 }
 

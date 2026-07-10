@@ -19,6 +19,26 @@ final class NotePatchUITests: XCTestCase {
     }
 
     @MainActor
+    func testUITestEmailLogsIntoOfflineWorkbenchWithoutPassword() throws {
+        let app = XCUIApplication()
+        app.launchArguments.append("-NotePatchUITestNoSession")
+        app.launch()
+
+        let email = app.textFields["emailField"]
+        XCTAssertTrue(email.waitForExistence(timeout: 5))
+        email.tap()
+        email.typeText("uitest")
+        app.buttons["loginButton"].tap()
+
+        XCTAssertTrue(app.otherElements["workbenchTabs"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["My Workspace"].exists)
+        XCTAssertTrue(app.staticTexts["UI 离线测试模式"].exists)
+        XCTAssertTrue(app.tabBars.buttons["文档"].exists)
+        XCTAssertTrue(app.tabBars.buttons["OpenClaw"].exists)
+        XCTAssertTrue(app.tabBars.buttons["学习"].exists)
+    }
+
+    @MainActor
     func testWorkbenchTabsUsePersonalWorkspaceLanguage() throws {
         let app = XCUIApplication()
         app.launchArguments.append("-NotePatchUITestWorkbench")
