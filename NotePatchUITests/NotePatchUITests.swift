@@ -93,6 +93,32 @@ final class NotePatchUITests: XCTestCase {
     }
 
     @MainActor
+    func testOpenClawKeyboardCanBeDismissed() throws {
+        let app = XCUIApplication()
+        app.launchArguments.append("-NotePatchUITestWorkbench")
+        app.launch()
+
+        XCTAssertTrue(app.otherElements["workbenchTabs"].waitForExistence(timeout: 5))
+        app.tabBars.buttons["OpenClaw"].tap()
+
+        let editor = app.textViews["问 OpenClaw"]
+        XCTAssertTrue(editor.waitForExistence(timeout: 3))
+        editor.tap()
+
+        let keyboard = app.keyboards.firstMatch
+        XCTAssertTrue(keyboard.waitForExistence(timeout: 3))
+        let dismissButton = app.buttons["收起键盘"]
+        XCTAssertTrue(dismissButton.waitForExistence(timeout: 2))
+        dismissButton.tap()
+
+        let keyboardDismissed = expectation(
+            for: NSPredicate(format: "exists == false"),
+            evaluatedWith: keyboard
+        )
+        wait(for: [keyboardDismissed], timeout: 3)
+    }
+
+    @MainActor
     func testLearningSearchAndGradingWorkflowIsAvailable() throws {
         let app = XCUIApplication()
         app.launchArguments.append("-NotePatchUITestWorkbench")

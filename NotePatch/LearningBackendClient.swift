@@ -188,11 +188,15 @@ final class LearningBackendClient {
     }
 
     func deleteDocument(workspaceId: String, documentId: String) async throws {
-        _ = try await authedText(
+        let response = try await authedJSON(
             "DELETE",
             "/workspaces/\(workspaceId.pathSegment)/documents/\(documentId.pathSegment)",
-            payload: nil
+            payload: nil,
+            as: OkResponse.self
         )
+        guard response.ok else {
+            throw LearningBackendError("服务器未确认文档删除成功。")
+        }
     }
 
     func getDownloadURL(
@@ -308,7 +312,7 @@ final class LearningBackendClient {
     }
 
     func deleteConversation(workspaceId: String, conversationId: String) async throws {
-        _ = try await authedText(
+        try await authedNoContent(
             "DELETE",
             "/workspaces/\(workspaceId.pathSegment)/ai/conversations/\(conversationId.pathSegment)",
             payload: nil
@@ -411,7 +415,7 @@ final class LearningBackendClient {
     }
 
     func deleteHomeworkReference(workspaceId: String, homeworkId: String, referenceId: String) async throws {
-        _ = try await authedText(
+        try await authedNoContent(
             "DELETE",
             "/workspaces/\(workspaceId.pathSegment)/homeworks/\(homeworkId.pathSegment)/references/\(referenceId.pathSegment)",
             payload: nil
@@ -467,6 +471,10 @@ final class LearningBackendClient {
     private func authedText(_ method: String, _ path: String, payload: [String: Any]?) async throws -> String {
         let data = try await authedData(method, path, payload: payload, allowRefresh: true)
         return String(data: data, encoding: .utf8) ?? ""
+    }
+
+    private func authedNoContent(_ method: String, _ path: String, payload: [String: Any]?) async throws {
+        _ = try await authedData(method, path, payload: payload, allowRefresh: true)
     }
 
     private func authedData(
@@ -618,6 +626,10 @@ final class LearningBackendClient {
 }
 
 private struct EmptyResponse: Decodable {}
+
+private struct OkResponse: Decodable {
+    let ok: Bool
+}
 
 private extension String {
     var pathSegment: String {

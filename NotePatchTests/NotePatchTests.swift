@@ -571,6 +571,47 @@ struct NotePatchTests {
         #expect(requests.contains { $0.url?.query == "include_download_url=true" })
     }
 
+    @Test func persistentMutationRequests_matchDocumentedContracts() async throws {
+        var requests: [URLRequest] = []
+        var bodies: [String: [String: Any]] = [:]
+        let session = Self.mockSession { request in
+            requests.append(request)
+            let encodedPath = request.url.flatMap {
+                URLComponents(url: $0, resolvingAgainstBaseURL: false)?.percentEncodedPath
+            } ?? ""
+            let key = "\(request.httpMethod ?? "") \(encodedPath)"
+            if let data = Self.requestBodyData(request) {
+                bodies[key] = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+            }
+            switch key {
+            case "DELETE /workspaces/ws-1/documents/doc%2F1":
+                return Self.response(request, status: 200, body: #"{"ok":true}"#)
+            case "PATCH /workspaces/ws-1/ai/conversations/c-1":
+                return Self.response(request, status: 200, body: #"{"id":"c-1","workspace_id":"ws-1","title":"新标题","created_at":"","updated_at":""}"#)
+            case "DELETE /workspaces/ws-1/ai/conversations/c-1",
+                 "DELETE /workspaces/ws-1/homeworks/h-1/references/r-1":
+                return Self.response(request, status: 204, body: "")
+            case "PATCH /auth/preferences":
+                return Self.response(request, status: 200, body: #"{"id":"u-1","email":"u@test","is_active":true,"ai_history_enabled":false,"created_at":""}"#)
+            default:
+                return Self.response(request, status: 500, body: #"{"detail":"unexpected request"}"#)
+            }
+        }
+        let client = LearningBackendClient(baseURL: "https://api.test", accessToken: "access", refreshToken: "refresh", session: session)
+
+        try await client.deleteDocument(workspaceId: "ws-1", documentId: "doc/1")
+        let renamed = try await client.updateConversation(workspaceId: "ws-1", conversationId: "c-1", title: "新标题")
+        try await client.deleteConversation(workspaceId: "ws-1", conversationId: "c-1")
+        let preference = try await client.updateAIPreferences(aiHistoryEnabled: false)
+        try await client.deleteHomeworkReference(workspaceId: "ws-1", homeworkId: "h-1", referenceId: "r-1")
+
+        #expect(renamed.title == "新标题")
+        #expect(preference.aiHistoryEnabled == false)
+        #expect(bodies["PATCH /workspaces/ws-1/ai/conversations/c-1"]?["title"] as? String == "新标题")
+        #expect(bodies["PATCH /auth/preferences"]?["ai_history_enabled"] as? Bool == false)
+        #expect(requests.filter { $0.httpMethod == "DELETE" }.count == 3)
+    }
+
     @Test func decodeKnowledgeHomeworkReferenceAndGradingResult() throws {
         let search = try JSONDecoder.notepatch.decode(
             KnowledgeSearchResponse.self,
@@ -645,6 +686,223 @@ struct NotePatchTests {
         #expect(bodies["PATCH /workspaces/ws-1/homeworks/h-1/grading-config"]?["rubric_text"] is NSNull)
         #expect(bodies["POST /workspaces/ws-1/homeworks/h-1/references"]?["reference_type"] as? String == "answer_key")
         #expect(bodies["POST /workspaces/ws-1/homeworks/h-1/grade"]?["student_user_id"] is NSNull)
+    }
+
+    @Test @MainActor func conversationMutations_waitForServerAndDeduplicateRequests() async throws {
+        let suiteName = "NotePatchTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        var renameCount = 0
+        var deleteCount = 0
+        let session = Self.mockSession { request in
+            let key = "\(request.httpMethod ?? "") \(request.url?.path ?? "")"
+            switch key {
+            case "PATCH /workspaces/ws-1/ai/conversations/c-1":
+                renameCount += 1
+                Thread.sleep(forTimeInterval: 0.08)
+                return Self.response(request, status: 200, body: #"{"id":"c-1","workspace_id":"ws-1","title":"新标题","created_at":"","updated_at":""}"#)
+            case "DELETE /workspaces/ws-1/ai/conversations/c-1":
+                deleteCount += 1
+                Thread.sleep(forTimeInterval: 0.08)
+                return Self.response(request, status: 204, body: "")
+            case "GET /workspaces/ws-1/ai/conversations":
+                return Self.response(request, status: 200, body: #"{"items":[],"page":1,"page_size":20,"total":0}"#)
+            default:
+                return Self.response(request, status: 500, body: #"{"detail":"unexpected request"}"#)
+            }
+        }
+        let model = NotePatchViewModel(
+            settings: SettingsStore(defaults: defaults, keychain: KeychainStore(service: suiteName)),
+            backendSession: session,
+            tusSession: session
+        )
+        model.session = SavedSession(baseURL: "https://api.test", tusBaseURL: "https://tus.test/", accessToken: "a", refreshToken: "r", expiresAt: "x", userId: "u", email: "u@test", fullName: nil, selectedWorkspaceId: "ws-1", aiHistoryEnabled: true)
+        model.selectedWorkspaceId = "ws-1"
+        model.selectedConversationId = "c-1"
+        model.conversations = [ChatConversation(id: "c-1", workspaceId: "ws-1", title: "旧标题", lastMessageAt: nil, createdAt: "", updatedAt: "")]
+
+        model.renameCurrentConversation(to: "新标题")
+        model.renameCurrentConversation(to: "重复请求")
+        #expect(model.isConversationMutating)
+        #expect(model.selectedConversation?.title == "旧标题")
+        try await Self.waitUntil { !model.isConversationMutating }
+        #expect(renameCount == 1)
+        #expect(model.selectedConversation?.title == "新标题")
+        #expect(model.statusMessage == "对话标题已保存。")
+
+        model.renameCurrentConversation(to: String(repeating: "a", count: 161))
+        #expect(model.errorMessage == "对话标题不能超过 160 个字符。")
+        #expect(renameCount == 1)
+
+        model.deleteCurrentConversation()
+        model.deleteCurrentConversation()
+        #expect(model.isConversationMutating)
+        #expect(model.conversations.count == 1)
+        try await Self.waitUntil { !model.isConversationMutating }
+        #expect(deleteCount == 1)
+        #expect(model.conversations.isEmpty)
+        #expect(model.selectedConversationId == nil)
+        #expect(model.statusMessage == "对话已删除。")
+    }
+
+    @Test @MainActor func documentDeletion_keepsServerCommitWhenRefreshFails() async throws {
+        let suiteName = "NotePatchTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let session = Self.mockSession { request in
+            if request.httpMethod == "DELETE" {
+                Thread.sleep(forTimeInterval: 0.08)
+                return Self.response(request, status: 500, body: #"{"detail":"delete rejected"}"#)
+            }
+            return Self.response(request, status: 500, body: #"{"detail":"unexpected request"}"#)
+        }
+        let model = NotePatchViewModel(
+            settings: SettingsStore(defaults: defaults, keychain: KeychainStore(service: suiteName)),
+            backendSession: session,
+            tusSession: session
+        )
+        model.session = SavedSession(baseURL: "https://api.test", tusBaseURL: "https://tus.test/", accessToken: "a", refreshToken: "r", expiresAt: "x", userId: "u", email: "u@test", fullName: nil, selectedWorkspaceId: "ws-1", aiHistoryEnabled: true)
+        model.selectedWorkspaceId = "ws-1"
+        let document = LearningDocumentItem(id: "doc-1", workspaceId: "ws-1", title: "作业", originalFilename: "homework.pdf", fileType: "pdf", documentKind: "homework", status: "ready")
+        let reference = HomeworkReferenceItem(id: "r-1", workspaceId: "ws-1", homeworkId: "h-1", documentId: "doc-1", referenceType: "answer_key", createdAt: "")
+        model.documents = [document]
+        model.gradingDocuments = [document]
+        model.homeworkReferences = [reference]
+
+        model.deleteDocument(document)
+        #expect(model.isBusy)
+        #expect(model.documents == [document])
+        try await Self.waitUntil { !model.isBusy }
+        #expect(model.documents == [document])
+        #expect(model.gradingDocuments == [document])
+        #expect(model.homeworkReferences == [reference])
+        #expect(model.errorMessage == "delete rejected")
+
+        MockURLProtocol.handler = { request in
+            if request.httpMethod == "DELETE" {
+                Thread.sleep(forTimeInterval: 0.08)
+                return Self.response(request, status: 200, body: #"{"ok":true}"#)
+            }
+            return Self.response(request, status: 500, body: #"{"detail":"refresh unavailable"}"#)
+        }
+        model.errorMessage = nil
+        model.deleteDocument(document)
+        #expect(model.documents == [document])
+        try await Self.waitUntil { !model.isBusy }
+        #expect(model.documents.isEmpty)
+        #expect(model.gradingDocuments.isEmpty)
+        #expect(model.homeworkReferences.isEmpty)
+        #expect(model.errorMessage == nil)
+        #expect(model.statusMessage.contains("文档已删除，但刷新失败"))
+    }
+
+    @Test @MainActor func aiPreference_isSerializedPersistedAndRolledBackOnFailure() async throws {
+        let suiteName = "NotePatchTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        let settings = SettingsStore(defaults: defaults, keychain: KeychainStore(service: suiteName))
+        defer {
+            settings.clearSession()
+            defaults.removePersistentDomain(forName: suiteName)
+        }
+        var requestCount = 0
+        let session = Self.mockSession { request in
+            requestCount += 1
+            Thread.sleep(forTimeInterval: 0.08)
+            return Self.response(request, status: 200, body: #"{"id":"u","email":"u@test","is_active":true,"ai_history_enabled":false,"created_at":""}"#)
+        }
+        let model = NotePatchViewModel(settings: settings, backendSession: session, tusSession: session)
+        let activeSession = SavedSession(baseURL: "https://api.test", tusBaseURL: "https://tus.test/", accessToken: "a", refreshToken: "r", expiresAt: "x", userId: "u", email: "u@test", fullName: nil, selectedWorkspaceId: "ws-1", aiHistoryEnabled: true)
+        model.session = activeSession
+        model.selectedWorkspaceId = "ws-1"
+        model.aiHistoryEnabled = true
+
+        model.updateAIHistoryEnabled(false)
+        model.updateAIHistoryEnabled(true)
+        #expect(model.isAIPreferenceUpdating)
+        #expect(model.aiHistoryEnabled == false)
+        try await Self.waitUntil { !model.isAIPreferenceUpdating }
+        #expect(requestCount == 1)
+        #expect(settings.loadSession()?.aiHistoryEnabled == false)
+        #expect(model.statusMessage == "AI 历史设置已保存。")
+
+        MockURLProtocol.handler = { request in
+            requestCount += 1
+            return Self.response(request, status: 500, body: #"{"detail":"preference rejected"}"#)
+        }
+        model.updateAIHistoryEnabled(true)
+        try await Self.waitUntil { !model.isAIPreferenceUpdating }
+        #expect(model.aiHistoryEnabled == false)
+        #expect(settings.loadSession()?.aiHistoryEnabled == false)
+        #expect(model.errorMessage == "preference rejected")
+    }
+
+    @Test @MainActor func gradingDraftAndReferenceDeletion_reflectServerState() async throws {
+        let suiteName = "NotePatchTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        var referenceDeleteCount = 0
+        let session = Self.mockSession { request in
+            let key = "\(request.httpMethod ?? "") \(request.url?.path ?? "")"
+            switch key {
+            case "PATCH /workspaces/ws-1/homeworks/h-1/grading-config":
+                return Self.response(request, status: 500, body: #"{"detail":"grading rejected"}"#)
+            case "DELETE /workspaces/ws-1/homeworks/h-1/references/r-1":
+                referenceDeleteCount += 1
+                Thread.sleep(forTimeInterval: 0.08)
+                return Self.response(request, status: 204, body: "")
+            case "GET /workspaces/ws-1/homeworks/h-1/references":
+                return Self.response(request, status: 200, body: "[]")
+            default:
+                return Self.response(request, status: 500, body: #"{"detail":"unexpected request"}"#)
+            }
+        }
+        let model = NotePatchViewModel(
+            settings: SettingsStore(defaults: defaults, keychain: KeychainStore(service: suiteName)),
+            backendSession: session,
+            tusSession: session
+        )
+        model.session = SavedSession(baseURL: "https://api.test", tusBaseURL: "https://tus.test/", accessToken: "a", refreshToken: "r", expiresAt: "x", userId: "u", email: "u@test", fullName: nil, selectedWorkspaceId: "ws-1", aiHistoryEnabled: true)
+        model.selectedWorkspaceId = "ws-1"
+        model.homeworks = [HomeworkItem(id: "h-1", workspaceId: "ws-1", title: "作业", rubricText: "旧标准", maxScore: 100)]
+        model.selectedHomeworkId = "h-1"
+        model.homeworkRubricText = "旧标准"
+        model.homeworkMaxScoreText = "100"
+        #expect(!model.isGradingConfigDirty)
+
+        model.homeworkRubricText = "新标准"
+        #expect(model.isGradingConfigDirty)
+        model.saveGradingConfig()
+        try await Self.waitUntil { !model.isHomeworkLoading }
+        #expect(model.homeworkRubricText == "新标准")
+        #expect(model.selectedHomework?.rubricText == "旧标准")
+        #expect(model.isGradingConfigDirty)
+        #expect(model.errorMessage == "grading rejected")
+        #expect(!model.statusMessage.contains("已保存"))
+
+        let reference = HomeworkReferenceItem(id: "r-1", workspaceId: "ws-1", homeworkId: "h-1", documentId: "answer-1", referenceType: "answer_key", createdAt: "")
+        model.homeworkReferences = [reference]
+        model.deleteHomeworkReference(reference)
+        model.deleteHomeworkReference(reference)
+        #expect(model.homeworkReferences == [reference])
+        try await Self.waitUntil { !model.isHomeworkLoading }
+        #expect(referenceDeleteCount == 1)
+        #expect(model.homeworkReferences.isEmpty)
+        #expect(model.statusMessage == "评分依据已删除。")
+    }
+
+    @Test @MainActor func serverURLs_persistAcrossModelInstances() throws {
+        let suiteName = "NotePatchTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let settings = SettingsStore(defaults: defaults, keychain: KeychainStore(service: suiteName))
+        let model = NotePatchViewModel(settings: settings)
+        model.apiBaseURLText = "https://api.example.test/"
+        model.tusBaseURLText = "https://tus.example.test/files"
+        model.saveServerURLs()
+
+        let restored = NotePatchViewModel(settings: SettingsStore(defaults: defaults, keychain: KeychainStore(service: suiteName)))
+        #expect(restored.apiBaseURLText == "https://api.example.test")
+        #expect(restored.tusBaseURLText == "https://tus.example.test/files/")
     }
 
     @Test @MainActor func gradingViewModel_validatesAndFiltersCandidates() throws {
@@ -796,6 +1054,18 @@ private extension NotePatchTests {
           "finished_at": null
         }
         """
+
+    @MainActor
+    static func waitUntil(
+        attempts: Int = 200,
+        condition: () -> Bool
+    ) async throws {
+        for _ in 0..<attempts {
+            if condition() { return }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        throw LearningBackendError("Timed out waiting for test condition")
+    }
 
     static func mockSession(handler: @escaping (URLRequest) throws -> (HTTPURLResponse, Data)) -> URLSession {
         MockURLProtocol.handler = handler

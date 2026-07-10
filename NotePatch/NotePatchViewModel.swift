@@ -122,6 +122,8 @@ final class NotePatchViewModel: ObservableObject {
     @Published var conversations: [ChatConversation] = []
     @Published var selectedConversationId: String?
     @Published var isChatHistoryLoading = false
+    @Published private(set) var isConversationMutating = false
+    @Published private(set) var isAIPreferenceUpdating = false
     @Published var learningUnits: [LearningUnit] = []
     @Published var selectedLearningUnitId: String?
     @Published var studyNotes: [StudyNoteVersion] = []
@@ -802,13 +804,25 @@ final class NotePatchViewModel: ObservableObject {
 
     func renameCurrentConversation(to title: String) {
         guard let activeSession = currentSessionOrError(), let workspaceId = selectedWorkspaceId,
-              let conversationId = selectedConversationId else { return }
+              let conversationId = selectedConversationId, !isConversationMutating else { return }
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
+        guard !trimmed.isEmpty else {
+            errorMessage = "请输入对话标题。"
+            return
+        }
+        guard trimmed.count <= 160 else {
+            errorMessage = "对话标题不能超过 160 个字符。"
+            return
+        }
+        isConversationMutating = true
+        errorMessage = nil
+        statusMessage = "正在保存对话标题..."
         Task {
+            defer { isConversationMutating = false }
             do {
                 let updated = try await clientFor(activeSession).updateConversation(workspaceId: workspaceId, conversationId: conversationId, title: trimmed)
                 conversations = conversations.map { $0.id == updated.id ? updated : $0 }
+                statusMessage = "对话标题已保存。"
             } catch {
                 showError(error)
             }
@@ -817,15 +831,30 @@ final class NotePatchViewModel: ObservableObject {
 
     func deleteCurrentConversation() {
         guard let activeSession = currentSessionOrError(), let workspaceId = selectedWorkspaceId,
-              let conversationId = selectedConversationId else { return }
+              let conversationId = selectedConversationId, !isConversationMutating else { return }
+        isConversationMutating = true
+        errorMessage = nil
+        statusMessage = "正在删除对话..."
         Task {
+            defer { isConversationMutating = false }
             do {
                 try await clientFor(activeSession).deleteConversation(workspaceId: workspaceId, conversationId: conversationId)
                 conversations.removeAll { $0.id == conversationId }
-                if let next = conversations.first {
-                    selectConversation(next.id)
-                } else {
-                    startNewConversation()
+                selectedConversationId = conversations.first?.id
+                openClawMessages = [welcomeChatMessage]
+                statusMessage = "对话已删除。"
+
+                do {
+                    try await refreshConversations(activeSession: activeSession, workspaceId: workspaceId)
+                    if let nextConversationId = selectedConversationId {
+                        try await refreshConversationMessages(
+                            activeSession: activeSession,
+                            workspaceId: workspaceId,
+                            conversationId: nextConversationId
+                        )
+                    }
+                } catch {
+                    handlePostCommitRefreshFailure(error, completion: "对话已删除")
                 }
             } catch {
                 showError(error)
@@ -834,13 +863,18 @@ final class NotePatchViewModel: ObservableObject {
     }
 
     func updateAIHistoryEnabled(_ enabled: Bool) {
-        guard let activeSession = currentSessionOrError() else { return }
+        guard let activeSession = currentSessionOrError(), !isAIPreferenceUpdating else { return }
         let previous = aiHistoryEnabled
         aiHistoryEnabled = enabled
+        isAIPreferenceUpdating = true
+        errorMessage = nil
+        statusMessage = "正在保存 AI 历史设置..."
         Task {
+            defer { isAIPreferenceUpdating = false }
             do {
                 let response = try await clientFor(activeSession).updateAIPreferences(aiHistoryEnabled: enabled)
                 saveSession(activeSession.withAIHistoryEnabled(response.aiHistoryEnabled))
+                statusMessage = "AI 历史设置已保存。"
             } catch {
                 aiHistoryEnabled = previous
                 showError(error)
@@ -897,6 +931,14 @@ final class NotePatchViewModel: ObservableObject {
 
     var selectedHomework: HomeworkItem? {
         homeworks.first(where: { $0.id == selectedHomeworkId })
+    }
+
+    var isGradingConfigDirty: Bool {
+        guard let selectedHomework else { return false }
+        let draftRubric = homeworkRubricText.nilIfBlank
+        let savedRubric = selectedHomework.rubricText?.nilIfBlank
+        guard let draftMaxScore = Double(homeworkMaxScoreText) else { return true }
+        return draftRubric != savedRubric || abs(draftMaxScore - selectedHomework.maxScore) > 0.000_001
     }
 
     var homeworkDocumentCandidates: [LearningDocumentItem] {
@@ -1042,15 +1084,17 @@ final class NotePatchViewModel: ObservableObject {
 
     func saveGradingConfig() {
         guard let activeSession = currentSessionOrError(), let workspaceId = selectedWorkspaceId,
-              let homeworkId = selectedHomeworkId else { return }
+              let homeworkId = selectedHomeworkId, !isHomeworkLoading else { return }
         guard let maxScore = Double(homeworkMaxScoreText), maxScore > 0 else {
             errorMessage = "满分必须大于 0。"
             return
         }
+        guard isGradingConfigDirty else { return }
         let input = GradingConfigInput(rubricText: homeworkRubricText.nilIfBlank, maxScore: maxScore)
+        isHomeworkLoading = true
+        errorMessage = nil
+        statusMessage = "正在保存评分配置..."
         Task {
-            isHomeworkLoading = true
-            errorMessage = nil
             defer { isHomeworkLoading = false }
             do {
                 let updated = try await clientFor(activeSession).updateGradingConfig(workspaceId: workspaceId, homeworkId: homeworkId, input: input)
@@ -1089,15 +1133,22 @@ final class NotePatchViewModel: ObservableObject {
 
     func deleteHomeworkReference(_ reference: HomeworkReferenceItem) {
         guard let activeSession = currentSessionOrError(), let workspaceId = selectedWorkspaceId,
-              let homeworkId = selectedHomeworkId else { return }
+              let homeworkId = selectedHomeworkId, !isHomeworkLoading else { return }
+        isHomeworkLoading = true
+        errorMessage = nil
+        statusMessage = "正在删除评分依据..."
         Task {
-            isHomeworkLoading = true
-            errorMessage = nil
             defer { isHomeworkLoading = false }
             do {
-                try await clientFor(activeSession).deleteHomeworkReference(workspaceId: workspaceId, homeworkId: homeworkId, referenceId: reference.id)
+                let client = clientFor(activeSession)
+                try await client.deleteHomeworkReference(workspaceId: workspaceId, homeworkId: homeworkId, referenceId: reference.id)
                 homeworkReferences.removeAll { $0.id == reference.id }
                 statusMessage = "评分依据已删除。"
+                do {
+                    homeworkReferences = try await client.listHomeworkReferences(workspaceId: workspaceId, homeworkId: homeworkId)
+                } catch {
+                    handlePostCommitRefreshFailure(error, completion: "评分依据已删除")
+                }
             } catch {
                 showError(error)
             }
@@ -1194,15 +1245,17 @@ final class NotePatchViewModel: ObservableObject {
     }
 
     func deleteDocument(_ document: LearningDocumentItem) {
-        guard let activeSession = currentSessionOrError(), let workspaceId = selectedWorkspaceId else {
+        guard let activeSession = currentSessionOrError(), let workspaceId = selectedWorkspaceId, !isBusy else {
             return
         }
+        isBusy = true
+        errorMessage = nil
+        statusMessage = "正在删除文档..."
         Task {
-            isBusy = true
-            errorMessage = nil
-            statusMessage = "正在删除文档..."
+            defer { isBusy = false }
             do {
                 try await clientFor(activeSession).deleteDocument(workspaceId: workspaceId, documentId: document.id)
+                documents.removeAll { $0.id == document.id }
                 if selectedArtifactDocumentId == document.id {
                     selectedArtifactDocumentId = nil
                     selectedArtifacts = []
@@ -1213,12 +1266,14 @@ final class NotePatchViewModel: ObservableObject {
                 }
                 gradingDocuments.removeAll { $0.id == document.id }
                 homeworkReferences.removeAll { $0.documentId == document.id }
-                try await refreshWorkspaceContent(activeSession: activeSession, workspaceId: workspaceId)
                 statusMessage = "文档已删除。"
+
+                if let refreshError = await refreshAfterDocumentDeletion(activeSession: activeSession, workspaceId: workspaceId) {
+                    handlePostCommitRefreshFailure(refreshError, completion: "文档已删除")
+                }
             } catch {
                 showError(error)
             }
-            isBusy = false
         }
     }
 
@@ -1364,6 +1419,20 @@ final class NotePatchViewModel: ObservableObject {
         statusMessage = ""
     }
 
+    private func handlePostCommitRefreshFailure(_ error: Error, completion: String) {
+        if shouldStopPostCommitRefresh(for: error) {
+            showError(error)
+            return
+        }
+        errorMessage = nil
+        statusMessage = "\(completion)，但刷新失败：\(friendlyError(error))"
+    }
+
+    private func shouldStopPostCommitRefresh(for error: Error) -> Bool {
+        guard let backendError = error as? LearningBackendError else { return false }
+        return backendError.shouldClearSession || backendError.statusCode == 403
+    }
+
     private func recoverFromWorkspaceAccessDenied() {
         selectedWorkspaceId = nil
         settings.saveSelectedWorkspaceId(nil)
@@ -1446,6 +1515,8 @@ final class NotePatchViewModel: ObservableObject {
         conversations = []
         selectedConversationId = nil
         openClawMessages = [welcomeChatMessage]
+        isConversationMutating = false
+        isAIPreferenceUpdating = false
         learningUnits = []
         selectedLearningUnitId = nil
         studyNotes = []
@@ -1604,6 +1675,32 @@ final class NotePatchViewModel: ObservableObject {
         }
     }
 
+    private func refreshAfterDocumentDeletion(activeSession: SavedSession, workspaceId: String) async -> Error? {
+        var firstError: Error?
+
+        do {
+            try await refreshWorkspaceContent(activeSession: activeSession, workspaceId: workspaceId)
+        } catch {
+            firstError = error
+            if shouldStopPostCommitRefresh(for: error) { return error }
+        }
+
+        do {
+            try await refreshLearningUnits(activeSession: activeSession, workspaceId: workspaceId)
+        } catch {
+            if firstError == nil { firstError = error }
+            if shouldStopPostCommitRefresh(for: error) { return error }
+        }
+
+        do {
+            try await refreshHomeworks(activeSession: activeSession, workspaceId: workspaceId, preserveGradingDrafts: true)
+        } catch {
+            if firstError == nil { firstError = error }
+        }
+
+        return firstError
+    }
+
     private func loadWorkspaces(activeSession: SavedSession, preferredWorkspaceId: String?) async throws {
         let client = clientFor(activeSession)
         let user = try await client.me()
@@ -1759,7 +1856,12 @@ final class NotePatchViewModel: ObservableObject {
         }
     }
 
-    private func refreshHomeworks(activeSession: SavedSession, workspaceId: String) async throws {
+    private func refreshHomeworks(
+        activeSession: SavedSession,
+        workspaceId: String,
+        preserveGradingDrafts: Bool = false
+    ) async throws {
+        let shouldPreserveDrafts = preserveGradingDrafts && isGradingConfigDirty
         let client = clientFor(activeSession)
         homeworks = try await client.listHomeworks(workspaceId: workspaceId)
         gradingDocuments = try await client.listDocuments(workspaceId: workspaceId, pageSize: 100)
@@ -1769,8 +1871,10 @@ final class NotePatchViewModel: ObservableObject {
             homeworkReferences = []
             return
         }
-        homeworkRubricText = selected.rubricText ?? ""
-        homeworkMaxScoreText = formatScore(selected.maxScore)
+        if !shouldPreserveDrafts {
+            homeworkRubricText = selected.rubricText ?? ""
+            homeworkMaxScoreText = formatScore(selected.maxScore)
+        }
         homeworkReferences = try await clientFor(activeSession).listHomeworkReferences(workspaceId: workspaceId, homeworkId: selectedHomeworkId)
     }
 

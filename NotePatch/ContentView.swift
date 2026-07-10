@@ -247,7 +247,11 @@ private struct WorkbenchScreen: View {
     var body: some View {
         VStack(spacing: 0) {
             CompactTopBar(model: model)
-            StatusBanner(isBusy: model.isBusy, statusMessage: model.statusMessage, errorMessage: model.errorMessage)
+            StatusBanner(
+                isBusy: model.isBusy || model.isConversationMutating || model.isAIPreferenceUpdating || model.isHomeworkLoading,
+                statusMessage: model.statusMessage,
+                errorMessage: model.errorMessage
+            )
 
             TabView(selection: $model.selectedTab) {
                 DocumentsTab(
@@ -276,6 +280,11 @@ private struct WorkbenchScreen: View {
                     .tabItem { Label(WorkbenchTab.settings.title, systemImage: WorkbenchTab.settings.iconName) }
             }
             .animation(.spring(response: 0.35, dampingFraction: 0.85), value: model.selectedTab)
+            .onChange(of: model.selectedTab) { selectedTab in
+                if selectedTab != .openClaw {
+                    dismissActiveKeyboard()
+                }
+            }
             .accessibilityIdentifier("workbenchTabs")
         }
         .background(LiquidGlassBackdrop())
@@ -852,6 +861,7 @@ private struct OpenClawChatTab: View {
     @ObservedObject var model: NotePatchViewModel
     @State private var isRenaming = false
     @State private var titleDraft = ""
+    @FocusState private var isComposerFocused: Bool
 
     var body: some View {
         VStack(spacing: 0) {
@@ -867,24 +877,34 @@ private struct OpenClawChatTab: View {
                 }
                 Spacer()
                 Menu {
-                    Button { model.startNewConversation() } label: {
+                    Button {
+                        dismissComposer()
+                        model.startNewConversation()
+                    } label: {
                         Label("新建对话", systemImage: "square.and.pencil")
                     }
                     if let conversation = model.selectedConversation {
                         Button {
+                            dismissComposer()
                             titleDraft = conversation.title
                             isRenaming = true
                         } label: {
                             Label("重命名", systemImage: "pencil")
                         }
-                        Button(role: .destructive) { model.deleteCurrentConversation() } label: {
+                        Button(role: .destructive) {
+                            dismissComposer()
+                            model.deleteCurrentConversation()
+                        } label: {
                             Label("删除当前对话", systemImage: "trash")
                         }
                     }
                     if !model.conversations.isEmpty {
                         Divider()
                         ForEach(model.conversations) { conversation in
-                            Button { model.selectConversation(conversation.id) } label: {
+                            Button {
+                                dismissComposer()
+                                model.selectConversation(conversation.id)
+                            } label: {
                                 Label(conversation.title, systemImage: conversation.id == model.selectedConversationId ? "checkmark" : "bubble.left")
                             }
                         }
@@ -894,6 +914,7 @@ private struct OpenClawChatTab: View {
                         .font(.title3)
                         .frame(width: 36, height: 36)
                 }
+                .disabled(model.isChatHistoryLoading || model.isConversationMutating)
                 .accessibilityLabel("会话操作")
             }
             .padding(.horizontal, 16)
@@ -938,11 +959,23 @@ private struct OpenClawChatTab: View {
                             .padding(.horizontal, 8)
                             .padding(.vertical, 3)
                             .background(Color.clear)
+                            .focused($isComposerFocused)
                             .accessibilityLabel("问 OpenClaw")
                     }
                     .frame(minHeight: 42, maxHeight: 88)
                         .disabled(model.isOpenClawSending)
                     Button {
+                        dismissComposer()
+                    } label: {
+                        Image(systemName: "keyboard.chevron.compact.down")
+                            .font(.system(size: 15, weight: .semibold))
+                            .frame(width: 34, height: 34)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .accessibilityLabel("收起键盘")
+                    Button {
+                        dismissComposer()
                         model.startOpenClawChat()
                     } label: {
                         Image(systemName: "arrow.up")
@@ -961,12 +994,32 @@ private struct OpenClawChatTab: View {
         }
         .accessibilityIdentifier("openClawTab")
         .task { model.loadChatHistory() }
+        .onDisappear { dismissComposer() }
         .alert("重命名对话", isPresented: $isRenaming) {
             TextField("对话标题", text: $titleDraft)
             Button("取消", role: .cancel) {}
             Button("保存") { model.renameCurrentConversation(to: titleDraft) }
+                .disabled(
+                    model.isConversationMutating ||
+                    titleDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+                    titleDraft.trimmingCharacters(in: .whitespacesAndNewlines).count > 160
+                )
         }
     }
+
+    private func dismissComposer() {
+        isComposerFocused = false
+        dismissActiveKeyboard()
+    }
+}
+
+private func dismissActiveKeyboard() {
+    UIApplication.shared.sendAction(
+        #selector(UIResponder.resignFirstResponder),
+        to: nil,
+        from: nil,
+        for: nil
+    )
 }
 
 private struct LearningTab: View {
@@ -1235,12 +1288,18 @@ private struct HomeworkGradingSection: View {
                         TextField("100", text: $model.homeworkMaxScoreText)
                             .keyboardType(.decimalPad)
                     }
+                    if model.isGradingConfigDirty {
+                        Label("有未保存的更改", systemImage: "exclamationmark.circle")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                            .accessibilityIdentifier("gradingConfigUnsavedLabel")
+                    }
                     Button { model.saveGradingConfig() } label: {
                         Label("保存评分配置", systemImage: "checkmark")
                             .frame(maxWidth: .infinity)
                     }
                     .notePatchGlassButtonStyle(prominent: true)
-                    .disabled(model.isHomeworkLoading)
+                    .disabled(model.isHomeworkLoading || !model.isGradingConfigDirty)
                 }
             }
 
@@ -1523,8 +1582,8 @@ private struct SettingsTab: View {
                             get: { model.aiHistoryEnabled },
                             set: { model.updateAIHistoryEnabled($0) }
                         ))
-                        .disabled(model.isBusy)
-                        Text("关闭后，新的 OpenClaw 对话不保留到历史记录。")
+                        .disabled(model.isBusy || model.isAIPreferenceUpdating)
+                        Text("关闭后仍保留会话记录，但后续请求不注入历史上下文。")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
