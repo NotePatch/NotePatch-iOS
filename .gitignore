@@ -1,0 +1,11 @@
+# Xcode per-user state and build artifacts
+DerivedData/
+build/
+*.xcuserstate
+xcuserdata/
+*.xccheckout
+*.xcscmblueprint
+*.moved-aside
+
+# macOS Finder metadata
+.DS_Store
