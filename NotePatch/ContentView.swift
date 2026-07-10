@@ -90,34 +90,46 @@ struct ContentView: View {
 
 private struct AuthScreen: View {
     @ObservedObject var model: NotePatchViewModel
+    @State private var appear = false
 
     var body: some View {
         ZStack {
             LiquidGlassBackdrop()
 
             ScrollView {
-                VStack(spacing: 28) {
-                    VStack(spacing: 14) {
+                VStack(spacing: 32) {
+                    // Hero 区 — staggered 入场
+                    VStack(spacing: 16) {
                         ZStack {
-                            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                                .fill(Color.accentColor)
-                                .frame(width: 72, height: 72)
+                            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                                .fill(.clear)
+                                .glassEffect(.regular.tint(.accentColor),
+                                             in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+                                .frame(width: 80, height: 80)
                             Image(systemName: "doc.text.viewfinder")
-                                .font(.system(size: 32, weight: .semibold))
+                                .font(.system(size: 34, weight: .medium))
                                 .foregroundStyle(.white)
+                                .symbolEffect(.bounce.byLayer, value: appear)
                         }
+                        .scaleEffect(appear ? 1 : 0.80)
+                        .opacity(appear ? 1 : 0)
 
-                        VStack(spacing: 6) {
+                        VStack(spacing: 8) {
                             Text("NotePatch")
-                                .font(.largeTitle.weight(.bold))
+                                .heroTitle()
                             Text("扫描、整理并处理你的学习文档")
                                 .font(.subheadline)
                                 .foregroundStyle(.secondary)
+                                .lineSpacing(2)
                         }
+                        .opacity(appear ? 1 : 0)
+                        .offset(y: appear ? 0 : 12)
                     }
+                    .padding(.top, 20)
 
-                    VStack(spacing: 18) {
-                        VStack(spacing: 12) {
+                    // 表单
+                    VStack(spacing: 16) {
+                        VStack(spacing: 10) {
                             AuthField(title: "API 地址", systemImage: "network") {
                                 TextField("http://192.168.100.123:8001", text: $model.apiBaseURLText)
                                     .textInputAutocapitalization(.never)
@@ -150,8 +162,8 @@ private struct AuthScreen: View {
                                     .textContentType(.name)
                             }
                         }
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 6)
+                        .padding(.horizontal, 18)
+                        .padding(.vertical, 12)
                         .liquidGlassCard()
 
                         Button {
@@ -163,12 +175,12 @@ private struct AuthScreen: View {
                                     ProgressView()
                                         .tint(.white)
                                 } else {
-                                    Text("登录")
+                                    Label("登录", systemImage: "arrow.right")
                                         .fontWeight(.semibold)
                                 }
                                 Spacer()
                             }
-                            .frame(height: 48)
+                            .frame(height: 50)
                         }
                         .buttonStyle(.glassProminent)
                         .disabled(model.isBusy)
@@ -180,6 +192,7 @@ private struct AuthScreen: View {
                             } label: {
                                 Label("创建账号", systemImage: "person.badge.plus")
                                     .frame(maxWidth: .infinity)
+                                    .frame(height: 44)
                             }
                             .buttonStyle(.glass)
                             .disabled(model.isBusy)
@@ -189,6 +202,7 @@ private struct AuthScreen: View {
                             } label: {
                                 Label("检测服务", systemImage: "wave.3.right")
                                     .frame(maxWidth: .infinity)
+                                    .frame(height: 44)
                             }
                             .buttonStyle(.glass)
                             .disabled(model.isBusy)
@@ -197,13 +211,17 @@ private struct AuthScreen: View {
                         StatusPanel(isBusy: model.isBusy, statusMessage: model.statusMessage, errorMessage: model.errorMessage)
                     }
                     .frame(maxWidth: 520)
+                    .opacity(appear ? 1 : 0)
+                    .offset(y: appear ? 0 : 16)
                 }
                 .padding(.horizontal, 20)
-                .padding(.top, 44)
-                .padding(.bottom, 32)
+                .padding(.bottom, 40)
             }
         }
         .disabled(model.isBusy)
+        .onAppear {
+            withAnimation(.cardEntry) { appear = true }
+        }
     }
 }
 
@@ -267,6 +285,7 @@ private struct WorkbenchScreen: View {
                     .tag(WorkbenchTab.settings)
                     .tabItem { Label(WorkbenchTab.settings.title, systemImage: WorkbenchTab.settings.iconName) }
             }
+            .animation(.spring(response: 0.35, dampingFraction: 0.85), value: model.selectedTab)
             .accessibilityIdentifier("workbenchTabs")
         }
         .background(LiquidGlassBackdrop())
@@ -280,8 +299,9 @@ private struct CompactTopBar: View {
         let workspaceName = model.workspaces.first(where: { $0.id == model.selectedWorkspaceId })?.name
         HStack(spacing: 12) {
             ZStack {
-                RoundedRectangle(cornerRadius: 9, style: .continuous)
-                    .fill(Color.accentColor)
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(.clear)
+                    .glassEffect(.regular.tint(.accentColor), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                     .frame(width: 38, height: 38)
                 Image(systemName: "doc.text.viewfinder")
                     .font(.system(size: 17, weight: .semibold))
@@ -336,7 +356,7 @@ private struct DocumentsTab: View {
 
     var body: some View {
         ScrollView {
-            VStack(spacing: 14) {
+            VStack(spacing: 16) {
                 CollapsibleSection(
                     title: "上传文档",
                     summary: model.uploadProgressPercent.map { "\(model.uploadProgressLabel) · \($0)%" } ?? documentKindLabel(model.uploadDocumentKind),
@@ -360,17 +380,18 @@ private struct DocumentsTab: View {
 
                 HStack {
                     Text("文档列表")
-                        .font(.headline)
+                        .cardTitle()
                     Spacer()
                     Text("\(model.documents.count) 个")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
+                .padding(.top, 2)
 
                 if model.documents.isEmpty {
                     EmptyText("暂无文档，先上传图片、PDF 或文件。")
                 } else {
-                    LazyVStack(spacing: 10) {
+                    LazyVStack(spacing: 12) {
                         ForEach(model.documents) { document in
                             DocumentRow(
                                 document: document,
@@ -393,6 +414,7 @@ private struct DocumentsTab: View {
             .padding(.top, 14)
             .padding(.bottom, 24)
         }
+        .animation(.cardEntry, value: model.documents.count)
         .accessibilityIdentifier("documentsTab")
     }
 }
@@ -508,8 +530,9 @@ private struct UploadSourceButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .foregroundStyle(emphasized ? Color.white : Color.accentColor)
-            .liquidGlassPill(tint: emphasized ? .accentColor : .clear)
-            .opacity(configuration.isPressed ? 0.72 : 1)
+            .liquidGlassPill(tint: emphasized ? .accentColor : .accentColor.opacity(0.15))
+            .scaleEffect(configuration.isPressed ? 0.96 : 1.0)
+            .animation(.interactiveSpring, value: configuration.isPressed)
     }
 }
 
@@ -579,7 +602,7 @@ private struct DocumentRow: View {
     @State private var detailsExpanded = false
 
     var body: some View {
-        SectionContainer(background: .clear) {
+        SectionContainer(tint: .clear) {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(alignment: .top, spacing: 10) {
                     VStack(alignment: .leading, spacing: 4) {
@@ -892,12 +915,12 @@ private struct OpenClawChatTab: View {
                 .accessibilityLabel("会话操作")
             }
             .padding(.horizontal, 16)
-            .padding(.vertical, 10)
+            .padding(.vertical, 12)
             .liquidGlassPanel()
 
             ScrollViewReader { proxy in
                 ScrollView {
-                    LazyVStack(spacing: 10) {
+                    LazyVStack(spacing: 12) {
                         ForEach(model.openClawMessages) { message in
                             OpenClawMessageBubble(message: message)
                                 .id(message.id)
@@ -908,7 +931,7 @@ private struct OpenClawChatTab: View {
                 }
                 .onChange(of: model.openClawMessages.count) { _ in
                     if let last = model.openClawMessages.last {
-                        withAnimation {
+                        withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
                             proxy.scrollTo(last.id, anchor: .bottom)
                         }
                     }
@@ -1036,7 +1059,7 @@ private struct LearningUnitsSection: View {
                 }
             }
             if model.selectedLearningUnitId != nil {
-                Text("电子笔记").font(.headline).padding(.top, 4)
+                Text("电子笔记").cardTitle().padding(.top, 6)
                 if model.studyNotes.isEmpty {
                     Text("该学习单元暂无笔记版本。").font(.subheadline).foregroundStyle(.secondary)
                 } else {
@@ -1129,7 +1152,7 @@ private struct KnowledgeSearchSection: View {
                     Text("\(model.knowledgeResults.count) 条").font(.caption).foregroundStyle(.secondary)
                 }
                 ForEach(model.knowledgeResults) { item in
-                    SectionContainer(background: .clear) {
+                    SectionContainer(tint: .clear) {
                         VStack(alignment: .leading, spacing: 8) {
                             HStack(alignment: .firstTextBaseline) {
                                 Text(item.metadataTitle ?? item.sourceType ?? "知识片段")
@@ -1380,18 +1403,17 @@ private struct HomeworkCreateSheet: View {
 
 private struct LearningEmptyState: View {
     var body: some View {
-        VStack(spacing: 10) {
-            Image(systemName: "book.closed")
-                .font(.system(size: 36, weight: .light))
-                .foregroundStyle(Color.accentColor)
+        VStack(spacing: 14) {
+            AnimatedEmptyIcon("book.closed", size: 42, tint: .accentColor)
             Text("暂无学习单元")
                 .font(.headline)
             Text("上传并处理文档后，学习结果会显示在这里。")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
+                .lineSpacing(3)
         }
-        .padding(.vertical, 32)
+        .padding(.vertical, 40)
         .frame(maxWidth: .infinity)
     }
 }
@@ -1461,11 +1483,11 @@ private struct SettingsTab: View {
 
     var body: some View {
         ScrollView {
-            VStack(spacing: 14) {
+            VStack(spacing: 16) {
                 SectionContainer {
                     VStack(alignment: .leading, spacing: 14) {
                         Label("服务器", systemImage: "server.rack")
-                            .font(.headline)
+                            .cardTitle()
 
                         LabeledField(title: "API 地址") {
                             TextField("API 地址", text: $model.apiBaseURLText)
@@ -1514,7 +1536,7 @@ private struct SettingsTab: View {
                 SectionContainer {
                     VStack(alignment: .leading, spacing: 8) {
                         Label("AI", systemImage: "sparkles")
-                            .font(.headline)
+                            .cardTitle()
                         Toggle("AI 使用历史", isOn: Binding(
                             get: { model.aiHistoryEnabled },
                             set: { model.updateAIHistoryEnabled($0) }
@@ -1529,7 +1551,7 @@ private struct SettingsTab: View {
                 SectionContainer {
                     VStack(alignment: .leading, spacing: 14) {
                         Label("账号", systemImage: "person.crop.circle")
-                            .font(.headline)
+                            .cardTitle()
                         HStack(spacing: 12) {
                             Image(systemName: "person.fill")
                                 .foregroundStyle(Color.accentColor)
@@ -1578,7 +1600,7 @@ private struct WorkspaceManagementSection: View {
             VStack(alignment: .leading, spacing: 14) {
                 HStack {
                     Label("个人空间", systemImage: "person.crop.square")
-                        .font(.headline)
+                        .cardTitle()
                     Spacer()
                     Button {
                         model.refreshCurrentWorkspace()
@@ -1696,9 +1718,9 @@ private struct CollapsibleSection<Content: View>: View {
         SectionContainer {
             VStack(alignment: .leading, spacing: 10) {
                 HStack {
-                    VStack(alignment: .leading, spacing: 2) {
+                    VStack(alignment: .leading, spacing: 3) {
                         Text(title)
-                            .font(.headline)
+                            .cardTitle()
                         Text(summary.isEmpty ? "全部" : summary)
                             .font(.caption)
                             .foregroundStyle(.secondary)
@@ -1706,7 +1728,7 @@ private struct CollapsibleSection<Content: View>: View {
                     }
                     Spacer()
                     Button {
-                        expanded.toggle()
+                        withAnimation(.statusSpring) { expanded.toggle() }
                     } label: {
                         Label(expanded ? "收起" : "展开", systemImage: expanded ? "chevron.up" : "chevron.down")
                     }
@@ -1721,14 +1743,14 @@ private struct CollapsibleSection<Content: View>: View {
 }
 
 private struct SectionContainer<Content: View>: View {
-    var background: Color = .clear
+    var tint: Color = .clear
     @ViewBuilder let content: Content
 
     var body: some View {
         content
-            .padding(12)
+            .padding(14)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .liquidGlassCard(tint: background)
+            .liquidGlassCard(tint: tint)
     }
 }
 
@@ -1965,22 +1987,35 @@ private struct StatusPanel: View {
     let errorMessage: String?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 7) {
-            if isBusy {
-                ProgressView()
+        if hasContent {
+            VStack(alignment: .leading, spacing: 7) {
+                if isBusy {
+                    HStack(spacing: 8) {
+                        ProgressView()
+                        Text("处理中…")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                if !statusMessage.isEmpty && !isBusy {
+                    Text(statusMessage)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+                if let errorMessage {
+                    Text(errorMessage)
+                        .font(.subheadline)
+                        .foregroundStyle(.red)
+                }
             }
-            if !statusMessage.isEmpty {
-                Text(statusMessage)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-            }
-            if let errorMessage {
-                Text(errorMessage)
-                    .font(.subheadline)
-                    .foregroundStyle(.red)
-            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(12)
+            .liquidGlassCard(tint: errorMessage != nil ? .red : .accentColor.opacity(0.3))
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var hasContent: Bool {
+        isBusy || !statusMessage.isEmpty || errorMessage != nil
     }
 }
 
@@ -2002,20 +2037,19 @@ private struct EmptyState: View {
     let message: String
 
     var body: some View {
-        VStack(spacing: 8) {
-            Image(systemName: systemImage)
-                .font(.system(size: 28, weight: .light))
-                .foregroundStyle(.tertiary)
+        VStack(spacing: 12) {
+            AnimatedEmptyIcon(systemImage, size: 38, tint: .secondary)
             Text(title)
-                .font(.subheadline.weight(.medium))
+                .font(.subheadline.weight(.semibold))
             Text(message)
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
-                .frame(maxWidth: 260)
+                .lineSpacing(3)
+                .frame(maxWidth: 280)
         }
+        .padding(.vertical, 36)
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 30)
     }
 }
 

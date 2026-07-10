@@ -2,10 +2,8 @@
 //  LiquidGlass.swift
 //  NotePatch
 //
-//  统一液态玻璃样式（iOS 26 Glass API）。
-//  所有"边框 / 卡片 / 药丸 / 提示条 / 输入框 / 按钮"都收敛到这一组 modifier 与 style。
-//
-//  重要：多个玻璃元素必须包在 GlassEffectContainer 内以获得正确的渲染与合并。
+//  iOS 26 Liquid Glass 设计系统 — 2026 美学基础层。
+//  所有卡片 / 面板 / 药丸 / 提示条 / 输入框 / 按钮 + 全局动画 / 触觉反馈 / 排版增益 统一由此提供。
 //
 
 import SwiftUI
@@ -26,10 +24,93 @@ private func resolveGlass(_ prominence: GlassProminence) -> Glass {
     }
 }
 
-// MARK: - 卡片（替代所有 secondarySystemGroupedBackground + 描边 + 圆角矩形）
+// MARK: - 全局动画预设 (2026 美学：所有动画用 spring，拒绝 .default)
+
+extension Animation {
+    /// 交互反馈：快弹簧，用于按钮按压 / toggle
+    static let interactiveSpring = Animation.spring(response: 0.28, dampingFraction: 0.78)
+    /// 卡片入场：稍慢弹簧，用于列表项 stagger
+    static let cardEntry = Animation.spring(response: 0.42, dampingFraction: 0.82)
+    /// Sheet / 全屏过渡
+    static let sheetSpring = Animation.spring(response: 0.45, dampingFraction: 0.84)
+    /// 状态变化（banner 显隐）
+    static let statusSpring = Animation.spring(response: 0.35, dampingFraction: 0.80)
+}
+
+// MARK: - 触觉反馈 (2026 美学：关键操作必须有物理反馈)
+
+extension View {
+    /// 轻触反馈用于按钮点击
+    func hapticImpact(_ style: UIImpactFeedbackGenerator.FeedbackStyle = .light) -> some View {
+        self.sensoryFeedback(.impact(flexibility: .solid, intensity: style == .light ? 0.45 : 0.7), trigger: UUID())
+    }
+    /// 成功反馈
+    func hapticSuccess() -> some View {
+        self.sensoryFeedback(.success, trigger: UUID())
+    }
+    /// 选择反馈
+    func hapticSelection() -> some View {
+        self.sensoryFeedback(.selection, trigger: UUID())
+    }
+}
+
+// MARK: - Stagger 入场 (2026 美学：逐项弹入)
+
+struct StaggeredForEach<Data: RandomAccessCollection, Content: View>: View where Data.Element: Identifiable {
+    let data: Data
+    let animation: Animation
+    let initialOffset: CGFloat
+    @ViewBuilder let content: (Data.Element) -> Content
+    @State private var appeared = false
+
+    init(_ data: Data, animation: Animation = .cardEntry, initialOffset: CGFloat = 12,
+         @ViewBuilder content: @escaping (Data.Element) -> Content) {
+        self.data = data
+        self.animation = animation
+        self.initialOffset = initialOffset
+        self.content = content
+    }
+
+    var body: some View {
+        ForEach(Array(data.enumerated().map { ($0.offset, $0.element) }), id: \.1.id) { index, element in
+            content(element)
+                .opacity(appeared ? 1 : 0)
+                .offset(y: appeared ? 0 : initialOffset)
+                .animation(animation.delay(Double(index) * 0.05), value: appeared)
+        }
+        .onAppear { appeared = true }
+    }
+}
+
+// MARK: - 空状态 SF Symbol 动效 (2026 美学：空状态不再是静态占位)
+
+struct AnimatedEmptyIcon: View {
+    let systemImage: String
+    let size: CGFloat
+    let tint: Color
+
+    init(_ systemImage: String, size: CGFloat = 40, tint: Color = .secondary) {
+        self.systemImage = systemImage
+        self.size = size
+        self.tint = tint
+    }
+
+    @State private var animate = false
+
+    var body: some View {
+        Image(systemName: systemImage)
+            .font(.system(size: size, weight: .light))
+            .foregroundStyle(tint)
+            .symbolEffect(.bounce.byLayer, options: .repeat(.periodic(delay: 1.8)), value: animate)
+            .onAppear { animate = true }
+    }
+}
+
+// MARK: - 卡片
 
 struct LiquidGlassCardModifier: ViewModifier {
     let tint: Color
+    let interactive: Bool
     func body(content: Content) -> some View {
         let shape = RoundedRectangle(cornerRadius: 16, style: .continuous)
         let prominence: GlassProminence = (tint == .clear) ? .regular : .tinted(tint)
@@ -81,7 +162,7 @@ struct LiquidGlassPanelModifier: ViewModifier {
     }
 }
 
-// MARK: - 药丸（StatusPill 用）
+// MARK: - 药丸
 
 struct LiquidGlassPillModifier: ViewModifier {
     let tint: Color
@@ -98,7 +179,7 @@ struct LiquidGlassPillModifier: ViewModifier {
     }
 }
 
-// MARK: - 提示条（StatusBanner / 错误 / 警告）
+// MARK: - 提示条
 
 struct LiquidGlassBannerModifier: ViewModifier {
     let tint: Color
@@ -122,7 +203,7 @@ struct LiquidGlassBannerModifier: ViewModifier {
     }
 }
 
-// MARK: - 输入框（LabeledField 用）
+// MARK: - 输入框
 
 struct LiquidGlassFieldModifier: ViewModifier {
     func body(content: Content) -> some View {
@@ -145,7 +226,7 @@ struct LiquidGlassFieldModifier: ViewModifier {
     }
 }
 
-// MARK: - 底部粘性操作栏（替代 .regularMaterial + 顶部分隔线）
+// MARK: - 底部粘性操作栏
 
 struct LiquidGlassStickyFooterModifier: ViewModifier {
     func body(content: Content) -> some View {
@@ -173,73 +254,132 @@ struct LiquidGlassStickyFooterModifier: ViewModifier {
 // MARK: - 公开 View 扩展
 
 extension View {
-    /// 大卡片：用于 SectionContainer / 上传预览框 / 主要面板
-    func liquidGlassCard(tint: Color = .clear) -> some View {
-        modifier(LiquidGlassCardModifier(tint: tint))
+    func liquidGlassCard(tint: Color = .clear, interactive: Bool = false) -> some View {
+        modifier(LiquidGlassCardModifier(tint: tint, interactive: interactive))
     }
 
-    /// 紧凑面板：用于 toolbar / 状态条
     func liquidGlassPanel(tint: Color = .clear) -> some View {
         modifier(LiquidGlassPanelModifier(tint: tint))
     }
 
-    /// 药丸：用于 StatusPill
     func liquidGlassPill(tint: Color) -> some View {
         modifier(LiquidGlassPillModifier(tint: tint))
     }
 
-    /// 提示条：用于 StatusBanner / 错误区
     func liquidGlassBanner(tint: Color) -> some View {
         modifier(LiquidGlassBannerModifier(tint: tint))
     }
 
-    /// 输入框：用于 LabeledField
     func liquidGlassField() -> some View {
         modifier(LiquidGlassFieldModifier())
     }
 
-    /// 底部粘性操作栏
     func liquidGlassStickyFooter() -> some View {
         modifier(LiquidGlassStickyFooterModifier())
     }
 }
 
-// MARK: - 页面级背景
+// MARK: - 页面级背景 (2026 美学版：更深邃的渐变，更大的光斑)
 
-/// 玻璃材质需要下方有色彩 / 渐变才能折射，纯色页面会失去玻璃感。
 struct LiquidGlassBackdrop: View {
     @Environment(\.colorScheme) private var scheme
 
     var body: some View {
         ZStack {
+            // 2026 美学：从双端渐变变成三区渐变 + 大半径光斑，营造深邃空间感
             LinearGradient(
                 colors: scheme == .dark
-                    ? [Color(red: 0.06, green: 0.08, blue: 0.16),
-                       Color(red: 0.12, green: 0.07, blue: 0.20),
-                       Color(red: 0.05, green: 0.14, blue: 0.22)]
-                    : [Color(red: 0.82, green: 0.91, blue: 1.00),
-                       Color(red: 0.92, green: 0.86, blue: 1.00),
-                       Color(red: 0.83, green: 0.95, blue: 0.94)],
+                    ? [Color(red: 0.04, green: 0.06, blue: 0.14),
+                       Color(red: 0.09, green: 0.05, blue: 0.18),
+                       Color(red: 0.03, green: 0.12, blue: 0.20)]
+                    : [Color(red: 0.76, green: 0.88, blue: 1.00),
+                       Color(red: 0.90, green: 0.82, blue: 1.00),
+                       Color(red: 0.80, green: 0.94, blue: 0.92)],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
             )
-            // 装饰光斑
+
+            // 顶部光斑 — 大而柔和
             Circle()
-                .fill(Color.blue.opacity(scheme == .dark ? 0.32 : 0.36))
-                .frame(width: 320, height: 320)
-                .blur(radius: 90)
-                .offset(x: -120, y: -180)
+                .fill(
+                    RadialGradient(
+                        colors: [Color.blue.opacity(scheme == .dark ? 0.38 : 0.42),
+                                 Color.blue.opacity(0.0)],
+                        center: .center, startRadius: 0, endRadius: 160
+                    )
+                )
+                .frame(width: 360, height: 360)
+                .blur(radius: 30)
+                .offset(x: -100, y: -200)
+
+            // 底部光斑 — 暖色
             Circle()
-                .fill(Color.purple.opacity(scheme == .dark ? 0.30 : 0.32))
-                .frame(width: 280, height: 280)
-                .blur(radius: 80)
-                .offset(x: 140, y: 260)
+                .fill(
+                    RadialGradient(
+                        colors: [Color.purple.opacity(scheme == .dark ? 0.34 : 0.36),
+                                 Color.purple.opacity(0.0)],
+                        center: .center, startRadius: 0, endRadius: 140
+                    )
+                )
+                .frame(width: 300, height: 300)
+                .blur(radius: 30)
+                .offset(x: 120, y: 250)
+
+            // 中间偏右 — 青色点缀
             Circle()
-                .fill(Color.cyan.opacity(scheme == .dark ? 0.24 : 0.30))
-                .frame(width: 220, height: 220)
-                .blur(radius: 70)
-                .offset(x: 80, y: -60)
+                .fill(
+                    RadialGradient(
+                        colors: [Color.cyan.opacity(scheme == .dark ? 0.28 : 0.34),
+                                 Color.cyan.opacity(0.0)],
+                        center: .center, startRadius: 0, endRadius: 110
+                    )
+                )
+                .frame(width: 240, height: 240)
+                .blur(radius: 30)
+                .offset(x: 70, y: -80)
         }
         .ignoresSafeArea()
+    }
+}
+
+// MARK: - GlassEffectContainer 实用包装 (2026 美学：多玻璃必须合并渲染)
+
+/// 把多个玻璃视图包进 GlassEffectContainer，获得正确合并 + 形变过渡能力。
+struct GlassGroup<Content: View>: View {
+    let spacing: CGFloat
+    @ViewBuilder let content: Content
+
+    init(spacing: CGFloat = 12, @ViewBuilder content: () -> Content) {
+        self.spacing = spacing
+        self.content = content()
+    }
+
+    var body: some View {
+        GlassEffectContainer(spacing: spacing) {
+            content
+        }
+    }
+}
+
+// MARK: - 排版增益 (2026 美学：looser leading + 一致的 hierarchy)
+
+extension View {
+    /// Hero 标题：用于 Auth / 品牌名，比 largeTitle 更有呼吸感
+    func heroTitle() -> some View {
+        self.font(.system(.largeTitle, design: .default, weight: .bold))
+            .tracking(-0.5)
+            .lineSpacing(4)
+    }
+
+    /// Section 标题：title3 + comfortable leading
+    func sectionTitle() -> some View {
+        self.font(.title3.weight(.semibold))
+            .tracking(-0.2)
+    }
+
+    /// 卡片标题
+    func cardTitle() -> some View {
+        self.font(.headline)
+            .lineSpacing(2)
     }
 }
