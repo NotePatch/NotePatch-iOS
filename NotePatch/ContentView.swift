@@ -93,8 +93,7 @@ private struct AuthScreen: View {
 
     var body: some View {
         ZStack {
-            Color(.systemGroupedBackground)
-                .ignoresSafeArea()
+            LiquidGlassBackdrop()
 
             ScrollView {
                 VStack(spacing: 28) {
@@ -153,8 +152,7 @@ private struct AuthScreen: View {
                         }
                         .padding(.horizontal, 16)
                         .padding(.vertical, 6)
-                        .background(Color(.secondarySystemGroupedBackground))
-                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .liquidGlassCard()
 
                         Button {
                             model.authenticate(register: false)
@@ -172,8 +170,7 @@ private struct AuthScreen: View {
                             }
                             .frame(height: 48)
                         }
-                        .buttonStyle(.borderedProminent)
-                        .buttonBorderShape(.roundedRectangle(radius: 10))
+                        .buttonStyle(.glassProminent)
                         .disabled(model.isBusy)
                         .accessibilityIdentifier("loginButton")
 
@@ -184,7 +181,7 @@ private struct AuthScreen: View {
                                 Label("创建账号", systemImage: "person.badge.plus")
                                     .frame(maxWidth: .infinity)
                             }
-                            .buttonStyle(.bordered)
+                            .buttonStyle(.glass)
                             .disabled(model.isBusy)
 
                             Button {
@@ -193,7 +190,7 @@ private struct AuthScreen: View {
                                 Label("检测服务", systemImage: "wave.3.right")
                                     .frame(maxWidth: .infinity)
                             }
-                            .buttonStyle(.bordered)
+                            .buttonStyle(.glass)
                             .disabled(model.isBusy)
                         }
 
@@ -272,7 +269,7 @@ private struct WorkbenchScreen: View {
             }
             .accessibilityIdentifier("workbenchTabs")
         }
-        .background(Color(.systemGroupedBackground))
+        .background(LiquidGlassBackdrop())
     }
 }
 
@@ -315,13 +312,11 @@ private struct CompactTopBar: View {
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(Color.accentColor)
                 .frame(width: 34, height: 34)
-                .background(Color.accentColor.opacity(0.12))
-                .clipShape(Circle())
+                .liquidGlassPill(tint: .accentColor)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
-        .background(Color(.secondarySystemGroupedBackground))
-        .overlay(alignment: .bottom) { Divider() }
+        .liquidGlassPanel()
         .accessibilityIdentifier("workbenchTopBar")
     }
 
@@ -513,8 +508,7 @@ private struct UploadSourceButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .foregroundStyle(emphasized ? Color.white : Color.accentColor)
-            .background(emphasized ? Color.accentColor : Color.accentColor.opacity(0.10))
-            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .liquidGlassPill(tint: emphasized ? .accentColor : .clear)
             .opacity(configuration.isPressed ? 0.72 : 1)
     }
 }
@@ -585,7 +579,7 @@ private struct DocumentRow: View {
     @State private var detailsExpanded = false
 
     var body: some View {
-        SectionContainer(background: Color(.secondarySystemGroupedBackground)) {
+        SectionContainer(background: .clear) {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(alignment: .top, spacing: 10) {
                     VStack(alignment: .leading, spacing: 4) {
@@ -610,14 +604,14 @@ private struct DocumentRow: View {
                         Label(processTitle, systemImage: "wand.and.stars")
                             .frame(maxWidth: .infinity)
                     }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.glassProminent)
                     .disabled(isBusy || document.status == "deleted")
 
                     Button(action: onDownload) {
                         Image(systemName: "arrow.down.to.line")
                             .frame(width: 22, height: 22)
                     }
-                    .buttonStyle(.bordered)
+                    .buttonStyle(.glass)
                     .disabled(isBusy || document.status == "deleted")
                     .accessibilityLabel("下载")
 
@@ -642,7 +636,7 @@ private struct DocumentRow: View {
                         Image(systemName: "ellipsis")
                             .frame(width: 22, height: 22)
                     }
-                    .buttonStyle(.bordered)
+                    .buttonStyle(.glass)
                     .disabled(isBusy)
                     .accessibilityLabel("更多操作")
                 }
@@ -770,8 +764,7 @@ private struct TaskPanel: View {
                             .foregroundStyle(.red)
                             .padding(10)
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(Color.red.opacity(0.08))
-                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                            .liquidGlassBanner(tint: .red)
                     }
                     if let resultText = activeTask.resultText {
                         DisclosureGroup("任务结果", isExpanded: $resultExpanded) {
@@ -900,7 +893,7 @@ private struct OpenClawChatTab: View {
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
-            .background(Color(.secondarySystemGroupedBackground))
+            .liquidGlassPanel()
 
             ScrollViewReader { proxy in
                 ScrollView {
@@ -926,8 +919,9 @@ private struct OpenClawChatTab: View {
                 Divider()
                 HStack(alignment: .bottom, spacing: 10) {
                     ZStack(alignment: .topLeading) {
-                        RoundedRectangle(cornerRadius: 8)
-                            .fill(Color(.tertiarySystemFill))
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .fill(.clear)
+                            .glassEffect(.clear, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                         if model.openClawInput.isEmpty {
                             Text("问 OpenClaw")
                                 .foregroundStyle(.secondary)
@@ -950,14 +944,14 @@ private struct OpenClawChatTab: View {
                             .font(.system(size: 15, weight: .bold))
                             .frame(width: 34, height: 34)
                     }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.glassProminent)
                     .clipShape(Circle())
                     .disabled(model.isOpenClawSending || model.openClawInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     .accessibilityLabel("发送")
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 10)
-                .background(Color(.secondarySystemGroupedBackground))
+                .liquidGlassPanel()
             }
         }
         .accessibilityIdentifier("openClawTab")
@@ -1036,8 +1030,7 @@ private struct LearningUnitsSection: View {
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(12)
-                        .background(Color(.secondarySystemGroupedBackground))
-                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                        .liquidGlassCard()
                     }
                     .buttonStyle(.plain)
                 }
@@ -1056,13 +1049,12 @@ private struct LearningUnitsSection: View {
                             }
                             Spacer()
                             Button { model.downloadAndPreview(note) } label: { Image(systemName: "eye") }
-                                .buttonStyle(.bordered)
+                                .buttonStyle(.glass)
                                 .disabled(note.preferredDownloadURL == nil)
                                 .accessibilityLabel("预览笔记")
                         }
                         .padding(12)
-                        .background(Color(.secondarySystemGroupedBackground))
-                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                        .liquidGlassCard()
                     }
                 }
             }
@@ -1084,7 +1076,7 @@ private struct LearningSectionHeader: View {
             }
             Spacer()
             Button(action: onRefresh) { Image(systemName: "arrow.clockwise") }
-                .buttonStyle(.bordered)
+                .buttonStyle(.glass)
                 .disabled(isLoading)
                 .accessibilityLabel("刷新\(title)")
         }
@@ -1120,7 +1112,7 @@ private struct KnowledgeSearchSection: View {
                         Label("检索", systemImage: "magnifyingglass")
                             .frame(maxWidth: .infinity)
                     }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.glassProminent)
                     .disabled(model.isKnowledgeSearching || model.knowledgeQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     .accessibilityIdentifier("knowledgeSearchButton")
                 }
@@ -1137,7 +1129,7 @@ private struct KnowledgeSearchSection: View {
                     Text("\(model.knowledgeResults.count) 条").font(.caption).foregroundStyle(.secondary)
                 }
                 ForEach(model.knowledgeResults) { item in
-                    SectionContainer(background: Color(.secondarySystemGroupedBackground)) {
+                    SectionContainer(background: .clear) {
                         VStack(alignment: .leading, spacing: 8) {
                             HStack(alignment: .firstTextBaseline) {
                                 Text(item.metadataTitle ?? item.sourceType ?? "知识片段")
@@ -1157,7 +1149,7 @@ private struct KnowledgeSearchSection: View {
                                 Button { model.previewKnowledgeSource(item) } label: {
                                     Label("预览来源", systemImage: "doc.text.magnifyingglass")
                                 }
-                                .buttonStyle(.bordered)
+                                .buttonStyle(.glass)
                                 .disabled(model.isBusy)
                             }
                         }
@@ -1182,11 +1174,11 @@ private struct HomeworkGradingSection: View {
                 }
                 Spacer()
                 Button { isCreatingHomework = true } label: { Image(systemName: "plus") }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.glassProminent)
                     .disabled(model.homeworkDocumentCandidates.isEmpty)
                     .accessibilityLabel("创建作业")
                 Button { model.loadLearningDashboard(allowOfflineNetwork: true) } label: { Image(systemName: "arrow.clockwise") }
-                    .buttonStyle(.bordered)
+                    .buttonStyle(.glass)
                     .disabled(model.isHomeworkLoading)
                     .accessibilityLabel("刷新作业")
             }
@@ -1233,8 +1225,7 @@ private struct HomeworkGradingSection: View {
                     TextEditor(text: $model.homeworkRubricText)
                         .frame(height: 92)
                         .padding(6)
-                        .background(Color(.tertiarySystemFill))
-                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                        .liquidGlassField()
                     LabeledField(title: "满分") {
                         TextField("100", text: $model.homeworkMaxScoreText)
                             .keyboardType(.decimalPad)
@@ -1243,7 +1234,7 @@ private struct HomeworkGradingSection: View {
                         Label("保存评分配置", systemImage: "checkmark")
                             .frame(maxWidth: .infinity)
                     }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.glassProminent)
                     .disabled(model.isHomeworkLoading)
                 }
             }
@@ -1267,8 +1258,7 @@ private struct HomeworkGradingSection: View {
                                 .accessibilityLabel("删除评分依据")
                         }
                         .padding(10)
-                        .background(Color(.secondarySystemGroupedBackground))
-                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                        .liquidGlassCard()
                     }
                 }
                 if model.referenceDocumentCandidates.isEmpty {
@@ -1288,7 +1278,7 @@ private struct HomeworkGradingSection: View {
                     } label: {
                         Label("添加评分依据", systemImage: "plus")
                     }
-                    .buttonStyle(.bordered)
+                    .buttonStyle(.glass)
                     .disabled(selectedReferenceDocumentId.isEmpty || model.isHomeworkLoading)
                 }
             }
@@ -1305,7 +1295,7 @@ private struct HomeworkGradingSection: View {
                 Label("开始评分", systemImage: "checkmark.seal")
                     .frame(maxWidth: .infinity)
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(.glassProminent)
             .disabled(model.isHomeworkLoading)
             .accessibilityIdentifier("gradeHomeworkButton")
         }
@@ -1439,28 +1429,24 @@ private struct OpenClawMessageBubble: View {
             }
             .padding(12)
             .frame(maxWidth: message.role == .system ? .infinity : 320, alignment: .leading)
-            .background(backgroundColor)
+            .liquidGlassCard(tint: bubbleTint)
             .foregroundStyle(foregroundColor)
-            .clipShape(RoundedRectangle(cornerRadius: 8))
             if message.role != .user {
                 Spacer(minLength: 28)
             }
         }
     }
 
-    private var backgroundColor: Color {
-        if message.status == .error {
-            return Color(.systemRed).opacity(0.14)
-        }
+    private var bubbleTint: Color {
+        if message.status == .error { return .red }
         switch message.role {
-        case .user:
-            return Color.accentColor
-        case .system:
-            return Color(.tertiarySystemFill)
-        case .assistant:
-            return Color(.secondarySystemGroupedBackground)
+        case .user:    return .accentColor
+        case .system:  return .clear
+        case .assistant: return .clear
         }
     }
+
+    private var backgroundColor: Color { bubbleTint }
 
     private var foregroundColor: Color {
         if message.role == .user {
@@ -1498,7 +1484,7 @@ private struct SettingsTab: View {
                             Label("保存服务器设置", systemImage: "checkmark")
                                 .frame(maxWidth: .infinity)
                         }
-                        .buttonStyle(.borderedProminent)
+                        .buttonStyle(.glassProminent)
                         .disabled(model.isBusy)
 
                         HStack(spacing: 8) {
@@ -1508,7 +1494,7 @@ private struct SettingsTab: View {
                                 Label("检测 API", systemImage: "network")
                                     .frame(maxWidth: .infinity)
                             }
-                            .buttonStyle(.bordered)
+                            .buttonStyle(.glass)
                             .disabled(model.isBusy)
 
                             Button {
@@ -1517,7 +1503,7 @@ private struct SettingsTab: View {
                                 Label("检测 tusd", systemImage: "arrow.up.circle")
                                     .frame(maxWidth: .infinity)
                             }
-                            .buttonStyle(.bordered)
+                            .buttonStyle(.glass)
                             .disabled(model.isBusy)
                         }
                     }
@@ -1548,8 +1534,7 @@ private struct SettingsTab: View {
                             Image(systemName: "person.fill")
                                 .foregroundStyle(Color.accentColor)
                                 .frame(width: 42, height: 42)
-                                .background(Color.accentColor.opacity(0.10))
-                                .clipShape(Circle())
+                                .liquidGlassPill(tint: .accentColor)
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(model.session?.fullName?.isEmpty == false ? model.session?.fullName ?? "" : "NotePatch 用户")
                                     .font(.subheadline.weight(.medium))
@@ -1570,7 +1555,7 @@ private struct SettingsTab: View {
                             Label("退出登录", systemImage: "rectangle.portrait.and.arrow.right")
                                 .frame(maxWidth: .infinity)
                         }
-                        .buttonStyle(.bordered)
+                        .buttonStyle(.glass)
                         .tint(.red)
                         .disabled(model.isBusy)
                     }
@@ -1609,8 +1594,7 @@ private struct WorkspaceManagementSection: View {
                         Image(systemName: "folder.fill")
                             .foregroundStyle(.orange)
                             .frame(width: 34, height: 34)
-                            .background(Color.orange.opacity(0.10))
-                            .clipShape(RoundedRectangle(cornerRadius: 7))
+                            .liquidGlassPanel(tint: .orange)
                         VStack(alignment: .leading, spacing: 2) {
                             Text(selected.name)
                                 .font(.subheadline.weight(.medium))
@@ -1630,7 +1614,7 @@ private struct WorkspaceManagementSection: View {
                     Label("恢复个人空间", systemImage: "arrow.triangle.2.circlepath")
                         .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(.glass)
                 .disabled(model.isBusy)
             }
         }
@@ -1660,15 +1644,14 @@ private struct LightweightMarkdownText: View {
                         MarkdownInlineText(text: block.text, color: .primary)
                     }
                     .padding(8)
-                    .background(Color(.tertiarySystemFill))
-                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                    .liquidGlassPanel()
                 case .code:
                     Text(block.text)
                         .font(.system(.caption, design: .monospaced))
-                        .foregroundStyle(Color(.systemBackground))
+                        .foregroundStyle(.white)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(10)
-                        .background(Color(.label))
+                        .background(Color.black.opacity(0.65))
                         .clipShape(RoundedRectangle(cornerRadius: 6))
                 case .paragraph:
                     MarkdownInlineText(text: block.text, color: color)
@@ -1738,19 +1721,14 @@ private struct CollapsibleSection<Content: View>: View {
 }
 
 private struct SectionContainer<Content: View>: View {
-    var background: Color = Color(.secondarySystemGroupedBackground)
+    var background: Color = .clear
     @ViewBuilder let content: Content
 
     var body: some View {
         content
             .padding(12)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(background)
-            .clipShape(RoundedRectangle(cornerRadius: 8))
-            .overlay {
-                RoundedRectangle(cornerRadius: 8)
-                    .stroke(Color(.separator).opacity(0.16), lineWidth: 0.5)
-            }
+            .liquidGlassCard(tint: background)
     }
 }
 
@@ -1790,8 +1768,7 @@ private struct LabeledField<Field: View>: View {
             field
                 .padding(.horizontal, 11)
                 .frame(height: 42)
-                .background(Color(.tertiarySystemFill))
-                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .liquidGlassField()
         }
     }
 }
@@ -1806,8 +1783,7 @@ private struct StatusPill: View {
             .foregroundStyle(color)
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
-            .background(color.opacity(0.12))
-            .clipShape(Capsule())
+            .liquidGlassPill(tint: color)
             .fixedSize()
     }
 }
@@ -1842,13 +1818,13 @@ private struct ChoiceButton: View {
             Button(action: action) {
                 label
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(.glassProminent)
             .disabled(!enabled)
         } else {
             Button(action: action) {
                 label
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(.glass)
             .disabled(!enabled)
         }
     }
@@ -1930,8 +1906,7 @@ private struct StatusBanner: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(errorMessage == nil ? Color(.tertiarySystemFill) : Color(.systemRed).opacity(0.12))
-            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .liquidGlassBanner(tint: bannerColor)
             .padding(.horizontal, 16)
             .padding(.top, 8)
         }
@@ -2304,22 +2279,21 @@ private struct UploadPreviewScreen: View {
                     Text("取消")
                         .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(.glass)
                 .accessibilityIdentifier("cancelPendingUploadButton")
 
                 Button(action: onUpload) {
                     Label("上传", systemImage: "arrow.up.circle.fill")
                         .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.glassProminent)
                 .accessibilityIdentifier("confirmPendingUploadButton")
             }
         }
         .padding(.horizontal, 16)
         .padding(.top, 12)
         .padding(.bottom, 10)
-        .background(.regularMaterial)
-        .overlay(alignment: .top) { Divider() }
+        .liquidGlassStickyFooter()
     }
 
     private var fileDetails: String {
