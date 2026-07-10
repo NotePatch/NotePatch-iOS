@@ -120,6 +120,15 @@ final class LearningBackendClient {
         return try await authedJSON("GET", path, payload: nil, as: [LearningDocumentItem].self)
     }
 
+    func getDocument(workspaceId: String, documentId: String) async throws -> LearningDocumentItem {
+        try await authedJSON(
+            "GET",
+            "/workspaces/\(workspaceId.pathSegment)/documents/\(documentId.pathSegment)",
+            payload: nil,
+            as: LearningDocumentItem.self
+        )
+    }
+
     func createUploadSession(
         workspaceId: String,
         filename: String,
@@ -321,6 +330,100 @@ final class LearningBackendClient {
             "/workspaces/\(workspaceId.pathSegment)/learning-units/\(learningUnitId.pathSegment)/notes?include_download_url=true",
             payload: nil,
             as: [StudyNoteVersion].self
+        )
+    }
+
+    func searchKnowledge(
+        workspaceId: String,
+        query: String,
+        learningUnitId: String?,
+        subject: String?,
+        limit: Int
+    ) async throws -> KnowledgeSearchResponse {
+        var payload: [String: Any] = ["query": query, "limit": limit]
+        if let learningUnitId, !learningUnitId.isEmpty { payload["learning_unit_id"] = learningUnitId }
+        if let subject, !subject.isEmpty { payload["subject"] = subject }
+        return try await authedJSON(
+            "POST",
+            "/workspaces/\(workspaceId.pathSegment)/knowledge/search",
+            payload: payload,
+            as: KnowledgeSearchResponse.self
+        )
+    }
+
+    func listHomeworks(workspaceId: String) async throws -> [HomeworkItem] {
+        try await authedJSON(
+            "GET",
+            "/workspaces/\(workspaceId.pathSegment)/homeworks",
+            payload: nil,
+            as: [HomeworkItem].self
+        )
+    }
+
+    func getHomework(workspaceId: String, homeworkId: String) async throws -> HomeworkItem {
+        try await authedJSON(
+            "GET",
+            "/workspaces/\(workspaceId.pathSegment)/homeworks/\(homeworkId.pathSegment)",
+            payload: nil,
+            as: HomeworkItem.self
+        )
+    }
+
+    func createHomework(workspaceId: String, input: HomeworkCreateInput) async throws -> HomeworkItem {
+        try await authedJSON(
+            "POST",
+            "/workspaces/\(workspaceId.pathSegment)/homeworks",
+            payload: input.payload,
+            as: HomeworkItem.self
+        )
+    }
+
+    func updateGradingConfig(workspaceId: String, homeworkId: String, input: GradingConfigInput) async throws -> HomeworkItem {
+        try await authedJSON(
+            "PATCH",
+            "/workspaces/\(workspaceId.pathSegment)/homeworks/\(homeworkId.pathSegment)/grading-config",
+            payload: input.payload,
+            as: HomeworkItem.self
+        )
+    }
+
+    func listHomeworkReferences(workspaceId: String, homeworkId: String) async throws -> [HomeworkReferenceItem] {
+        try await authedJSON(
+            "GET",
+            "/workspaces/\(workspaceId.pathSegment)/homeworks/\(homeworkId.pathSegment)/references",
+            payload: nil,
+            as: [HomeworkReferenceItem].self
+        )
+    }
+
+    func addHomeworkReference(
+        workspaceId: String,
+        homeworkId: String,
+        documentId: String,
+        referenceType: String
+    ) async throws -> HomeworkReferenceItem {
+        try await authedJSON(
+            "POST",
+            "/workspaces/\(workspaceId.pathSegment)/homeworks/\(homeworkId.pathSegment)/references",
+            payload: ["document_id": documentId, "reference_type": referenceType],
+            as: HomeworkReferenceItem.self
+        )
+    }
+
+    func deleteHomeworkReference(workspaceId: String, homeworkId: String, referenceId: String) async throws {
+        _ = try await authedText(
+            "DELETE",
+            "/workspaces/\(workspaceId.pathSegment)/homeworks/\(homeworkId.pathSegment)/references/\(referenceId.pathSegment)",
+            payload: nil
+        )
+    }
+
+    func gradeHomework(workspaceId: String, homeworkId: String) async throws -> TaskItem {
+        try await authedJSON(
+            "POST",
+            "/workspaces/\(workspaceId.pathSegment)/homeworks/\(homeworkId.pathSegment)/grade",
+            payload: ["student_user_id": NSNull(), "options": [:]],
+            as: TaskItem.self
         )
     }
 

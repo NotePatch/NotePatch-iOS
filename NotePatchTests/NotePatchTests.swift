@@ -569,9 +569,120 @@ struct NotePatchTests {
         #expect(notes.first?.preferredDownloadURL == "https://download.test/highlighted")
         #expect(requests.contains { $0.url?.query == "include_download_url=true" })
     }
+
+    @Test func decodeKnowledgeHomeworkReferenceAndGradingResult() throws {
+        let search = try JSONDecoder.notepatch.decode(
+            KnowledgeSearchResponse.self,
+            from: Data(#"{"items":[{"id":"k-1","workspace_id":"ws-1","document_id":null,"subject":null,"grade_level":"IGCSE","source_type":"courseware","content":"斜率表示变化率","metadata":{"title":"一次函数","page_refs":[2,3]},"score":0.8731,"created_at":""}]}"#.utf8)
+        )
+        #expect(search.items.first?.metadataTitle == "一次函数")
+        #expect(search.items.first?.pageReferences == "2, 3")
+        #expect(search.items.first?.documentId == nil)
+        #expect(search.items.first?.score == 0.8731)
+
+        let homework = try JSONDecoder.notepatch.decode(
+            HomeworkItem.self,
+            from: Data(#"{"id":"h-1","workspace_id":"ws-1","title":"代数作业","description":null,"document_id":"doc-1","due_at":null,"status":"draft","rubric_text":"过程 4 分","max_score":100.0,"metadata":{},"created_by_user_id":"u-1","created_at":"","updated_at":""}"#.utf8)
+        )
+        let references = try JSONDecoder.notepatch.decode(
+            [HomeworkReferenceItem].self,
+            from: Data(#"[{"id":"r-1","workspace_id":"ws-1","homework_id":"h-1","document_id":"answer-1","reference_type":"answer_key","created_at":""}]"#.utf8)
+        )
+        let task = try JSONDecoder.notepatch.decode(
+            TaskItem.self,
+            from: Data(#"{"id":"t-1","workspace_id":"ws-1","status":"succeeded","payload":{},"result":{"grading_mode":"provisional","confidence":0.82},"progress":100}"#.utf8)
+        )
+        #expect(homework.maxScore == 100)
+        #expect(references.first?.referenceType == "answer_key")
+        #expect(task.result?.objectStringValue(for: "grading_mode") == "provisional")
+        #expect(task.result?.objectDoubleValue(for: "confidence") == 0.82)
+    }
+
+    @Test func knowledgeAndHomeworkRequests_matchOpenAPI() async throws {
+        var bodies: [String: [String: Any]] = [:]
+        let homeworkJSON = #"{"id":"h-1","workspace_id":"ws-1","title":"代数作业","document_id":"doc-1","status":"draft","rubric_text":"过程 4 分","max_score":100.0,"metadata":{},"created_by_user_id":"u-1","created_at":"","updated_at":""}"#
+        let referenceJSON = #"{"id":"r-1","workspace_id":"ws-1","homework_id":"h-1","document_id":"answer-1","reference_type":"answer_key","created_at":""}"#
+        let session = Self.mockSession { request in
+            let key = "\(request.httpMethod ?? "") \(request.url?.path ?? "")"
+            if let data = Self.requestBodyData(request) {
+                bodies[key] = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+            }
+            switch key {
+            case "POST /workspaces/ws-1/knowledge/search":
+                return Self.response(request, status: 200, body: #"{"items":[]}"#)
+            case "GET /workspaces/ws-1/homeworks":
+                return Self.response(request, status: 200, body: "[\(homeworkJSON)]")
+            case "GET /workspaces/ws-1/homeworks/h-1", "POST /workspaces/ws-1/homeworks", "PATCH /workspaces/ws-1/homeworks/h-1/grading-config":
+                return Self.response(request, status: request.httpMethod == "POST" ? 201 : 200, body: homeworkJSON)
+            case "GET /workspaces/ws-1/homeworks/h-1/references":
+                return Self.response(request, status: 200, body: "[\(referenceJSON)]")
+            case "POST /workspaces/ws-1/homeworks/h-1/references":
+                return Self.response(request, status: 201, body: referenceJSON)
+            case "DELETE /workspaces/ws-1/homeworks/h-1/references/r-1":
+                return Self.response(request, status: 204, body: "")
+            case "POST /workspaces/ws-1/homeworks/h-1/grade":
+                return Self.response(request, status: 201, body: Self.taskJSON)
+            default:
+                return Self.response(request, status: 500, body: #"{"detail":"unexpected request"}"#)
+            }
+        }
+        let client = LearningBackendClient(baseURL: "https://api.test", accessToken: "access", refreshToken: "refresh", session: session)
+        _ = try await client.searchKnowledge(workspaceId: "ws-1", query: "斜率", learningUnitId: "unit-1", subject: "math", limit: 6)
+        _ = try await client.listHomeworks(workspaceId: "ws-1")
+        _ = try await client.getHomework(workspaceId: "ws-1", homeworkId: "h-1")
+        _ = try await client.createHomework(workspaceId: "ws-1", input: HomeworkCreateInput(title: "代数作业", description: nil, documentId: "doc-1", dueAt: nil, rubricText: nil, maxScore: 100))
+        _ = try await client.updateGradingConfig(workspaceId: "ws-1", homeworkId: "h-1", input: GradingConfigInput(rubricText: nil, maxScore: 80))
+        _ = try await client.listHomeworkReferences(workspaceId: "ws-1", homeworkId: "h-1")
+        _ = try await client.addHomeworkReference(workspaceId: "ws-1", homeworkId: "h-1", documentId: "answer-1", referenceType: "answer_key")
+        try await client.deleteHomeworkReference(workspaceId: "ws-1", homeworkId: "h-1", referenceId: "r-1")
+        _ = try await client.gradeHomework(workspaceId: "ws-1", homeworkId: "h-1")
+
+        #expect(bodies["POST /workspaces/ws-1/knowledge/search"]?["learning_unit_id"] as? String == "unit-1")
+        #expect(bodies["POST /workspaces/ws-1/knowledge/search"]?["limit"] as? Int == 6)
+        #expect(bodies["POST /workspaces/ws-1/homeworks"]?["document_id"] as? String == "doc-1")
+        #expect(bodies["PATCH /workspaces/ws-1/homeworks/h-1/grading-config"]?["max_score"] as? Double == 80)
+        #expect(bodies["PATCH /workspaces/ws-1/homeworks/h-1/grading-config"]?["rubric_text"] is NSNull)
+        #expect(bodies["POST /workspaces/ws-1/homeworks/h-1/references"]?["reference_type"] as? String == "answer_key")
+        #expect(bodies["POST /workspaces/ws-1/homeworks/h-1/grade"]?["student_user_id"] is NSNull)
+    }
+
+    @Test @MainActor func gradingViewModel_validatesAndFiltersCandidates() throws {
+        let suiteName = "NotePatchTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let model = NotePatchViewModel(settings: SettingsStore(defaults: defaults, keychain: KeychainStore(service: suiteName)))
+        model.session = SavedSession(baseURL: "https://api.test", tusBaseURL: "https://tus.test/", accessToken: "a", refreshToken: "r", expiresAt: "x", userId: "u", email: "u@test", fullName: nil, selectedWorkspaceId: "ws-1", aiHistoryEnabled: true)
+        model.selectedWorkspaceId = "ws-1"
+        model.searchKnowledge()
+        #expect(model.errorMessage == "请输入知识检索内容。")
+
+        let documents = try JSONDecoder.notepatch.decode(
+            [LearningDocumentItem].self,
+            from: Data(Self.gradingDocumentsJSON.utf8)
+        )
+        model.gradingDocuments = documents
+        model.homeworkReferences = [HomeworkReferenceItem(id: "r-1", workspaceId: "ws-1", homeworkId: "h-1", documentId: "answer-1", referenceType: "answer_key", createdAt: "")]
+        #expect(model.homeworkDocumentCandidates.map(\.id) == ["homework-1"])
+        #expect(model.referenceDocumentCandidates.map(\.id) == ["rubric-1"])
+
+        model.selectedHomeworkId = "h-1"
+        model.homeworkMaxScoreText = "0"
+        model.saveGradingConfig()
+        #expect(model.errorMessage == "满分必须大于 0。")
+    }
 }
 
 private extension NotePatchTests {
+    static let gradingDocumentsJSON =
+        """
+        [
+          {"id":"homework-1","workspace_id":"ws-1","uploaded_by":"u","title":"作业","original_filename":"homework.pdf","mime_type":"application/pdf","file_size":10,"file_type":"pdf","document_kind":"homework","storage_backend":"seaweedfs","bucket":"b","object_key":"homework","upload_id":null,"tus_upload_url":null,"sha256":null,"status":"ready","created_at":"","updated_at":"","artifacts":[]},
+          {"id":"answer-1","workspace_id":"ws-1","uploaded_by":"u","title":"答案","original_filename":"answer.pdf","mime_type":"application/pdf","file_size":10,"file_type":"pdf","document_kind":"answer_key","storage_backend":"seaweedfs","bucket":"b","object_key":"answer","upload_id":null,"tus_upload_url":null,"sha256":null,"status":"ready","created_at":"","updated_at":"","artifacts":[]},
+          {"id":"rubric-1","workspace_id":"ws-1","uploaded_by":"u","title":"标准","original_filename":"rubric.pdf","mime_type":"application/pdf","file_size":10,"file_type":"pdf","document_kind":"rubric","storage_backend":"seaweedfs","bucket":"b","object_key":"rubric","upload_id":null,"tus_upload_url":null,"sha256":null,"status":"ready","created_at":"","updated_at":"","artifacts":[]},
+          {"id":"pending-1","workspace_id":"ws-1","uploaded_by":"u","title":"未处理答案","original_filename":"pending.pdf","mime_type":"application/pdf","file_size":10,"file_type":"pdf","document_kind":"answer_key","storage_backend":"seaweedfs","bucket":"b","object_key":"pending","upload_id":null,"tus_upload_url":null,"sha256":null,"status":"uploaded","created_at":"","updated_at":"","artifacts":[]}
+        ]
+        """
+
     static let uploadSessionJSON =
         """
         {

@@ -39,6 +39,21 @@ enum WorkbenchTab: Int, CaseIterable, Identifiable {
     }
 }
 
+enum LearningSection: String, CaseIterable, Identifiable {
+    case units
+    case search
+    case grading
+
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .units: return "单元"
+        case .search: return "检索"
+        case .grading: return "评分"
+        }
+    }
+}
+
 enum OpenClawChatRole: Equatable {
     case user
     case assistant
@@ -111,6 +126,22 @@ final class NotePatchViewModel: ObservableObject {
     @Published var selectedLearningUnitId: String?
     @Published var studyNotes: [StudyNoteVersion] = []
     @Published var isLearningLoading = false
+    @Published var selectedLearningSection: LearningSection = .units
+    @Published var knowledgeQuery = ""
+    @Published var knowledgeLearningUnitId = ""
+    @Published var knowledgeSubject = ""
+    @Published var knowledgeLimit = 6
+    @Published var knowledgeResults: [KnowledgeSearchItem] = []
+    @Published var hasSearchedKnowledge = false
+    @Published var isKnowledgeSearching = false
+    @Published var homeworks: [HomeworkItem] = []
+    @Published var gradingDocuments: [LearningDocumentItem] = []
+    @Published var selectedHomeworkId: String?
+    @Published var homeworkReferences: [HomeworkReferenceItem] = []
+    @Published var homeworkRubricText = ""
+    @Published var homeworkMaxScoreText = "100"
+    @Published var isHomeworkLoading = false
+    @Published var lastGradingTask: TaskItem?
     @Published var uploadLearningUnitId = ""
     @Published var uploadLearningUnitTitle = ""
     @Published var uploadSubject = ""
@@ -175,6 +206,13 @@ final class NotePatchViewModel: ObservableObject {
             self.workspaces = [WorkspaceItem(id: "ui-workspace", name: "My Workspace")]
             self.learningUnits = [LearningUnit(id: "unit-1", title: "分数与比例", subject: "数学", gradeLevel: "七年级", topic: "比例")]
             self.studyNotes = [StudyNoteVersion(id: "note-1", learningUnitId: "unit-1", versionNo: 1, title: "分数与比例笔记", markdownObjectKey: "", jsonObjectKey: "", highlightedObjectKey: nil, highlightMapObjectKey: nil, downloadURLs: [:])]
+            self.homeworks = [HomeworkItem(id: "homework-1", workspaceId: "ui-workspace", title: "代数作业 01", documentId: nil, rubricText: "每题 10 分", maxScore: 100)]
+            self.selectedHomeworkId = "homework-1"
+            self.homeworkRubricText = "每题 10 分"
+            self.gradingDocuments = [
+                LearningDocumentItem(id: "homework-doc", workspaceId: "ui-workspace", title: "代数作业", originalFilename: "homework.pdf", mimeType: "application/pdf", fileType: "pdf", documentKind: "homework", status: "ready"),
+                LearningDocumentItem(id: "answer-doc", workspaceId: "ui-workspace", title: "参考答案", originalFilename: "answer.pdf", mimeType: "application/pdf", fileType: "pdf", documentKind: "answer_key", status: "ready")
+            ]
             self.didRestoreSession = true
         }
         if ProcessInfo.processInfo.arguments.contains("-NotePatchUITestPendingImage") {
@@ -375,6 +413,7 @@ final class NotePatchViewModel: ObservableObject {
         guard let activeSession = currentSessionOrError() else {
             return
         }
+        clearLearningWorkspaceState()
         saveSelectedWorkspace(workspaceId)
         Task {
             isBusy = true
@@ -624,6 +663,7 @@ final class NotePatchViewModel: ObservableObject {
                     selectedOcrDocumentId = document.id
                     selectedOcrArtifacts = (try? await client.getOcrArtifacts(workspaceId: workspaceId, documentId: document.id).artifacts) ?? []
                     try? await refreshLearningUnits(activeSession: activeSession, workspaceId: workspaceId)
+                    try? await refreshHomeworks(activeSession: activeSession, workspaceId: workspaceId)
                 }
                 statusMessage = "文档处理完成。"
             } catch {
@@ -843,6 +883,25 @@ final class NotePatchViewModel: ObservableObject {
         }
     }
 
+    func loadLearningDashboard() {
+        if ProcessInfo.processInfo.arguments.contains("-NotePatchUITestWorkbench") { return }
+        guard let activeSession = currentSessionOrError(), let workspaceId = selectedWorkspaceId else { return }
+        Task {
+            isLearningLoading = true
+            isHomeworkLoading = true
+            defer {
+                isLearningLoading = false
+                isHomeworkLoading = false
+            }
+            var firstError: Error?
+            do { try await refreshLearningUnits(activeSession: activeSession, workspaceId: workspaceId) }
+            catch { firstError = error }
+            do { try await refreshHomeworks(activeSession: activeSession, workspaceId: workspaceId) }
+            catch { if firstError == nil { firstError = error } }
+            if let firstError { showError(firstError) }
+        }
+    }
+
     func selectLearningUnit(_ learningUnitId: String) {
         selectedLearningUnitId = learningUnitId
         guard let activeSession = currentSessionOrError(), let workspaceId = selectedWorkspaceId else { return }
@@ -851,6 +910,242 @@ final class NotePatchViewModel: ObservableObject {
             defer { isLearningLoading = false }
             do {
                 studyNotes = try await clientFor(activeSession).listStudyNotes(workspaceId: workspaceId, learningUnitId: learningUnitId)
+            } catch {
+                showError(error)
+            }
+        }
+    }
+
+    var selectedHomework: HomeworkItem? {
+        homeworks.first(where: { $0.id == selectedHomeworkId })
+    }
+
+    var homeworkDocumentCandidates: [LearningDocumentItem] {
+        gradingDocuments.filter {
+            $0.status == "ready" && ($0.documentKind == "homework" || $0.documentKind == "corrected_homework")
+        }
+    }
+
+    var referenceDocumentCandidates: [LearningDocumentItem] {
+        let attachedIds = Set(homeworkReferences.map(\.documentId))
+        return gradingDocuments.filter {
+            $0.status == "ready" && ($0.documentKind == "answer_key" || $0.documentKind == "rubric") && !attachedIds.contains($0.id)
+        }
+    }
+
+    var gradingModeLabel: String? {
+        guard let lastGradingTask else { return nil }
+        return lastGradingTask.result?.objectStringValue(for: "grading_mode") == "official" ? "正式评分" : "诊断性评分"
+    }
+
+    var gradingConfidence: Double? {
+        lastGradingTask?.result?.objectDoubleValue(for: "confidence")
+    }
+
+    func searchKnowledge() {
+        guard let activeSession = currentSessionOrError(), let workspaceId = selectedWorkspaceId else { return }
+        let query = knowledgeQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else {
+            errorMessage = "请输入知识检索内容。"
+            return
+        }
+        guard query.count <= 8000 else {
+            errorMessage = "知识检索内容不能超过 8000 个字符。"
+            return
+        }
+        knowledgeLimit = knowledgeLimit.clamped(to: 1...20)
+        Task {
+            isKnowledgeSearching = true
+            errorMessage = nil
+            defer { isKnowledgeSearching = false }
+            do {
+                let response = try await clientFor(activeSession).searchKnowledge(
+                    workspaceId: workspaceId,
+                    query: query,
+                    learningUnitId: knowledgeLearningUnitId.nilIfBlank,
+                    subject: knowledgeSubject.nilIfBlank,
+                    limit: knowledgeLimit
+                )
+                knowledgeResults = response.items
+                hasSearchedKnowledge = true
+                statusMessage = response.items.isEmpty ? "知识库暂无匹配内容。" : "找到 \(response.items.count) 条相关内容。"
+            } catch {
+                showError(error)
+            }
+        }
+    }
+
+    func previewKnowledgeSource(_ item: KnowledgeSearchItem) {
+        guard let documentId = item.documentId else { return }
+        if let document = (documents + gradingDocuments).first(where: { $0.id == documentId }) {
+            downloadAndPreview(document)
+            return
+        }
+        guard let activeSession = currentSessionOrError(), let workspaceId = selectedWorkspaceId else { return }
+        Task {
+            isBusy = true
+            defer { isBusy = false }
+            do {
+                let document = try await clientFor(activeSession).getDocument(workspaceId: workspaceId, documentId: documentId)
+                downloadAndPreview(document)
+            } catch {
+                showError(error)
+            }
+        }
+    }
+
+    func selectHomework(_ homeworkId: String) {
+        selectedHomeworkId = homeworkId
+        homeworkReferences = []
+        lastGradingTask = nil
+        if let homework = homeworks.first(where: { $0.id == homeworkId }) {
+            homeworkRubricText = homework.rubricText ?? ""
+            homeworkMaxScoreText = formatScore(homework.maxScore)
+        }
+        guard let activeSession = currentSessionOrError(), let workspaceId = selectedWorkspaceId else { return }
+        Task {
+            isHomeworkLoading = true
+            defer { isHomeworkLoading = false }
+            do {
+                homeworkReferences = try await clientFor(activeSession).listHomeworkReferences(workspaceId: workspaceId, homeworkId: homeworkId)
+            } catch {
+                showError(error)
+            }
+        }
+    }
+
+    @discardableResult
+    func createHomework(
+        documentId: String,
+        title: String,
+        description: String,
+        dueAt: Date?,
+        rubricText: String,
+        maxScoreText: String
+    ) -> Bool {
+        guard let activeSession = currentSessionOrError(), let workspaceId = selectedWorkspaceId else { return false }
+        let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard homeworkDocumentCandidates.contains(where: { $0.id == documentId }) else {
+            errorMessage = "请选择已处理完成的作业文档。"
+            return false
+        }
+        guard !trimmedTitle.isEmpty else {
+            errorMessage = "请输入作业标题。"
+            return false
+        }
+        guard let maxScore = Double(maxScoreText), maxScore > 0 else {
+            errorMessage = "满分必须大于 0。"
+            return false
+        }
+        let input = HomeworkCreateInput(
+            title: trimmedTitle,
+            description: description.nilIfBlank,
+            documentId: documentId,
+            dueAt: dueAt.map { ISO8601DateFormatter().string(from: $0) },
+            rubricText: rubricText.nilIfBlank,
+            maxScore: maxScore
+        )
+        Task {
+            isHomeworkLoading = true
+            errorMessage = nil
+            defer { isHomeworkLoading = false }
+            do {
+                let homework = try await clientFor(activeSession).createHomework(workspaceId: workspaceId, input: input)
+                try await refreshHomeworks(activeSession: activeSession, workspaceId: workspaceId)
+                selectHomework(homework.id)
+                statusMessage = "作业已创建。"
+            } catch {
+                showError(error)
+            }
+        }
+        return true
+    }
+
+    func saveGradingConfig() {
+        guard let activeSession = currentSessionOrError(), let workspaceId = selectedWorkspaceId,
+              let homeworkId = selectedHomeworkId else { return }
+        guard let maxScore = Double(homeworkMaxScoreText), maxScore > 0 else {
+            errorMessage = "满分必须大于 0。"
+            return
+        }
+        let input = GradingConfigInput(rubricText: homeworkRubricText.nilIfBlank, maxScore: maxScore)
+        Task {
+            isHomeworkLoading = true
+            errorMessage = nil
+            defer { isHomeworkLoading = false }
+            do {
+                let updated = try await clientFor(activeSession).updateGradingConfig(workspaceId: workspaceId, homeworkId: homeworkId, input: input)
+                homeworks = homeworks.map { $0.id == updated.id ? updated : $0 }
+                homeworkRubricText = updated.rubricText ?? ""
+                homeworkMaxScoreText = formatScore(updated.maxScore)
+                statusMessage = "评分配置已保存。"
+            } catch {
+                showError(error)
+            }
+        }
+    }
+
+    func addHomeworkReference(documentId: String) {
+        guard let document = referenceDocumentCandidates.first(where: { $0.id == documentId }),
+              let activeSession = currentSessionOrError(), let workspaceId = selectedWorkspaceId,
+              let homeworkId = selectedHomeworkId else { return }
+        Task {
+            isHomeworkLoading = true
+            errorMessage = nil
+            defer { isHomeworkLoading = false }
+            do {
+                let reference = try await clientFor(activeSession).addHomeworkReference(
+                    workspaceId: workspaceId,
+                    homeworkId: homeworkId,
+                    documentId: document.id,
+                    referenceType: document.documentKind
+                )
+                homeworkReferences.append(reference)
+                statusMessage = "评分依据已添加。"
+            } catch {
+                showError(error)
+            }
+        }
+    }
+
+    func deleteHomeworkReference(_ reference: HomeworkReferenceItem) {
+        guard let activeSession = currentSessionOrError(), let workspaceId = selectedWorkspaceId,
+              let homeworkId = selectedHomeworkId else { return }
+        Task {
+            isHomeworkLoading = true
+            errorMessage = nil
+            defer { isHomeworkLoading = false }
+            do {
+                try await clientFor(activeSession).deleteHomeworkReference(workspaceId: workspaceId, homeworkId: homeworkId, referenceId: reference.id)
+                homeworkReferences.removeAll { $0.id == reference.id }
+                statusMessage = "评分依据已删除。"
+            } catch {
+                showError(error)
+            }
+        }
+    }
+
+    func gradeSelectedHomework() {
+        guard let activeSession = currentSessionOrError(), let workspaceId = selectedWorkspaceId,
+              let homeworkId = selectedHomeworkId else { return }
+        Task {
+            isHomeworkLoading = true
+            errorMessage = nil
+            taskEvents = []
+            defer { isHomeworkLoading = false }
+            do {
+                let task = try await clientFor(activeSession).gradeHomework(workspaceId: workspaceId, homeworkId: homeworkId)
+                activeTask = task
+                selectedTab = .tasks
+                let finished = try await pollTask(activeSession: activeSession, workspaceId: workspaceId, taskId: task.id) { [weak self] task, events in
+                    self?.activeTask = task
+                    self?.taskEvents = events
+                    self?.statusMessage = "评分任务 \(task.status)：\(task.progress.clamped(to: 0...100))%"
+                }
+                lastGradingTask = finished
+                try await refreshHomeworks(activeSession: activeSession, workspaceId: workspaceId)
+                try? await refreshLearningUnits(activeSession: activeSession, workspaceId: workspaceId)
+                statusMessage = "作业评分完成。"
             } catch {
                 showError(error)
             }
@@ -937,6 +1232,8 @@ final class NotePatchViewModel: ObservableObject {
                     selectedOcrDocumentId = nil
                     selectedOcrArtifacts = []
                 }
+                gradingDocuments.removeAll { $0.id == document.id }
+                homeworkReferences.removeAll { $0.documentId == document.id }
                 try await refreshWorkspaceContent(activeSession: activeSession, workspaceId: workspaceId)
                 statusMessage = "文档已删除。"
             } catch {
@@ -1058,6 +1355,10 @@ final class NotePatchViewModel: ObservableObject {
         return "\(base).\(ext)"
     }
 
+    private func formatScore(_ score: Double) -> String {
+        score.rounded() == score ? String(Int(score)) : String(score)
+    }
+
     private func normalizedAPIBaseURL() -> String {
         normalizeLearningBackendBaseURL(apiBaseURLText)
     }
@@ -1092,6 +1393,7 @@ final class NotePatchViewModel: ObservableObject {
         selectedArtifactDocumentId = nil
         selectedOcrArtifacts = []
         selectedOcrDocumentId = nil
+        clearLearningWorkspaceState()
         guard let activeSession = settings.loadSession() ?? session else {
             return
         }
@@ -1125,6 +1427,7 @@ final class NotePatchViewModel: ObservableObject {
         learningUnits = []
         selectedLearningUnitId = nil
         studyNotes = []
+        clearLearningWorkspaceState()
         aiHistoryEnabled = true
         passwordText = ""
         removeCachedUploadFile(pendingUploadFile)
@@ -1423,6 +1726,33 @@ final class NotePatchViewModel: ObservableObject {
             studyNotes = []
         }
     }
+
+    private func refreshHomeworks(activeSession: SavedSession, workspaceId: String) async throws {
+        let client = clientFor(activeSession)
+        homeworks = try await client.listHomeworks(workspaceId: workspaceId)
+        gradingDocuments = try await client.listDocuments(workspaceId: workspaceId, pageSize: 100)
+        guard let selectedHomeworkId else { return }
+        guard let selected = homeworks.first(where: { $0.id == selectedHomeworkId }) else {
+            self.selectedHomeworkId = nil
+            homeworkReferences = []
+            return
+        }
+        homeworkRubricText = selected.rubricText ?? ""
+        homeworkMaxScoreText = formatScore(selected.maxScore)
+        homeworkReferences = try await clientFor(activeSession).listHomeworkReferences(workspaceId: workspaceId, homeworkId: selectedHomeworkId)
+    }
+
+    private func clearLearningWorkspaceState() {
+        knowledgeResults = []
+        hasSearchedKnowledge = false
+        homeworks = []
+        gradingDocuments = []
+        selectedHomeworkId = nil
+        homeworkReferences = []
+        homeworkRubricText = ""
+        homeworkMaxScoreText = "100"
+        lastGradingTask = nil
+    }
 }
 
 private func makeUITestPendingImage(in cacheDirectory: URL) -> LocalUploadFile? {
@@ -1439,5 +1769,12 @@ private func makeUITestPendingImage(in cacheDirectory: URL) -> LocalUploadFile? 
 private extension Comparable {
     func clamped(to limits: ClosedRange<Self>) -> Self {
         min(max(self, limits.lowerBound), limits.upperBound)
+    }
+}
+
+private extension String {
+    var nilIfBlank: String? {
+        let trimmed = trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 }

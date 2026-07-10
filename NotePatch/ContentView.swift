@@ -7,8 +7,8 @@ import UIKit
 struct ContentView: View {
     @StateObject private var model = NotePatchViewModel()
     @Environment(\.scenePhase) private var scenePhase
-    @State private var selectedPhotoItem: PhotosPickerItem?
     @State private var isShowingCamera = false
+    @State private var isShowingPhotoLibrary = false
     @State private var isShowingFileImporter = false
     @State private var capturedCameraImage: UIImage?
 
@@ -19,8 +19,8 @@ struct ContentView: View {
             } else {
                 WorkbenchScreen(
                     model: model,
-                    selectedPhotoItem: $selectedPhotoItem,
                     onCameraUpload: { isShowingCamera = true },
+                    onGalleryUpload: { isShowingPhotoLibrary = true },
                     onFileUpload: { isShowingFileImporter = true }
                 )
             }
@@ -28,17 +28,8 @@ struct ContentView: View {
         .task {
             await model.restoreIfNeeded()
         }
-        .onChange(of: scenePhase) { _, newPhase in
+        .onChange(of: scenePhase) { newPhase in
             model.handleScenePhase(newPhase)
-        }
-        .onChange(of: selectedPhotoItem) { _, item in
-            guard let item else {
-                return
-            }
-            Task {
-                await importPhoto(item)
-                selectedPhotoItem = nil
-            }
         }
         .fileImporter(isPresented: $isShowingFileImporter, allowedContentTypes: [.item], allowsMultipleSelection: false) { result in
             if case .success(let urls) = result, let url = urls.first {
@@ -48,6 +39,25 @@ struct ContentView: View {
         .sheet(isPresented: $isShowingCamera, onDismiss: stageCapturedImage) {
             CameraPicker { image in
                 capturedCameraImage = image
+            }
+            .ignoresSafeArea()
+        }
+        .sheet(isPresented: $isShowingPhotoLibrary) {
+            PhotoLibraryPicker { result in
+                isShowingPhotoLibrary = false
+                guard let result else {
+                    return
+                }
+                switch result {
+                case .success(let selection):
+                    model.uploadPhotoData(
+                        selection.data,
+                        suggestedFilename: selection.filename,
+                        mimeType: selection.mimeType
+                    )
+                case .failure(let error):
+                    model.errorMessage = friendlyError(error)
+                }
             }
             .ignoresSafeArea()
         }
@@ -76,21 +86,6 @@ struct ContentView: View {
         model.uploadCameraImage(image)
     }
 
-    private func importPhoto(_ item: PhotosPickerItem) async {
-        do {
-            guard let data = try await item.loadTransferable(type: Data.self) else {
-                model.errorMessage = "无法读取选择的图片。"
-                return
-            }
-            let type = item.supportedContentTypes.first
-            let ext = type?.preferredFilenameExtension ?? "jpg"
-            let mimeType = type?.preferredMIMEType ?? contentTypeForFilename("selected.\(ext)")
-            let filename = "selected-\(Int(Date().timeIntervalSince1970 * 1000)).\(ext)"
-            model.uploadPhotoData(data, suggestedFilename: filename, mimeType: mimeType)
-        } catch {
-            model.errorMessage = friendlyError(error)
-        }
-    }
 }
 
 private struct AuthScreen: View {
@@ -240,8 +235,8 @@ private struct AuthField<Field: View>: View {
 
 private struct WorkbenchScreen: View {
     @ObservedObject var model: NotePatchViewModel
-    @Binding var selectedPhotoItem: PhotosPickerItem?
     let onCameraUpload: () -> Void
+    let onGalleryUpload: () -> Void
     let onFileUpload: () -> Void
 
     var body: some View {
@@ -252,8 +247,8 @@ private struct WorkbenchScreen: View {
             TabView(selection: $model.selectedTab) {
                 DocumentsTab(
                     model: model,
-                    selectedPhotoItem: $selectedPhotoItem,
                     onCameraUpload: onCameraUpload,
+                    onGalleryUpload: onGalleryUpload,
                     onFileUpload: onFileUpload
                 )
                 .tag(WorkbenchTab.documents)
@@ -338,8 +333,8 @@ private struct CompactTopBar: View {
 
 private struct DocumentsTab: View {
     @ObservedObject var model: NotePatchViewModel
-    @Binding var selectedPhotoItem: PhotosPickerItem?
     let onCameraUpload: () -> Void
+    let onGalleryUpload: () -> Void
     let onFileUpload: () -> Void
     @State private var uploadExpanded = true
     @State private var filtersExpanded = false
@@ -354,8 +349,8 @@ private struct DocumentsTab: View {
                 ) {
                     UploadPanel(
                         model: model,
-                        selectedPhotoItem: $selectedPhotoItem,
                         onCameraUpload: onCameraUpload,
+                        onGalleryUpload: onGalleryUpload,
                         onFileUpload: onFileUpload
                     )
                 }
@@ -409,8 +404,8 @@ private struct DocumentsTab: View {
 
 private struct UploadPanel: View {
     @ObservedObject var model: NotePatchViewModel
-    @Binding var selectedPhotoItem: PhotosPickerItem?
     let onCameraUpload: () -> Void
+    let onGalleryUpload: () -> Void
     let onFileUpload: () -> Void
     @State private var isLearningInfoExpanded = false
 
@@ -419,7 +414,7 @@ private struct UploadPanel: View {
             SectionLabel("文档类型")
 
             ChoiceGrid(minimum: 76) {
-                ForEach(["homework", "corrected_homework", "courseware", "note", "exam", "other"], id: \.self) { kind in
+                ForEach(["homework", "corrected_homework", "courseware", "note", "exam", "answer_key", "rubric", "other"], id: \.self) { kind in
                     ChoiceButton(text: documentKindLabel(kind), selected: model.uploadDocumentKind == kind, enabled: !model.isBusy) {
                         model.uploadDocumentKind = kind
                     }
@@ -428,11 +423,7 @@ private struct UploadPanel: View {
 
             HStack(spacing: 8) {
                 UploadSourceButton(title: "拍照", systemImage: "camera.fill", emphasized: true, enabled: !model.isBusy && UIImagePickerController.isSourceTypeAvailable(.camera), action: onCameraUpload)
-                PhotosPicker(selection: $selectedPhotoItem, matching: .images) {
-                    UploadSourceLabel(title: "相册", systemImage: "photo.on.rectangle")
-                }
-                .buttonStyle(UploadSourceButtonStyle(emphasized: false))
-                .disabled(model.isBusy)
+                UploadSourceButton(title: "相册", systemImage: "photo.on.rectangle", emphasized: false, enabled: !model.isBusy, action: onGalleryUpload)
                 UploadSourceButton(title: "文件", systemImage: "folder", emphasized: false, enabled: !model.isBusy, action: onFileUpload)
             }
 
@@ -542,7 +533,7 @@ private struct FilterPanel: View {
             )
             FilterChoices(
                 label: "类型",
-                values: ["", "homework", "courseware", "note", "exam", "other"],
+                values: ["", "homework", "corrected_homework", "courseware", "note", "exam", "answer_key", "rubric", "other"],
                 selected: model.documentKindFilter,
                 enabled: !model.isBusy,
                 onChange: model.setDocumentKindFilter
@@ -922,7 +913,7 @@ private struct OpenClawChatTab: View {
                     .padding(.horizontal, 16)
                     .padding(.vertical, 14)
                 }
-                .onChange(of: model.openClawMessages.count) {
+                .onChange(of: model.openClawMessages.count) { _ in
                     if let last = model.openClawMessages.last {
                         withAnimation {
                             proxy.scrollTo(last.id, anchor: .bottom)
@@ -934,12 +925,23 @@ private struct OpenClawChatTab: View {
             VStack(spacing: 0) {
                 Divider()
                 HStack(alignment: .bottom, spacing: 10) {
-                    TextField("问 OpenClaw", text: $model.openClawInput, axis: .vertical)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 10)
-                        .background(Color(.tertiarySystemFill))
-                        .clipShape(RoundedRectangle(cornerRadius: 8))
-                        .lineLimit(1...4)
+                    ZStack(alignment: .topLeading) {
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(Color(.tertiarySystemFill))
+                        if model.openClawInput.isEmpty {
+                            Text("问 OpenClaw")
+                                .foregroundStyle(.secondary)
+                                .padding(.horizontal, 13)
+                                .padding(.vertical, 11)
+                                .allowsHitTesting(false)
+                        }
+                        TextEditor(text: $model.openClawInput)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 3)
+                            .background(Color.clear)
+                            .accessibilityLabel("问 OpenClaw")
+                    }
+                    .frame(minHeight: 42, maxHeight: 88)
                         .disabled(model.isOpenClawSending)
                     Button {
                         model.startOpenClawChat()
@@ -949,7 +951,7 @@ private struct OpenClawChatTab: View {
                             .frame(width: 34, height: 34)
                     }
                     .buttonStyle(.borderedProminent)
-                    .buttonBorderShape(.circle)
+                    .clipShape(Circle())
                     .disabled(model.isOpenClawSending || model.openClawInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     .accessibilityLabel("发送")
                 }
@@ -972,103 +974,435 @@ private struct LearningTab: View {
     @ObservedObject var model: NotePatchViewModel
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
-                HStack {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("学习单元")
-                            .font(.title3.weight(.semibold))
-                        Text("个人空间中的自动整理结果")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    Button { model.loadLearningUnits() } label: {
-                        Image(systemName: "arrow.clockwise")
-                    }
-                    .buttonStyle(.bordered)
-                    .disabled(model.isLearningLoading)
-                    .accessibilityLabel("刷新学习单元")
+        VStack(spacing: 0) {
+            Picker("学习视图", selection: $model.selectedLearningSection) {
+                ForEach(LearningSection.allCases) { section in
+                    Text(section.title).tag(section)
                 }
+            }
+            .pickerStyle(.segmented)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
 
-                if model.isLearningLoading && model.learningUnits.isEmpty {
-                    ProgressView("正在加载学习单元...")
-                        .frame(maxWidth: .infinity, alignment: .center)
-                        .padding(.vertical, 28)
-                } else if model.learningUnits.isEmpty {
-                    ContentUnavailableView("暂无学习单元", systemImage: "book.closed", description: Text("上传并处理文档后，学习结果会显示在这里。"))
-                } else {
-                    ForEach(model.learningUnits) { unit in
-                        Button { model.selectLearningUnit(unit.id) } label: {
-                            VStack(alignment: .leading, spacing: 6) {
-                                HStack {
-                                    Text(unit.title)
-                                        .font(.headline)
-                                        .foregroundStyle(.primary)
-                                        .lineLimit(2)
-                                    Spacer()
-                                    if unit.id == model.selectedLearningUnitId {
-                                        Image(systemName: "checkmark.circle.fill")
-                                            .foregroundStyle(Color.accentColor)
-                                    }
-                                }
-                                let details = [unit.subject, unit.gradeLevel, unit.topic].compactMap { $0?.isEmpty == false ? $0 : nil }
-                                if !details.isEmpty {
-                                    Text(details.joined(separator: " · "))
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
+            ScrollView {
+                Group {
+                    switch model.selectedLearningSection {
+                    case .units:
+                        LearningUnitsSection(model: model)
+                    case .search:
+                        KnowledgeSearchSection(model: model)
+                    case .grading:
+                        HomeworkGradingSection(model: model)
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.bottom, 24)
+            }
+        }
+        .task { model.loadLearningDashboard() }
+        .accessibilityIdentifier("learningTab")
+    }
+}
+
+private struct LearningUnitsSection: View {
+    @ObservedObject var model: NotePatchViewModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            LearningSectionHeader(title: "学习单元", subtitle: "个人空间中的自动整理结果", isLoading: model.isLearningLoading) {
+                model.loadLearningUnits()
+            }
+            if model.isLearningLoading && model.learningUnits.isEmpty {
+                ProgressView("正在加载学习单元...")
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 28)
+            } else if model.learningUnits.isEmpty {
+                LearningEmptyState()
+            } else {
+                ForEach(model.learningUnits) { unit in
+                    Button { model.selectLearningUnit(unit.id) } label: {
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack {
+                                Text(unit.title).font(.headline).foregroundStyle(.primary).lineLimit(2)
+                                Spacer()
+                                if unit.id == model.selectedLearningUnitId {
+                                    Image(systemName: "checkmark.circle.fill").foregroundStyle(Color.accentColor)
                                 }
                             }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(12)
-                            .background(Color(.secondarySystemGroupedBackground))
-                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                            let details = [unit.subject, unit.gradeLevel, unit.topic].compactMap { $0?.isEmpty == false ? $0 : nil }
+                            if !details.isEmpty {
+                                Text(details.joined(separator: " · ")).font(.caption).foregroundStyle(.secondary)
+                            }
                         }
-                        .buttonStyle(.plain)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(12)
+                        .background(Color(.secondarySystemGroupedBackground))
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
                     }
+                    .buttonStyle(.plain)
                 }
-
-                if model.selectedLearningUnitId != nil {
-                    Text("电子笔记")
-                        .font(.headline)
-                        .padding(.top, 4)
-                    if model.studyNotes.isEmpty {
-                        Text("该学习单元暂无笔记版本。")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                    } else {
-                        ForEach(model.studyNotes) { note in
-                            HStack(spacing: 12) {
-                                Image(systemName: "note.text")
-                                    .foregroundStyle(Color.accentColor)
-                                VStack(alignment: .leading, spacing: 3) {
-                                    Text(note.title.isEmpty ? "电子笔记" : note.title)
-                                        .font(.subheadline.weight(.medium))
-                                        .lineLimit(2)
-                                    Text("版本 \(note.versionNo)")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-                                Spacer()
-                                Button { model.downloadAndPreview(note) } label: {
-                                    Image(systemName: "eye")
-                                }
+            }
+            if model.selectedLearningUnitId != nil {
+                Text("电子笔记").font(.headline).padding(.top, 4)
+                if model.studyNotes.isEmpty {
+                    Text("该学习单元暂无笔记版本。").font(.subheadline).foregroundStyle(.secondary)
+                } else {
+                    ForEach(model.studyNotes) { note in
+                        HStack(spacing: 12) {
+                            Image(systemName: "note.text").foregroundStyle(Color.accentColor)
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(note.title.isEmpty ? "电子笔记" : note.title).font(.subheadline.weight(.medium)).lineLimit(2)
+                                Text("版本 \(note.versionNo)").font(.caption).foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Button { model.downloadAndPreview(note) } label: { Image(systemName: "eye") }
                                 .buttonStyle(.bordered)
                                 .disabled(note.preferredDownloadURL == nil)
                                 .accessibilityLabel("预览笔记")
+                        }
+                        .padding(12)
+                        .background(Color(.secondarySystemGroupedBackground))
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                    }
+                }
+            }
+        }
+    }
+}
+
+private struct LearningSectionHeader: View {
+    let title: String
+    let subtitle: String
+    let isLoading: Bool
+    let onRefresh: () -> Void
+
+    var body: some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.title3.weight(.semibold))
+                Text(subtitle).font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer()
+            Button(action: onRefresh) { Image(systemName: "arrow.clockwise") }
+                .buttonStyle(.bordered)
+                .disabled(isLoading)
+                .accessibilityLabel("刷新\(title)")
+        }
+    }
+}
+
+private struct KnowledgeSearchSection: View {
+    @ObservedObject var model: NotePatchViewModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("知识检索").font(.title3.weight(.semibold))
+                Text("在个人空间的学习资料中查找相关内容").font(.caption).foregroundStyle(.secondary)
+            }
+
+            SectionContainer {
+                VStack(alignment: .leading, spacing: 12) {
+                    LabeledField(title: "查询内容") {
+                        TextField("例如：一次函数斜率是什么意思？", text: $model.knowledgeQuery)
+                            .accessibilityIdentifier("knowledgeQueryField")
+                    }
+                    Picker("学习单元", selection: $model.knowledgeLearningUnitId) {
+                        Text("全部单元").tag("")
+                        ForEach(model.learningUnits) { unit in Text(unit.title).tag(unit.id) }
+                    }
+                    .pickerStyle(.menu)
+                    LabeledField(title: "学科（可选）") {
+                        TextField("例如：math", text: $model.knowledgeSubject)
+                    }
+                    Stepper("结果数量：\(model.knowledgeLimit)", value: $model.knowledgeLimit, in: 1...20)
+                    Button { model.searchKnowledge() } label: {
+                        Label("检索", systemImage: "magnifyingglass")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(model.isKnowledgeSearching || model.knowledgeQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .accessibilityIdentifier("knowledgeSearchButton")
+                }
+            }
+
+            if model.isKnowledgeSearching {
+                ProgressView("正在检索知识库...").frame(maxWidth: .infinity).padding(.vertical, 20)
+            } else if model.hasSearchedKnowledge && model.knowledgeResults.isEmpty {
+                EmptyState(systemImage: "magnifyingglass", title: "没有匹配内容", message: "尝试更换关键词、学习单元或学科。")
+            } else if !model.knowledgeResults.isEmpty {
+                HStack {
+                    Text("检索结果").font(.headline)
+                    Spacer()
+                    Text("\(model.knowledgeResults.count) 条").font(.caption).foregroundStyle(.secondary)
+                }
+                ForEach(model.knowledgeResults) { item in
+                    SectionContainer(background: Color(.secondarySystemGroupedBackground)) {
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack(alignment: .firstTextBaseline) {
+                                Text(item.metadataTitle ?? item.sourceType ?? "知识片段")
+                                    .font(.subheadline.weight(.semibold))
+                                    .lineLimit(2)
+                                Spacer()
+                                Text(String(format: "%.4f", item.score))
+                                    .font(.caption.monospacedDigit())
+                                    .foregroundStyle(.secondary)
                             }
-                            .padding(12)
-                            .background(Color(.secondarySystemGroupedBackground))
-                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                            Text(item.content).font(.subheadline).textSelection(.enabled)
+                            let details = [item.subject, item.gradeLevel, item.sourceType, item.pageReferences.map { "页码 \($0)" }].compactMap { $0 }
+                            if !details.isEmpty {
+                                Text(details.joined(separator: " · ")).font(.caption).foregroundStyle(.secondary)
+                            }
+                            if item.documentId != nil {
+                                Button { model.previewKnowledgeSource(item) } label: {
+                                    Label("预览来源", systemImage: "doc.text.magnifyingglass")
+                                }
+                                .buttonStyle(.bordered)
+                                .disabled(model.isBusy)
+                            }
                         }
                     }
                 }
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 14)
         }
-        .task { model.loadLearningUnits() }
-        .accessibilityIdentifier("learningTab")
+    }
+}
+
+private struct HomeworkGradingSection: View {
+    @ObservedObject var model: NotePatchViewModel
+    @State private var isCreatingHomework = false
+    @State private var selectedReferenceDocumentId = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("作业评分").font(.title3.weight(.semibold))
+                    Text("配置评分规则、依据并启动评分").font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button { isCreatingHomework = true } label: { Image(systemName: "plus") }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(model.homeworkDocumentCandidates.isEmpty)
+                    .accessibilityLabel("创建作业")
+                Button { model.loadLearningDashboard() } label: { Image(systemName: "arrow.clockwise") }
+                    .buttonStyle(.bordered)
+                    .disabled(model.isHomeworkLoading)
+                    .accessibilityLabel("刷新作业")
+            }
+
+            if model.isHomeworkLoading && model.homeworks.isEmpty {
+                ProgressView("正在加载作业...").frame(maxWidth: .infinity).padding(.vertical, 24)
+            } else if model.homeworks.isEmpty {
+                EmptyState(systemImage: "checklist", title: "暂无作业", message: model.homeworkDocumentCandidates.isEmpty ? "先上传并处理一个作业文档。" : "点击加号创建关联作业。")
+            } else {
+                Picker("当前作业", selection: Binding(
+                    get: { model.selectedHomeworkId ?? "" },
+                    set: { if !$0.isEmpty { model.selectHomework($0) } }
+                )) {
+                    Text("请选择作业").tag("")
+                    ForEach(model.homeworks) { homework in Text(homework.title).tag(homework.id) }
+                }
+                .pickerStyle(.menu)
+                .accessibilityIdentifier("homeworkPicker")
+            }
+
+            if let homework = model.selectedHomework {
+                homeworkEditor(homework)
+            }
+        }
+        .sheet(isPresented: $isCreatingHomework) {
+            HomeworkCreateSheet(model: model, isPresented: $isCreatingHomework)
+        }
+    }
+
+    private func homeworkEditor(_ homework: HomeworkItem) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            SectionContainer {
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(homework.title).font(.headline)
+                            Text([statusLabel(homework.status), homework.dueAt.map(compactDateTime)].compactMap { $0 }.joined(separator: " · "))
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        StatusPill(text: statusLabel(homework.status), color: statusColor(homework.status))
+                    }
+                    SectionLabel("评分标准")
+                    TextEditor(text: $model.homeworkRubricText)
+                        .frame(height: 92)
+                        .padding(6)
+                        .background(Color(.tertiarySystemFill))
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                    LabeledField(title: "满分") {
+                        TextField("100", text: $model.homeworkMaxScoreText)
+                            .keyboardType(.decimalPad)
+                    }
+                    Button { model.saveGradingConfig() } label: {
+                        Label("保存评分配置", systemImage: "checkmark")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(model.isHomeworkLoading)
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 10) {
+                Text("评分依据").font(.headline)
+                if model.homeworkReferences.isEmpty {
+                    Text("暂无答案或评分标准。").font(.subheadline).foregroundStyle(.secondary)
+                } else {
+                    ForEach(model.homeworkReferences) { reference in
+                        HStack(spacing: 10) {
+                            Image(systemName: reference.referenceType == "answer_key" ? "checkmark.square" : "list.clipboard")
+                                .foregroundStyle(Color.accentColor)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(referenceDocumentName(reference.documentId)).font(.subheadline.weight(.medium)).lineLimit(2)
+                                Text(documentKindLabel(reference.referenceType)).font(.caption).foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Button(role: .destructive) { model.deleteHomeworkReference(reference) } label: { Image(systemName: "trash") }
+                                .disabled(model.isHomeworkLoading)
+                                .accessibilityLabel("删除评分依据")
+                        }
+                        .padding(10)
+                        .background(Color(.secondarySystemGroupedBackground))
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                    }
+                }
+                if model.referenceDocumentCandidates.isEmpty {
+                    Text("没有可添加的依据文档。请先上传并处理“答案参考”或“评分标准”。")
+                        .font(.caption).foregroundStyle(.secondary)
+                } else {
+                    Picker("添加依据", selection: $selectedReferenceDocumentId) {
+                        Text("选择依据文档").tag("")
+                        ForEach(model.referenceDocumentCandidates) { document in
+                            Text("\(documentKindLabel(document.documentKind)) · \(document.title ?? document.originalFilename)").tag(document.id)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    Button {
+                        model.addHomeworkReference(documentId: selectedReferenceDocumentId)
+                        selectedReferenceDocumentId = ""
+                    } label: {
+                        Label("添加评分依据", systemImage: "plus")
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(selectedReferenceDocumentId.isEmpty || model.isHomeworkLoading)
+                }
+            }
+
+            if let mode = model.gradingModeLabel {
+                HStack {
+                    Text(mode).font(.subheadline.weight(.semibold))
+                    if let confidence = model.gradingConfidence {
+                        Text("confidence \(String(format: "%.4f", confidence))").font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+            }
+            Button { model.gradeSelectedHomework() } label: {
+                Label("开始评分", systemImage: "checkmark.seal")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(model.isHomeworkLoading)
+            .accessibilityIdentifier("gradeHomeworkButton")
+        }
+    }
+
+    private func referenceDocumentName(_ documentId: String) -> String {
+        model.gradingDocuments.first(where: { $0.id == documentId })?.title
+            ?? model.gradingDocuments.first(where: { $0.id == documentId })?.originalFilename
+            ?? documentId
+    }
+}
+
+private struct HomeworkCreateSheet: View {
+    @ObservedObject var model: NotePatchViewModel
+    @Binding var isPresented: Bool
+    @State private var documentId = ""
+    @State private var title = ""
+    @State private var description = ""
+    @State private var hasDueDate = false
+    @State private var dueAt = Date()
+    @State private var rubricText = ""
+    @State private var maxScoreText = "100"
+
+    var body: some View {
+        NavigationView {
+            Form {
+                Section(header: Text("作业文档")) {
+                    Picker("文档", selection: $documentId) {
+                        Text("请选择").tag("")
+                        ForEach(model.homeworkDocumentCandidates) { document in
+                            Text(document.title ?? document.originalFilename).tag(document.id)
+                        }
+                    }
+                    .onChange(of: documentId) { newValue in
+                        if title.isEmpty, let document = model.homeworkDocumentCandidates.first(where: { $0.id == newValue }) {
+                            title = document.title ?? document.originalFilename
+                        }
+                    }
+                    TextField("作业标题", text: $title)
+                    TextField("描述（可选）", text: $description)
+                }
+                Section(header: Text("截止时间")) {
+                    Toggle("设置截止时间", isOn: $hasDueDate)
+                    if hasDueDate { DatePicker("截止时间", selection: $dueAt) }
+                }
+                Section(header: Text("评分配置")) {
+                    TextEditor(text: $rubricText).frame(height: 90)
+                    TextField("满分", text: $maxScoreText).keyboardType(.decimalPad)
+                }
+            }
+            .navigationTitle("创建作业")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("取消") { isPresented = false } }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("创建") {
+                        if model.createHomework(
+                            documentId: documentId,
+                            title: title,
+                            description: description,
+                            dueAt: hasDueDate ? dueAt : nil,
+                            rubricText: rubricText,
+                            maxScoreText: maxScoreText
+                        ) {
+                            isPresented = false
+                        }
+                    }
+                    .disabled(documentId.isEmpty || title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+        }
+        .navigationViewStyle(StackNavigationViewStyle())
+        .onAppear {
+            if documentId.isEmpty, let document = model.homeworkDocumentCandidates.first {
+                documentId = document.id
+                title = document.title ?? document.originalFilename
+            }
+        }
+        .accessibilityIdentifier("homeworkCreateSheet")
+    }
+}
+
+private struct LearningEmptyState: View {
+    var body: some View {
+        VStack(spacing: 10) {
+            Image(systemName: "book.closed")
+                .font(.system(size: 36, weight: .light))
+                .foregroundStyle(Color.accentColor)
+            Text("暂无学习单元")
+                .font(.headline)
+            Text("上传并处理文档后，学习结果会显示在这里。")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+        }
+        .padding(.vertical, 32)
+        .frame(maxWidth: .infinity)
     }
 }
 
@@ -1750,6 +2084,81 @@ private func taskTypeLabel(_ taskType: String) -> String {
     }
 }
 
+private struct PhotoLibrarySelection {
+    let data: Data
+    let filename: String
+    let mimeType: String?
+}
+
+private struct PhotoLibraryPicker: UIViewControllerRepresentable {
+    let onComplete: (Result<PhotoLibrarySelection, Error>?) -> Void
+
+    func makeUIViewController(context: Context) -> PHPickerViewController {
+        var configuration = PHPickerConfiguration(photoLibrary: .shared())
+        configuration.filter = .images
+        configuration.selectionLimit = 1
+        let picker = PHPickerViewController(configuration: configuration)
+        picker.delegate = context.coordinator
+        return picker
+    }
+
+    func updateUIViewController(_ uiViewController: PHPickerViewController, context: Context) {}
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onComplete: onComplete)
+    }
+
+    final class Coordinator: NSObject, PHPickerViewControllerDelegate {
+        let onComplete: (Result<PhotoLibrarySelection, Error>?) -> Void
+
+        init(onComplete: @escaping (Result<PhotoLibrarySelection, Error>?) -> Void) {
+            self.onComplete = onComplete
+        }
+
+        func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
+            guard let provider = results.first?.itemProvider else {
+                onComplete(nil)
+                return
+            }
+            guard let typeIdentifier = provider.registeredTypeIdentifiers.first(where: {
+                UTType($0)?.conforms(to: .image) == true
+            }) else {
+                onComplete(.failure(LearningBackendError("无法识别所选图片格式。")))
+                return
+            }
+
+            provider.loadDataRepresentation(forTypeIdentifier: typeIdentifier) { [onComplete] data, error in
+                DispatchQueue.main.async {
+                    if let error {
+                        onComplete(.failure(error))
+                        return
+                    }
+                    guard let data else {
+                        onComplete(.failure(LearningBackendError("无法读取选择的图片。")))
+                        return
+                    }
+                    let type = UTType(typeIdentifier)
+                    let fileExtension = type?.preferredFilenameExtension ?? "jpg"
+                    let suggestedName = provider.suggestedName?.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let filename: String
+                    if let suggestedName, !suggestedName.isEmpty {
+                        filename = (suggestedName as NSString).pathExtension.isEmpty
+                            ? "\(suggestedName).\(fileExtension)"
+                            : suggestedName
+                    } else {
+                        filename = "selected-\(Int(Date().timeIntervalSince1970 * 1000)).\(fileExtension)"
+                    }
+                    onComplete(.success(PhotoLibrarySelection(
+                        data: data,
+                        filename: filename,
+                        mimeType: type?.preferredMIMEType ?? contentTypeForFilename(filename)
+                    )))
+                }
+            }
+        }
+    }
+}
+
 private struct CameraPicker: UIViewControllerRepresentable {
     let onImage: (UIImage) -> Void
     @Environment(\.dismiss) private var dismiss
@@ -1830,7 +2239,7 @@ private struct UploadPreviewScreen: View {
     let onUpload: () -> Void
 
     var body: some View {
-        NavigationStack {
+        NavigationView {
             preview
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(previewBackground)
@@ -1839,9 +2248,6 @@ private struct UploadPreviewScreen: View {
                 }
                 .navigationTitle("上传预览")
                 .navigationBarTitleDisplayMode(.inline)
-                .toolbarBackground(Color.black, for: .navigationBar)
-                .toolbarBackground(.visible, for: .navigationBar)
-                .toolbarColorScheme(.dark, for: .navigationBar)
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) {
                         Button(action: onCancel) {
@@ -1851,6 +2257,7 @@ private struct UploadPreviewScreen: View {
                     }
                 }
         }
+        .navigationViewStyle(StackNavigationViewStyle())
         .accessibilityIdentifier("uploadPreviewScreen")
     }
 

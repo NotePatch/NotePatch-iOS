@@ -227,6 +227,7 @@ func statusLabel(_ value: String) -> String {
     case "running": return "运行中"
     case "succeeded": return "成功"
     case "completed": return "完成"
+    case "draft": return "草稿"
     default: return value
     }
 }
@@ -238,6 +239,8 @@ func documentKindLabel(_ value: String) -> String {
     case "courseware": return "课件"
     case "note": return "笔记"
     case "exam": return "试卷"
+    case "answer_key": return "答案参考"
+    case "rubric": return "评分标准"
     case "other": return "其他"
     default: return value
     }

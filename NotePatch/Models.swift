@@ -285,6 +285,48 @@ struct LearningDocumentItem: Decodable, Equatable, Identifiable {
         case updatedAt = "updated_at"
         case artifacts
     }
+
+    init(
+        id: String,
+        workspaceId: String,
+        uploadedBy: String = "",
+        title: String? = nil,
+        originalFilename: String,
+        mimeType: String? = nil,
+        fileSize: Int64? = nil,
+        fileType: String = "other",
+        documentKind: String,
+        storageBackend: String = "",
+        bucket: String = "",
+        objectKey: String = "",
+        uploadId: String? = nil,
+        tusUploadURL: String? = nil,
+        sha256: String? = nil,
+        status: String,
+        createdAt: String = "",
+        updatedAt: String = "",
+        artifacts: [DocumentArtifactItem] = []
+    ) {
+        self.id = id
+        self.workspaceId = workspaceId
+        self.uploadedBy = uploadedBy
+        self.title = title
+        self.originalFilename = originalFilename
+        self.mimeType = mimeType
+        self.fileSize = fileSize
+        self.fileType = fileType
+        self.documentKind = documentKind
+        self.storageBackend = storageBackend
+        self.bucket = bucket
+        self.objectKey = objectKey
+        self.uploadId = uploadId
+        self.tusUploadURL = tusUploadURL
+        self.sha256 = sha256
+        self.status = status
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+        self.artifacts = artifacts
+    }
 }
 
 struct UploadSessionItem: Decodable, Equatable, Identifiable {
@@ -554,6 +596,181 @@ struct LearningMetadata: Equatable {
     }
 }
 
+struct KnowledgeSearchItem: Decodable, Equatable, Identifiable {
+    let id: String
+    let workspaceId: String
+    let documentId: String?
+    let subject: String?
+    let gradeLevel: String?
+    let sourceType: String?
+    let content: String
+    let metadata: JSONValue
+    let score: Double
+    let createdAt: String
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case workspaceId = "workspace_id"
+        case documentId = "document_id"
+        case subject
+        case gradeLevel = "grade_level"
+        case sourceType = "source_type"
+        case content
+        case metadata
+        case score
+        case createdAt = "created_at"
+    }
+
+    var metadataTitle: String? { metadata.objectStringValue(for: "title") }
+    var pageReferences: String? {
+        guard case .object(let values) = metadata, case .array(let pages)? = values["page_refs"] else { return nil }
+        let labels = pages.compactMap { value -> String? in
+            switch value {
+            case .number(let number): return number.rounded() == number ? String(Int(number)) : String(number)
+            case .string(let string): return string
+            default: return nil
+            }
+        }
+        return labels.isEmpty ? nil : labels.joined(separator: ", ")
+    }
+}
+
+struct KnowledgeSearchResponse: Decodable, Equatable {
+    let items: [KnowledgeSearchItem]
+}
+
+struct HomeworkItem: Decodable, Equatable, Identifiable {
+    let id: String
+    let workspaceId: String
+    let title: String
+    let description: String?
+    let documentId: String?
+    let dueAt: String?
+    let status: String
+    let rubricText: String?
+    let maxScore: Double
+    let metadata: JSONValue
+    let createdByUserId: String
+    let createdAt: String
+    let updatedAt: String
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case workspaceId = "workspace_id"
+        case title
+        case description
+        case documentId = "document_id"
+        case dueAt = "due_at"
+        case status
+        case rubricText = "rubric_text"
+        case maxScore = "max_score"
+        case metadata
+        case createdByUserId = "created_by_user_id"
+        case createdAt = "created_at"
+        case updatedAt = "updated_at"
+    }
+
+    init(
+        id: String,
+        workspaceId: String,
+        title: String,
+        description: String? = nil,
+        documentId: String? = nil,
+        dueAt: String? = nil,
+        status: String = "draft",
+        rubricText: String? = nil,
+        maxScore: Double = 100,
+        metadata: JSONValue = .object([:]),
+        createdByUserId: String = "",
+        createdAt: String = "",
+        updatedAt: String = ""
+    ) {
+        self.id = id
+        self.workspaceId = workspaceId
+        self.title = title
+        self.description = description
+        self.documentId = documentId
+        self.dueAt = dueAt
+        self.status = status
+        self.rubricText = rubricText
+        self.maxScore = maxScore
+        self.metadata = metadata
+        self.createdByUserId = createdByUserId
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        workspaceId = try container.decode(String.self, forKey: .workspaceId)
+        title = try container.decode(String.self, forKey: .title)
+        description = try container.decodeIfPresent(String.self, forKey: .description)
+        documentId = try container.decodeIfPresent(String.self, forKey: .documentId)
+        dueAt = try container.decodeIfPresent(String.self, forKey: .dueAt)
+        status = try container.decodeIfPresent(String.self, forKey: .status) ?? ""
+        rubricText = try container.decodeIfPresent(String.self, forKey: .rubricText)
+        maxScore = try container.decodeIfPresent(Double.self, forKey: .maxScore) ?? 100
+        metadata = try container.decodeIfPresent(JSONValue.self, forKey: .metadata) ?? .object([:])
+        createdByUserId = try container.decodeIfPresent(String.self, forKey: .createdByUserId) ?? ""
+        createdAt = try container.decodeIfPresent(String.self, forKey: .createdAt) ?? ""
+        updatedAt = try container.decodeIfPresent(String.self, forKey: .updatedAt) ?? ""
+    }
+}
+
+struct HomeworkCreateInput: Equatable {
+    let title: String
+    let description: String?
+    let documentId: String
+    let dueAt: String?
+    let rubricText: String?
+    let maxScore: Double
+
+    var payload: [String: Any] {
+        var values: [String: Any] = [
+            "title": title,
+            "document_id": documentId,
+            "max_score": maxScore,
+            "metadata": [:]
+        ]
+        if let description, !description.isEmpty { values["description"] = description }
+        if let dueAt { values["due_at"] = dueAt }
+        if let rubricText { values["rubric_text"] = rubricText }
+        return values
+    }
+
+    static func == (lhs: HomeworkCreateInput, rhs: HomeworkCreateInput) -> Bool {
+        lhs.title == rhs.title && lhs.description == rhs.description && lhs.documentId == rhs.documentId && lhs.dueAt == rhs.dueAt && lhs.rubricText == rhs.rubricText && lhs.maxScore == rhs.maxScore
+    }
+}
+
+struct GradingConfigInput: Equatable {
+    let rubricText: String?
+    let maxScore: Double
+
+    var payload: [String: Any] {
+        ["rubric_text": rubricText ?? NSNull(), "max_score": maxScore]
+    }
+}
+
+struct HomeworkReferenceItem: Decodable, Equatable, Identifiable {
+    let id: String
+    let workspaceId: String
+    let homeworkId: String
+    let documentId: String
+    let referenceType: String
+    let createdAt: String
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case workspaceId = "workspace_id"
+        case homeworkId = "homework_id"
+        case documentId = "document_id"
+        case referenceType = "reference_type"
+        case createdAt = "created_at"
+    }
+}
+
 struct TaskItem: Decodable, Equatable, Identifiable {
     let id: String
     let workspaceId: String
@@ -767,6 +984,15 @@ enum JSONValue: Codable, Equatable {
             return nil
         }
         return value
+    }
+
+    func objectDoubleValue(for key: String) -> Double? {
+        guard case .object(let object) = self else { return nil }
+        switch object[key] {
+        case .number(let value): return value
+        case .string(let value): return Double(value)
+        default: return nil
+        }
     }
 }
 

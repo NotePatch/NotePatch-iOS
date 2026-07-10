@@ -32,7 +32,7 @@ final class NotePatchUITests: XCTestCase {
         XCTAssertTrue(app.tabBars.buttons["学习"].exists)
         XCTAssertTrue(app.tabBars.buttons["设置"].exists)
         app.tabBars.buttons["学习"].tap()
-        XCTAssertTrue(app.otherElements["learningTab"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.descendants(matching: .any)["learningTab"].waitForExistence(timeout: 3))
         XCTAssertFalse(app.staticTexts["family"].exists)
         XCTAssertFalse(app.staticTexts["class"].exists)
         XCTAssertFalse(app.staticTexts["school"].exists)
@@ -54,6 +54,48 @@ final class NotePatchUITests: XCTestCase {
 
         XCTAssertTrue(app.otherElements["workbenchTabs"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.otherElements["uploadPreviewScreen"].exists)
+    }
+
+    @MainActor
+    func testOpenClawEditorAcceptsMultilineInput() throws {
+        let app = XCUIApplication()
+        app.launchArguments.append("-NotePatchUITestWorkbench")
+        app.launch()
+
+        XCTAssertTrue(app.otherElements["workbenchTabs"].waitForExistence(timeout: 5))
+        app.tabBars.buttons["OpenClaw"].tap()
+
+        let editor = app.textViews["问 OpenClaw"]
+        XCTAssertTrue(editor.waitForExistence(timeout: 3))
+        editor.tap()
+        editor.typeText("第一行\n第二行")
+        XCTAssertTrue(app.buttons["发送"].isEnabled)
+    }
+
+    @MainActor
+    func testLearningSearchAndGradingWorkflowIsAvailable() throws {
+        let app = XCUIApplication()
+        app.launchArguments.append("-NotePatchUITestWorkbench")
+        app.launch()
+
+        XCTAssertTrue(app.otherElements["workbenchTabs"].waitForExistence(timeout: 5))
+        app.tabBars.buttons["学习"].tap()
+
+        let segments = app.segmentedControls.firstMatch
+        XCTAssertTrue(segments.waitForExistence(timeout: 3))
+        segments.buttons["检索"].tap()
+        let query = app.textFields.firstMatch
+        XCTAssertTrue(query.waitForExistence(timeout: 3))
+        query.tap()
+        query.typeText("一次函数")
+        XCTAssertTrue(app.buttons["knowledgeSearchButton"].isEnabled)
+
+        segments.buttons["评分"].tap()
+        XCTAssertTrue(app.staticTexts["作业评分"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.buttons["gradeHomeworkButton"].exists)
+        app.buttons["创建作业"].tap()
+        XCTAssertTrue(app.descendants(matching: .any)["homeworkCreateSheet"].waitForExistence(timeout: 3))
+        app.buttons["取消"].tap()
     }
 
     @MainActor
