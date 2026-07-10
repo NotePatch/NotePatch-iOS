@@ -226,6 +226,7 @@ func statusLabel(_ value: String) -> String {
     case "queued": return "排队"
     case "running": return "运行中"
     case "succeeded": return "成功"
+    case "cancelled": return "已取消"
     case "completed": return "完成"
     case "draft": return "草稿"
     default: return value

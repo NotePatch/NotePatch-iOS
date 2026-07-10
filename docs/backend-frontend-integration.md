@@ -326,6 +326,27 @@ GET    /workspaces/{workspace_id}/documents/{document_id}/download-url
 
 下载时不要直接拼 object key；必须请求 `download-url`，后端会先做 workspace 权限校验再返回短期 URL。
 
+删除返回 `202 Accepted`，不是 `204`：
+
+```ts
+type DocumentDeleteResponse = {
+  ok: true;
+  document_id: string;
+  status: "deleted";
+  purge_status: "queued" | "running" | "succeeded" | "failed";
+  purge_task_id: string;
+};
+
+async function deleteDocument(workspaceId: string, documentId: string) {
+  return apiFetch<DocumentDeleteResponse>(
+    `/workspaces/${workspaceId}/documents/${documentId}`,
+    { method: "DELETE" },
+  );
+}
+```
+
+收到响应后立即从本地列表移除文档，并轮询 `purge_task_id`。重复 DELETE 会返回同一个活动/已完成 purge task；若之前清理失败，后端会创建新的 purge task。清理固定删除原件与派生数据，不存在“只删 metadata”模式。
+
 ## Artifacts
 
 ```http
@@ -342,6 +363,7 @@ workspaces/{workspace_id}/documents/{document_id}/artifacts/
 ```
 
 普通前端通常只读 artifacts，不直接创建 artifacts。`POST artifacts` 是给后续 OCR/预处理 worker 或受信任后台工具写 metadata 用的。
+创建 metadata 前对象必须已经存在于当前 SeaweedFS bucket；跨 bucket、跨 document 前缀或悬空 object key 会被拒绝。
 
 常见 artifact 类型：
 
@@ -432,6 +454,7 @@ type Task = {
   result: Record<string, unknown> | null;
   error_message: string | null;
   progress: number;
+  cancel_requested_at: string | null;
   created_at: string;
   updated_at: string;
   started_at: string | null;
@@ -465,6 +488,8 @@ async function waitForTask(workspaceId: string, taskId: string) {
   }
 }
 ```
+
+只有 `uploaded/ready/failed` 且 SeaweedFS 原对象存在的文档可触发处理；`created/uploading` 返回 `409`。同文档已有 queued/running 任务且未 force 时会返回原 task；force 与活动任务冲突时返回 `409`。
 
 ## AI Chat History
 
@@ -523,7 +548,7 @@ DELETE /workspaces/{workspace_id}/ai/conversations/{conversation_id}
 PATCH  /auth/preferences
 ```
 
-`GET /auth/me`、登录和 refresh 响应都会给出 `user.ai_history_enabled`。前端用 `PATCH /auth/preferences` 传 `{ "ai_history_enabled": false }` 关闭全局上下文注入；关闭后历史仍保留并可查看，但后续 OpenClaw 调用只发送当前 prompt。重新开启后，后端会自动传入该会话最近 `AI_CHAT_HISTORY_MESSAGE_LIMIT`（默认 20）条成功消息。删除会话是软删除，删除后不可继续发送或读取。
+`GET /auth/me`、登录和 refresh 响应都会给出 `user.ai_history_enabled`。前端用 `PATCH /auth/preferences` 传 `{ "ai_history_enabled": false }` 关闭全局上下文注入；关闭后历史仍保留并可查看，但后续 OpenClaw 调用只发送当前 prompt。重新开启后，后端会自动传入该会话最近 `AI_CHAT_HISTORY_MESSAGE_LIMIT`（默认 20）条成功消息。删除会话是软删除，删除后不可继续发送或读取，关联的 queued/running OpenClaw task 会被协作取消。
 
 任务成功后再拉取 artifacts：
 
@@ -755,7 +780,7 @@ Content-Type: application/json
 }
 ```
 
-`description/document_id/due_at/rubric_text` 可能为 `null`。传 `rubric_text: null` 或空白字符串会清除 rubric。当前 schema 中省略 `max_score` 会使用 `100.0`，因此 Android 更新时应始终同时发送当前 `rubric_text` 和 `max_score`；`max_score` 必须大于 `0`。
+`description/document_id/due_at/rubric_text` 可能为 `null`。该接口是真正的部分更新：省略字段会保持原值；显式传 `rubric_text: null` 或空白字符串才会清除 rubric；空对象返回 `422`；`max_score` 必须大于 `0`。更新配置会取消尚未完成的评分 task，前端应重新触发评分。
 
 ### Homework References
 
@@ -813,6 +838,8 @@ DELETE /workspaces/{workspace_id}/homeworks/{homework_id}/references/{reference_
 
 成功返回 `204 No Content`，Android 不应尝试解析 JSON body。常见业务错误：workspace/homework/reference/document 不存在返回 `404`；reference 文档类型不匹配返回 `400`；重复添加同一 reference 返回 `409`；请求字段不合法返回 `422`。
 
+新增或删除 reference 会取消当前 queued/running 评分 task。删除 reference 文档本身时，后端 purge 还会清理受影响的旧评分、错题与高亮笔记，并基于剩余资料异步重建。
+
 前端展示成绩时必须读取 `grading_mode`：`official` 可显示“正式评分”，`provisional` 必须显示“诊断性评分”，同时展示 `confidence`，不能把它伪装成正式成绩。
 
 ## Current Product Limits
@@ -832,6 +859,7 @@ DELETE /workspaces/{workspace_id}/homeworks/{homework_id}/references/{reference_
 - `ready`: 展示 OCR markdown/text/json 下载入口。
 - `failed`: 展示 `task.error_message` 和最近 error event，允许用户重新处理。
 - `deleted`: 从普通列表隐藏。
+- `cancelled`: 停止轮询结果写入；可读取 events 中的取消原因。
 
 ## Error Handling
 

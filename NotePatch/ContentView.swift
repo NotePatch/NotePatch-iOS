@@ -619,7 +619,7 @@ private struct DocumentRow: View {
                             .frame(maxWidth: .infinity)
                     }
                     .notePatchGlassButtonStyle(prominent: true)
-                    .disabled(isBusy || document.status == "deleted")
+                    .disabled(isBusy || !canProcess)
 
                     Button(action: onDownload) {
                         Image(systemName: "arrow.down.to.line")
@@ -717,6 +717,10 @@ private struct DocumentRow: View {
     private var processTitle: String {
         document.status == "ready" || document.status == "failed" ? "重处理" : "处理"
     }
+
+    private var canProcess: Bool {
+        document.status == "uploaded" || document.status == "ready" || document.status == "failed"
+    }
 }
 
 private struct TaskTab: View {
@@ -724,7 +728,12 @@ private struct TaskTab: View {
 
     var body: some View {
         ScrollView {
-            TaskPanel(activeTask: model.activeTask, events: model.taskEvents)
+            TaskPanel(
+                activeTask: model.activeTask,
+                events: model.taskEvents,
+                canRetryDocumentPurge: model.canRetryDocumentPurge,
+                onRetryDocumentPurge: model.retryDocumentPurge
+            )
                 .padding(.horizontal, 16)
                 .padding(.top, 14)
                 .padding(.bottom, 24)
@@ -736,6 +745,8 @@ private struct TaskTab: View {
 private struct TaskPanel: View {
     let activeTask: TaskItem?
     let events: [TaskEventItem]
+    let canRetryDocumentPurge: Bool
+    let onRetryDocumentPurge: () -> Void
     @State private var resultExpanded = false
     @State private var eventsExpanded = false
 
@@ -747,7 +758,7 @@ private struct TaskPanel: View {
                         .font(.headline)
                     Spacer()
                     if let activeTask {
-                        StatusPill(text: statusLabel(activeTask.status), color: statusColor(activeTask.status))
+                        StatusPill(text: taskStatusLabel(activeTask), color: taskStatusColor(activeTask))
                     }
                 }
 
@@ -771,14 +782,17 @@ private struct TaskPanel: View {
                         if let finishedAt = activeTask.finishedAt {
                             TaskTime(label: "完成", value: compactDateTime(finishedAt))
                         }
+                        if let cancelRequestedAt = activeTask.cancelRequestedAt {
+                            TaskTime(label: "请求取消", value: compactDateTime(cancelRequestedAt))
+                        }
                     }
-                    if let errorMessage = activeTask.errorMessage {
-                        Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
+                    if let taskMessage = terminalMessage(for: activeTask) {
+                        Label(taskMessage, systemImage: "exclamationmark.triangle.fill")
                             .font(.subheadline)
-                            .foregroundStyle(.red)
+                            .foregroundStyle(activeTask.status == "cancelled" ? .orange : .red)
                             .padding(10)
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .liquidGlassBanner(tint: .red)
+                            .liquidGlassBanner(tint: activeTask.status == "cancelled" ? .orange : .red)
                     }
                     if let resultText = activeTask.resultText {
                         DisclosureGroup("任务结果", isExpanded: $resultExpanded) {
@@ -786,6 +800,14 @@ private struct TaskPanel: View {
                                 .padding(.top, 6)
                         }
                         .font(.subheadline.weight(.medium))
+                    }
+                    if canRetryDocumentPurge {
+                        Button(action: onRetryDocumentPurge) {
+                            Label("重试清理", systemImage: "arrow.clockwise")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .notePatchGlassButtonStyle(prominent: true)
+                        .accessibilityIdentifier("retryDocumentPurgeButton")
                     }
                 } else {
                     EmptyState(
@@ -838,6 +860,17 @@ private struct TaskPanel: View {
             return [latestError] + recent.suffix(3)
         }
         return recent
+    }
+
+    private func terminalMessage(for task: TaskItem) -> String? {
+        if task.status == "cancelled" {
+            return events.last(where: { $0.eventType.contains("cancel") })?.message
+                ?? events.last(where: { $0.level == "error" })?.message
+                ?? events.last?.message
+                ?? task.errorMessage
+                ?? "任务已取消。"
+        }
+        return task.errorMessage
     }
 }
 
@@ -2124,8 +2157,24 @@ private func statusColor(_ status: String) -> Color {
     }
 }
 
+private func taskStatusLabel(_ task: TaskItem) -> String {
+    if task.cancelRequestedAt != nil && (task.status == "queued" || task.status == "running") {
+        return "取消中"
+    }
+    return statusLabel(task.status)
+}
+
+private func taskStatusColor(_ task: TaskItem) -> Color {
+    if task.cancelRequestedAt != nil && (task.status == "queued" || task.status == "running") {
+        return .orange
+    }
+    return statusColor(task.status)
+}
+
 private func taskTypeLabel(_ taskType: String) -> String {
     switch taskType {
+    case "purge_document":
+        return "文档清理"
     case "process_document", "document_process":
         return "文档处理"
     case "openclaw", "openclaw_task":

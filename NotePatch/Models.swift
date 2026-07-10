@@ -260,6 +260,9 @@ struct LearningDocumentItem: Decodable, Equatable, Identifiable {
     let tusUploadURL: String?
     let sha256: String?
     let status: String
+    let purgeStatus: String?
+    let purgeTaskId: String?
+    let purgedAt: String?
     let createdAt: String
     let updatedAt: String
     let artifacts: [DocumentArtifactItem]
@@ -281,6 +284,9 @@ struct LearningDocumentItem: Decodable, Equatable, Identifiable {
         case tusUploadURL = "tus_upload_url"
         case sha256
         case status
+        case purgeStatus = "purge_status"
+        case purgeTaskId = "purge_task_id"
+        case purgedAt = "purged_at"
         case createdAt = "created_at"
         case updatedAt = "updated_at"
         case artifacts
@@ -303,6 +309,9 @@ struct LearningDocumentItem: Decodable, Equatable, Identifiable {
         tusUploadURL: String? = nil,
         sha256: String? = nil,
         status: String,
+        purgeStatus: String? = nil,
+        purgeTaskId: String? = nil,
+        purgedAt: String? = nil,
         createdAt: String = "",
         updatedAt: String = "",
         artifacts: [DocumentArtifactItem] = []
@@ -323,9 +332,28 @@ struct LearningDocumentItem: Decodable, Equatable, Identifiable {
         self.tusUploadURL = tusUploadURL
         self.sha256 = sha256
         self.status = status
+        self.purgeStatus = purgeStatus
+        self.purgeTaskId = purgeTaskId
+        self.purgedAt = purgedAt
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.artifacts = artifacts
+    }
+}
+
+struct DocumentDeleteResponse: Decodable, Equatable {
+    let ok: Bool
+    let documentId: String
+    let status: String
+    let purgeStatus: String
+    let purgeTaskId: String
+
+    enum CodingKeys: String, CodingKey {
+        case ok
+        case documentId = "document_id"
+        case status
+        case purgeStatus = "purge_status"
+        case purgeTaskId = "purge_task_id"
     }
 }
 
@@ -783,6 +811,7 @@ struct TaskItem: Decodable, Equatable, Identifiable {
     let resultText: String?
     let errorMessage: String?
     let progress: Int
+    let cancelRequestedAt: String?
     let createdAt: String
     let updatedAt: String
     let startedAt: String?
@@ -799,10 +828,46 @@ struct TaskItem: Decodable, Equatable, Identifiable {
         case result
         case errorMessage = "error_message"
         case progress
+        case cancelRequestedAt = "cancel_requested_at"
         case createdAt = "created_at"
         case updatedAt = "updated_at"
         case startedAt = "started_at"
         case finishedAt = "finished_at"
+    }
+
+    init(
+        id: String,
+        workspaceId: String,
+        taskType: String,
+        status: String,
+        resourceType: String? = nil,
+        resourceId: String? = nil,
+        payload: JSONValue? = nil,
+        result: JSONValue? = nil,
+        errorMessage: String? = nil,
+        progress: Int = 0,
+        cancelRequestedAt: String? = nil,
+        createdAt: String = "",
+        updatedAt: String = "",
+        startedAt: String? = nil,
+        finishedAt: String? = nil
+    ) {
+        self.id = id
+        self.workspaceId = workspaceId
+        self.taskType = taskType
+        self.status = status
+        self.resourceType = resourceType
+        self.resourceId = resourceId
+        self.payload = payload
+        self.result = result
+        self.resultText = result?.displayString
+        self.errorMessage = errorMessage
+        self.progress = progress
+        self.cancelRequestedAt = cancelRequestedAt
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+        self.startedAt = startedAt
+        self.finishedAt = finishedAt
     }
 
     init(from decoder: Decoder) throws {
@@ -818,6 +883,7 @@ struct TaskItem: Decodable, Equatable, Identifiable {
         resultText = result?.displayString
         errorMessage = try container.decodeIfPresent(String.self, forKey: .errorMessage)
         progress = try container.decodeIfPresent(Int.self, forKey: .progress) ?? 0
+        cancelRequestedAt = try container.decodeIfPresent(String.self, forKey: .cancelRequestedAt)
         createdAt = try container.decodeIfPresent(String.self, forKey: .createdAt) ?? ""
         updatedAt = try container.decodeIfPresent(String.self, forKey: .updatedAt) ?? ""
         startedAt = try container.decodeIfPresent(String.self, forKey: .startedAt)

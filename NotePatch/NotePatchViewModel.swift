@@ -94,6 +94,7 @@ final class NotePatchViewModel: ObservableObject {
     @Published var documents: [LearningDocumentItem] = []
     @Published var activeTask: TaskItem?
     @Published var taskEvents: [TaskEventItem] = []
+    @Published private(set) var isDocumentPurgeRetryAvailable = false
     @Published var selectedArtifactDocumentId: String?
     @Published var selectedArtifacts: [DocumentArtifactItem] = []
     @Published var selectedOcrDocumentId: String?
@@ -161,6 +162,7 @@ final class NotePatchViewModel: ObservableObject {
     private var presenceTask: Task<Void, Never>?
     private var didRestoreSession = false
     private var pendingUITestUploadFile: LocalUploadFile?
+    private var retryableDocumentPurgeId: String?
 
     convenience init() {
         self.init(settings: SettingsStore())
@@ -615,14 +617,19 @@ final class NotePatchViewModel: ObservableObject {
     }
 
     func startProcessing(_ document: LearningDocumentItem) {
-        guard let activeSession = currentSessionOrError(), let workspaceId = selectedWorkspaceId else {
+        guard let activeSession = currentSessionOrError(), let workspaceId = selectedWorkspaceId, !isBusy else {
             return
         }
+        guard isProcessableDocument(document) else {
+            errorMessage = "只有已上传、就绪或失败的文档可以处理。"
+            return
+        }
+        isBusy = true
+        errorMessage = nil
+        taskEvents = []
+        statusMessage = "正在触发文档处理..."
         Task {
-            isBusy = true
-            errorMessage = nil
-            taskEvents = []
-            statusMessage = "正在触发文档处理..."
+            defer { isBusy = false }
             do {
                 let client = clientFor(activeSession)
                 let task = try await client.processDocument(
@@ -650,7 +657,6 @@ final class NotePatchViewModel: ObservableObject {
             } catch {
                 showError(error)
             }
-            isBusy = false
         }
     }
 
@@ -963,6 +969,10 @@ final class NotePatchViewModel: ObservableObject {
         lastGradingTask?.result?.objectDoubleValue(for: "confidence")
     }
 
+    var canRetryDocumentPurge: Bool {
+        isDocumentPurgeRetryAvailable && !isBusy
+    }
+
     func searchKnowledge() {
         guard let activeSession = currentSessionOrError(), let workspaceId = selectedWorkspaceId else { return }
         let query = knowledgeQuery.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1101,7 +1111,8 @@ final class NotePatchViewModel: ObservableObject {
                 homeworks = homeworks.map { $0.id == updated.id ? updated : $0 }
                 homeworkRubricText = updated.rubricText ?? ""
                 homeworkMaxScoreText = formatScore(updated.maxScore)
-                statusMessage = "评分配置已保存。"
+                lastGradingTask = nil
+                statusMessage = "评分配置已保存，请重新评分。"
             } catch {
                 showError(error)
             }
@@ -1111,10 +1122,10 @@ final class NotePatchViewModel: ObservableObject {
     func addHomeworkReference(documentId: String) {
         guard let document = referenceDocumentCandidates.first(where: { $0.id == documentId }),
               let activeSession = currentSessionOrError(), let workspaceId = selectedWorkspaceId,
-              let homeworkId = selectedHomeworkId else { return }
+              let homeworkId = selectedHomeworkId, !isHomeworkLoading else { return }
+        isHomeworkLoading = true
+        errorMessage = nil
         Task {
-            isHomeworkLoading = true
-            errorMessage = nil
             defer { isHomeworkLoading = false }
             do {
                 let reference = try await clientFor(activeSession).addHomeworkReference(
@@ -1124,7 +1135,8 @@ final class NotePatchViewModel: ObservableObject {
                     referenceType: document.documentKind
                 )
                 homeworkReferences.append(reference)
-                statusMessage = "评分依据已添加。"
+                lastGradingTask = nil
+                statusMessage = "评分依据已添加，请重新评分。"
             } catch {
                 showError(error)
             }
@@ -1143,11 +1155,12 @@ final class NotePatchViewModel: ObservableObject {
                 let client = clientFor(activeSession)
                 try await client.deleteHomeworkReference(workspaceId: workspaceId, homeworkId: homeworkId, referenceId: reference.id)
                 homeworkReferences.removeAll { $0.id == reference.id }
-                statusMessage = "评分依据已删除。"
+                lastGradingTask = nil
+                statusMessage = "评分依据已删除，请重新评分。"
                 do {
                     homeworkReferences = try await client.listHomeworkReferences(workspaceId: workspaceId, homeworkId: homeworkId)
                 } catch {
-                    handlePostCommitRefreshFailure(error, completion: "评分依据已删除")
+                    handlePostCommitRefreshFailure(error, completion: "评分依据已删除，请重新评分")
                 }
             } catch {
                 showError(error)
@@ -1162,6 +1175,7 @@ final class NotePatchViewModel: ObservableObject {
             isHomeworkLoading = true
             errorMessage = nil
             taskEvents = []
+            lastGradingTask = nil
             defer { isHomeworkLoading = false }
             do {
                 let task = try await clientFor(activeSession).gradeHomework(workspaceId: workspaceId, homeworkId: homeworkId)
@@ -1245,35 +1259,80 @@ final class NotePatchViewModel: ObservableObject {
     }
 
     func deleteDocument(_ document: LearningDocumentItem) {
+        startDocumentPurge(documentId: document.id)
+    }
+
+    func retryDocumentPurge() {
+        guard let documentId = retryableDocumentPurgeId else { return }
+        startDocumentPurge(documentId: documentId)
+    }
+
+    private func startDocumentPurge(documentId: String) {
         guard let activeSession = currentSessionOrError(), let workspaceId = selectedWorkspaceId, !isBusy else {
             return
         }
         isBusy = true
+        isDocumentPurgeRetryAvailable = false
         errorMessage = nil
-        statusMessage = "正在删除文档..."
+        taskEvents = []
+        statusMessage = "正在请求删除文档..."
+
         Task {
+            var deletionAccepted = false
             defer { isBusy = false }
             do {
-                try await clientFor(activeSession).deleteDocument(workspaceId: workspaceId, documentId: document.id)
-                documents.removeAll { $0.id == document.id }
-                if selectedArtifactDocumentId == document.id {
-                    selectedArtifactDocumentId = nil
-                    selectedArtifacts = []
-                }
-                if selectedOcrDocumentId == document.id {
-                    selectedOcrDocumentId = nil
-                    selectedOcrArtifacts = []
-                }
-                gradingDocuments.removeAll { $0.id == document.id }
-                homeworkReferences.removeAll { $0.documentId == document.id }
-                statusMessage = "文档已删除。"
+                let client = clientFor(activeSession)
+                let response = try await client.deleteDocument(workspaceId: workspaceId, documentId: documentId)
+                deletionAccepted = true
+                retryableDocumentPurgeId = response.documentId
+                removeDeletedDocumentFromLocalState(response.documentId)
+                selectedTab = .tasks
+                statusMessage = "文档已删除，正在清理原件和派生数据..."
 
+                let initialTask = try await client.getTask(workspaceId: workspaceId, taskId: response.purgeTaskId)
+                activeTask = initialTask
+                let finishedTask = try await pollTask(
+                    activeSession: activeSession,
+                    workspaceId: workspaceId,
+                    taskId: response.purgeTaskId
+                ) { [weak self] task, events in
+                    self?.activeTask = task
+                    self?.taskEvents = events
+                    self?.statusMessage = "文档清理 \(task.status)：\(task.progress.clamped(to: 0...100))%"
+                }
+
+                guard finishedTask.status == "succeeded" else { return }
+                retryableDocumentPurgeId = nil
+                isDocumentPurgeRetryAvailable = false
+                statusMessage = "文档及派生数据清理完成。"
                 if let refreshError = await refreshAfterDocumentDeletion(activeSession: activeSession, workspaceId: workspaceId) {
-                    handlePostCommitRefreshFailure(refreshError, completion: "文档已删除")
+                    handlePostCommitRefreshFailure(refreshError, completion: "文档及派生数据已清理")
                 }
             } catch {
+                if deletionAccepted && !shouldStopPostCommitRefresh(for: error) {
+                    isDocumentPurgeRetryAvailable = true
+                }
                 showError(error)
             }
+        }
+    }
+
+    private func removeDeletedDocumentFromLocalState(_ documentId: String) {
+        let affectsGrading = homeworkReferences.contains(where: { $0.documentId == documentId })
+            || homeworks.contains(where: { $0.documentId == documentId })
+        documents.removeAll { $0.id == documentId }
+        if selectedArtifactDocumentId == documentId {
+            selectedArtifactDocumentId = nil
+            selectedArtifacts = []
+        }
+        if selectedOcrDocumentId == documentId {
+            selectedOcrDocumentId = nil
+            selectedOcrArtifacts = []
+        }
+        gradingDocuments.removeAll { $0.id == documentId }
+        homeworkReferences.removeAll { $0.documentId == documentId }
+        if affectsGrading {
+            lastGradingTask = nil
         }
     }
 
@@ -1378,6 +1437,10 @@ final class NotePatchViewModel: ObservableObject {
 
     private func shouldForceReprocess(_ document: LearningDocumentItem) -> Bool {
         document.status == "ready" || document.status == "failed"
+    }
+
+    private func isProcessableDocument(_ document: LearningDocumentItem) -> Bool {
+        document.status == "uploaded" || document.status == "ready" || document.status == "failed"
     }
 
     private func defaultArtifactFilename(type: String, mimeType: String?, fallback: String) -> String {
@@ -1491,6 +1554,21 @@ final class NotePatchViewModel: ObservableObject {
         homeworkRubricText = "每题 10 分"
         homeworkMaxScoreText = "100"
         gradingDocuments = sampleDocuments
+        if ProcessInfo.processInfo.arguments.contains("-NotePatchUITestPurgeFailure") {
+            activeTask = TaskItem(
+                id: "purge-task",
+                workspaceId: "ui-workspace",
+                taskType: "purge_document",
+                status: "failed",
+                resourceType: "document",
+                resourceId: "homework-doc",
+                payload: .object(["document_id": .string("homework-doc")]),
+                errorMessage: "Document purge failed",
+                progress: 45
+            )
+            retryableDocumentPurgeId = "homework-doc"
+            isDocumentPurgeRetryAvailable = true
+        }
         errorMessage = nil
         statusMessage = "UI 离线测试模式"
     }
@@ -1512,6 +1590,8 @@ final class NotePatchViewModel: ObservableObject {
         selectedOcrDocumentId = nil
         activeTask = nil
         taskEvents = []
+        retryableDocumentPurgeId = nil
+        isDocumentPurgeRetryAvailable = false
         conversations = []
         selectedConversationId = nil
         openClawMessages = [welcomeChatMessage]
@@ -1761,8 +1841,15 @@ final class NotePatchViewModel: ObservableObject {
             switch task.status {
             case "succeeded":
                 return task
-            case "failed", "cancelled":
+            case "failed":
                 throw LearningBackendError(task.errorMessage ?? "任务 \(task.status)。")
+            case "cancelled":
+                let cancellationReason = events.last(where: { $0.eventType.contains("cancel") })?.message
+                    ?? events.last(where: { $0.level == "error" })?.message
+                    ?? events.last?.message
+                    ?? task.errorMessage
+                    ?? "任务已取消。"
+                throw LearningBackendError(cancellationReason)
             default:
                 pollCount += 1
                 try await Task.sleep(nanoseconds: taskPollIntervalNanoseconds)

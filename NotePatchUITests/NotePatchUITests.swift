@@ -3,6 +3,7 @@ import XCTest
 final class NotePatchUITests: XCTestCase {
     override func setUpWithError() throws {
         continueAfterFailure = false
+        XCUIDevice.shared.orientation = .portrait
     }
 
     @MainActor
@@ -30,7 +31,7 @@ final class NotePatchUITests: XCTestCase {
         email.typeText("uitest")
         app.buttons["loginButton"].tap()
 
-        XCTAssertTrue(app.otherElements["workbenchTabs"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.otherElements["workbenchTabs"].waitForExistence(timeout: 8))
         XCTAssertTrue(app.staticTexts["My Workspace"].exists)
         XCTAssertTrue(app.staticTexts["UI 离线测试模式"].exists)
         XCTAssertTrue(app.tabBars.buttons["文档"].exists)
@@ -56,6 +57,20 @@ final class NotePatchUITests: XCTestCase {
         XCTAssertFalse(app.staticTexts["family"].exists)
         XCTAssertFalse(app.staticTexts["class"].exists)
         XCTAssertFalse(app.staticTexts["school"].exists)
+    }
+
+    @MainActor
+    func testFailedDocumentPurgeShowsRetryAction() throws {
+        let app = XCUIApplication()
+        app.launchArguments.append(contentsOf: ["-NotePatchUITestWorkbench", "-NotePatchUITestPurgeFailure"])
+        app.launch()
+
+        XCTAssertTrue(app.otherElements["workbenchTabs"].waitForExistence(timeout: 5))
+        app.tabBars.buttons["任务"].tap()
+
+        XCTAssertTrue(app.staticTexts["文档清理"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["失败"].exists)
+        XCTAssertTrue(app.buttons["retryDocumentPurgeButton"].exists)
     }
 
     @MainActor

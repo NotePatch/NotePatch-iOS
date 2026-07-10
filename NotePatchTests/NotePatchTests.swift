@@ -585,7 +585,7 @@ struct NotePatchTests {
             }
             switch key {
             case "DELETE /workspaces/ws-1/documents/doc%2F1":
-                return Self.response(request, status: 200, body: #"{"ok":true}"#)
+                return Self.response(request, status: 202, body: #"{"ok":true,"document_id":"doc/1","status":"deleted","purge_status":"queued","purge_task_id":"purge-1"}"#)
             case "PATCH /workspaces/ws-1/ai/conversations/c-1":
                 return Self.response(request, status: 200, body: #"{"id":"c-1","workspace_id":"ws-1","title":"新标题","created_at":"","updated_at":""}"#)
             case "DELETE /workspaces/ws-1/ai/conversations/c-1",
@@ -599,17 +599,42 @@ struct NotePatchTests {
         }
         let client = LearningBackendClient(baseURL: "https://api.test", accessToken: "access", refreshToken: "refresh", session: session)
 
-        try await client.deleteDocument(workspaceId: "ws-1", documentId: "doc/1")
+        let deleted = try await client.deleteDocument(workspaceId: "ws-1", documentId: "doc/1")
         let renamed = try await client.updateConversation(workspaceId: "ws-1", conversationId: "c-1", title: "新标题")
         try await client.deleteConversation(workspaceId: "ws-1", conversationId: "c-1")
         let preference = try await client.updateAIPreferences(aiHistoryEnabled: false)
         try await client.deleteHomeworkReference(workspaceId: "ws-1", homeworkId: "h-1", referenceId: "r-1")
 
         #expect(renamed.title == "新标题")
+        #expect(deleted.purgeStatus == "queued")
+        #expect(deleted.purgeTaskId == "purge-1")
         #expect(preference.aiHistoryEnabled == false)
         #expect(bodies["PATCH /workspaces/ws-1/ai/conversations/c-1"]?["title"] as? String == "新标题")
         #expect(bodies["PATCH /auth/preferences"]?["ai_history_enabled"] as? Bool == false)
         #expect(requests.filter { $0.httpMethod == "DELETE" }.count == 3)
+    }
+
+    @Test func decodeDocumentPurgeAndTaskCancellationFields() throws {
+        let document = try JSONDecoder.notepatch.decode(
+            LearningDocumentItem.self,
+            from: Data(
+                #"{"id":"doc-1","workspace_id":"ws-1","uploaded_by":"u-1","original_filename":"homework.pdf","file_type":"pdf","document_kind":"homework","storage_backend":"seaweedfs","bucket":"b","object_key":"documents/doc-1","status":"deleted","purge_status":"running","purge_task_id":"purge-1","purged_at":null,"created_at":"","updated_at":"","artifacts":[]}"#.utf8
+            )
+        )
+        let deletion = try JSONDecoder.notepatch.decode(
+            DocumentDeleteResponse.self,
+            from: Data(#"{"ok":true,"document_id":"doc-1","status":"deleted","purge_status":"queued","purge_task_id":"purge-1"}"#.utf8)
+        )
+        let task = try JSONDecoder.notepatch.decode(
+            TaskItem.self,
+            from: Data(#"{"id":"task-1","workspace_id":"ws-1","task_type":"purge_document","status":"running","payload":{},"progress":40,"cancel_requested_at":"2026-07-11T01:00:00Z","created_at":"","updated_at":""}"#.utf8)
+        )
+
+        #expect(document.purgeStatus == "running")
+        #expect(document.purgeTaskId == "purge-1")
+        #expect(deletion.documentId == "doc-1")
+        #expect(deletion.purgeTaskId == "purge-1")
+        #expect(task.cancelRequestedAt == "2026-07-11T01:00:00Z")
     }
 
     @Test func decodeKnowledgeHomeworkReferenceAndGradingResult() throws {
@@ -779,11 +804,18 @@ struct NotePatchTests {
         #expect(model.errorMessage == "delete rejected")
 
         MockURLProtocol.handler = { request in
-            if request.httpMethod == "DELETE" {
+            let key = "\(request.httpMethod ?? "") \(request.url?.path ?? "")"
+            switch key {
+            case "DELETE /workspaces/ws-1/documents/doc-1":
                 Thread.sleep(forTimeInterval: 0.08)
-                return Self.response(request, status: 200, body: #"{"ok":true}"#)
+                return Self.response(request, status: 202, body: #"{"ok":true,"document_id":"doc-1","status":"deleted","purge_status":"queued","purge_task_id":"purge-1"}"#)
+            case "GET /workspaces/ws-1/tasks/purge-1":
+                return Self.response(request, status: 200, body: Self.purgeTaskJSON(id: "purge-1", status: "succeeded", progress: 100))
+            case "GET /workspaces/ws-1/tasks/purge-1/events":
+                return Self.response(request, status: 200, body: "[]")
+            default:
+                return Self.response(request, status: 500, body: #"{"detail":"refresh unavailable"}"#)
             }
-            return Self.response(request, status: 500, body: #"{"detail":"refresh unavailable"}"#)
         }
         model.errorMessage = nil
         model.deleteDocument(document)
@@ -792,8 +824,110 @@ struct NotePatchTests {
         #expect(model.documents.isEmpty)
         #expect(model.gradingDocuments.isEmpty)
         #expect(model.homeworkReferences.isEmpty)
+        #expect(model.selectedTab == .tasks)
+        #expect(model.activeTask?.taskType == "purge_document")
+        #expect(model.activeTask?.status == "succeeded")
         #expect(model.errorMessage == nil)
-        #expect(model.statusMessage.contains("文档已删除，但刷新失败"))
+        #expect(model.statusMessage.contains("文档及派生数据已清理，但刷新失败"))
+    }
+
+    @Test @MainActor func failedDocumentPurge_canBeRetriedWithoutRestoringDocument() async throws {
+        let suiteName = "NotePatchTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        var deleteCount = 0
+        let session = Self.mockSession { request in
+            let key = "\(request.httpMethod ?? "") \(request.url?.path ?? "")"
+            switch key {
+            case "DELETE /workspaces/ws-1/documents/doc-1":
+                deleteCount += 1
+                let taskId = deleteCount == 1 ? "purge-1" : "purge-2"
+                return Self.response(request, status: 202, body: "{\"ok\":true,\"document_id\":\"doc-1\",\"status\":\"deleted\",\"purge_status\":\"queued\",\"purge_task_id\":\"\(taskId)\"}")
+            case "GET /workspaces/ws-1/tasks/purge-1":
+                return Self.response(request, status: 200, body: Self.purgeTaskJSON(id: "purge-1", status: "failed", progress: 45, errorMessage: "purge failed"))
+            case "GET /workspaces/ws-1/tasks/purge-1/events":
+                return Self.response(request, status: 200, body: "[]")
+            case "GET /workspaces/ws-1/tasks/purge-2":
+                return Self.response(request, status: 200, body: Self.purgeTaskJSON(id: "purge-2", status: "succeeded", progress: 100))
+            case "GET /workspaces/ws-1/tasks/purge-2/events":
+                return Self.response(request, status: 200, body: "[]")
+            case "GET /workspaces/ws-1/documents",
+                 "GET /workspaces/ws-1/learning-units",
+                 "GET /workspaces/ws-1/homeworks":
+                return Self.response(request, status: 200, body: "[]")
+            default:
+                return Self.response(request, status: 500, body: #"{"detail":"unexpected request"}"#)
+            }
+        }
+        let model = NotePatchViewModel(
+            settings: SettingsStore(defaults: defaults, keychain: KeychainStore(service: suiteName)),
+            backendSession: session,
+            tusSession: session
+        )
+        model.session = SavedSession(baseURL: "https://api.test", tusBaseURL: "https://tus.test/", accessToken: "a", refreshToken: "r", expiresAt: "x", userId: "u", email: "u@test", fullName: nil, selectedWorkspaceId: "ws-1", aiHistoryEnabled: true)
+        model.selectedWorkspaceId = "ws-1"
+        let document = LearningDocumentItem(id: "doc-1", workspaceId: "ws-1", title: "作业", originalFilename: "homework.pdf", fileType: "pdf", documentKind: "homework", status: "ready")
+        model.documents = [document]
+
+        model.deleteDocument(document)
+        try await Self.waitUntil { !model.isBusy }
+        #expect(model.documents.isEmpty)
+        #expect(model.activeTask?.status == "failed")
+        #expect(model.canRetryDocumentPurge)
+        #expect(model.errorMessage == "purge failed")
+
+        model.retryDocumentPurge()
+        try await Self.waitUntil { !model.isBusy }
+        #expect(deleteCount == 2)
+        #expect(model.documents.isEmpty)
+        #expect(model.activeTask?.id == "purge-2")
+        #expect(model.activeTask?.status == "succeeded")
+        #expect(!model.canRetryDocumentPurge)
+        #expect(model.statusMessage == "文档及派生数据清理完成。")
+    }
+
+    @Test @MainActor func processingValidationAndCancellation_stopResultReads() async throws {
+        let suiteName = "NotePatchTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        var requestCount = 0
+        var resultReadCount = 0
+        let session = Self.mockSession { request in
+            requestCount += 1
+            let key = "\(request.httpMethod ?? "") \(request.url?.path ?? "")"
+            switch key {
+            case "POST /workspaces/ws-1/documents/doc-ready/process":
+                return Self.response(request, status: 201, body: Self.taskJSON)
+            case "GET /workspaces/ws-1/tasks/task-1":
+                return Self.response(request, status: 200, body: #"{"id":"task-1","workspace_id":"ws-1","task_type":"process_document","status":"cancelled","resource_type":"document","resource_id":"doc-ready","payload":{},"result":null,"error_message":null,"progress":25,"cancel_requested_at":"2026-07-11T01:00:00Z","created_at":"","updated_at":""}"#)
+            case "GET /workspaces/ws-1/tasks/task-1/events":
+                return Self.response(request, status: 200, body: #"[{"id":"event-1","workspace_id":"ws-1","task_id":"task-1","event_type":"task_cancelled","level":"warning","message":"Source document was deleted","progress":25,"data":{},"created_at":""}]"#)
+            default:
+                resultReadCount += 1
+                return Self.response(request, status: 500, body: #"{"detail":"unexpected result read"}"#)
+            }
+        }
+        let model = NotePatchViewModel(
+            settings: SettingsStore(defaults: defaults, keychain: KeychainStore(service: suiteName)),
+            backendSession: session,
+            tusSession: session
+        )
+        model.session = SavedSession(baseURL: "https://api.test", tusBaseURL: "https://tus.test/", accessToken: "a", refreshToken: "r", expiresAt: "x", userId: "u", email: "u@test", fullName: nil, selectedWorkspaceId: "ws-1", aiHistoryEnabled: true)
+        model.selectedWorkspaceId = "ws-1"
+
+        let invalidDocument = LearningDocumentItem(id: "doc-created", workspaceId: "ws-1", originalFilename: "created.pdf", fileType: "pdf", documentKind: "homework", status: "created")
+        model.startProcessing(invalidDocument)
+        #expect(requestCount == 0)
+        #expect(model.errorMessage == "只有已上传、就绪或失败的文档可以处理。")
+
+        let readyDocument = LearningDocumentItem(id: "doc-ready", workspaceId: "ws-1", originalFilename: "ready.pdf", fileType: "pdf", documentKind: "homework", status: "uploaded")
+        model.startProcessing(readyDocument)
+        try await Self.waitUntil { !model.isBusy }
+        #expect(model.activeTask?.status == "cancelled")
+        #expect(model.activeTask?.cancelRequestedAt != nil)
+        #expect(model.taskEvents.last?.message == "Source document was deleted")
+        #expect(model.errorMessage == "Source document was deleted")
+        #expect(resultReadCount == 0)
     }
 
     @Test @MainActor func aiPreference_isSerializedPersistedAndRolledBackOnFailure() async throws {
@@ -881,13 +1015,57 @@ struct NotePatchTests {
 
         let reference = HomeworkReferenceItem(id: "r-1", workspaceId: "ws-1", homeworkId: "h-1", documentId: "answer-1", referenceType: "answer_key", createdAt: "")
         model.homeworkReferences = [reference]
+        model.lastGradingTask = TaskItem(id: "grade-1", workspaceId: "ws-1", taskType: "grade_homework", status: "succeeded", result: .object(["grading_mode": .string("official")]), progress: 100)
         model.deleteHomeworkReference(reference)
         model.deleteHomeworkReference(reference)
         #expect(model.homeworkReferences == [reference])
         try await Self.waitUntil { !model.isHomeworkLoading }
         #expect(referenceDeleteCount == 1)
         #expect(model.homeworkReferences.isEmpty)
-        #expect(model.statusMessage == "评分依据已删除。")
+        #expect(model.lastGradingTask == nil)
+        #expect(model.statusMessage == "评分依据已删除，请重新评分。")
+    }
+
+    @Test @MainActor func successfulGradingMutations_clearStaleResult() async throws {
+        let suiteName = "NotePatchTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let session = Self.mockSession { request in
+            let key = "\(request.httpMethod ?? "") \(request.url?.path ?? "")"
+            switch key {
+            case "PATCH /workspaces/ws-1/homeworks/h-1/grading-config":
+                return Self.response(request, status: 200, body: #"{"id":"h-1","workspace_id":"ws-1","title":"作业","document_id":"homework-1","status":"draft","rubric_text":"新标准","max_score":100,"metadata":{},"created_by_user_id":"u","created_at":"","updated_at":""}"#)
+            case "POST /workspaces/ws-1/homeworks/h-1/references":
+                return Self.response(request, status: 201, body: #"{"id":"r-1","workspace_id":"ws-1","homework_id":"h-1","document_id":"answer-1","reference_type":"answer_key","created_at":""}"#)
+            default:
+                return Self.response(request, status: 500, body: #"{"detail":"unexpected request"}"#)
+            }
+        }
+        let model = NotePatchViewModel(
+            settings: SettingsStore(defaults: defaults, keychain: KeychainStore(service: suiteName)),
+            backendSession: session,
+            tusSession: session
+        )
+        model.session = SavedSession(baseURL: "https://api.test", tusBaseURL: "https://tus.test/", accessToken: "a", refreshToken: "r", expiresAt: "x", userId: "u", email: "u@test", fullName: nil, selectedWorkspaceId: "ws-1", aiHistoryEnabled: true)
+        model.selectedWorkspaceId = "ws-1"
+        model.selectedHomeworkId = "h-1"
+        model.homeworks = [HomeworkItem(id: "h-1", workspaceId: "ws-1", title: "作业", documentId: "homework-1", rubricText: "旧标准", maxScore: 100)]
+        model.homeworkRubricText = "新标准"
+        model.homeworkMaxScoreText = "100"
+        model.lastGradingTask = TaskItem(id: "grade-1", workspaceId: "ws-1", taskType: "grade_homework", status: "succeeded", progress: 100)
+
+        model.saveGradingConfig()
+        try await Self.waitUntil { !model.isHomeworkLoading }
+        #expect(model.lastGradingTask == nil)
+        #expect(model.statusMessage == "评分配置已保存，请重新评分。")
+
+        model.lastGradingTask = TaskItem(id: "grade-2", workspaceId: "ws-1", taskType: "grade_homework", status: "succeeded", progress: 100)
+        model.gradingDocuments = [LearningDocumentItem(id: "answer-1", workspaceId: "ws-1", originalFilename: "answer.pdf", fileType: "pdf", documentKind: "answer_key", status: "ready")]
+        model.addHomeworkReference(documentId: "answer-1")
+        try await Self.waitUntil { !model.isHomeworkLoading }
+        #expect(model.homeworkReferences.first?.documentId == "answer-1")
+        #expect(model.lastGradingTask == nil)
+        #expect(model.statusMessage == "评分依据已添加，请重新评分。")
     }
 
     @Test @MainActor func serverURLs_persistAcrossModelInstances() throws {
@@ -1054,6 +1232,33 @@ private extension NotePatchTests {
           "finished_at": null
         }
         """
+
+    static func purgeTaskJSON(
+        id: String,
+        status: String,
+        progress: Int,
+        errorMessage: String? = nil
+    ) -> String {
+        let errorValue = errorMessage.map { "\"\($0)\"" } ?? "null"
+        return
+            """
+            {
+              "id": "\(id)",
+              "workspace_id": "ws-1",
+              "task_type": "purge_document",
+              "status": "\(status)",
+              "resource_type": "document",
+              "resource_id": "doc-1",
+              "payload": {"document_id":"doc-1"},
+              "result": null,
+              "error_message": \(errorValue),
+              "progress": \(progress),
+              "cancel_requested_at": null,
+              "created_at": "",
+              "updated_at": ""
+            }
+            """
+    }
 
     @MainActor
     static func waitUntil(

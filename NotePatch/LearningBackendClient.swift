@@ -187,16 +187,13 @@ final class LearningBackendClient {
         )
     }
 
-    func deleteDocument(workspaceId: String, documentId: String) async throws {
-        let response = try await authedJSON(
+    func deleteDocument(workspaceId: String, documentId: String) async throws -> DocumentDeleteResponse {
+        try await authedJSON(
             "DELETE",
             "/workspaces/\(workspaceId.pathSegment)/documents/\(documentId.pathSegment)",
             payload: nil,
-            as: OkResponse.self
+            as: DocumentDeleteResponse.self
         )
-        guard response.ok else {
-            throw LearningBackendError("服务器未确认文档删除成功。")
-        }
     }
 
     func getDownloadURL(
@@ -626,10 +623,6 @@ final class LearningBackendClient {
 }
 
 private struct EmptyResponse: Decodable {}
-
-private struct OkResponse: Decodable {
-    let ok: Bool
-}
 
 private extension String {
     var pathSegment: String {
