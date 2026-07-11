@@ -720,6 +720,47 @@ struct NotePatchTests {
         #expect(requests.contains { $0.url?.query == "include_download_url=true" })
     }
 
+    @Test @MainActor func notesOverview_groupsVersionsAndLoadsMarkdownOnDemand() async throws {
+        let suiteName = "NotePatchTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let session = Self.mockSession { request in
+            switch request.url?.path ?? "" {
+            case "/api/v1/workspaces/ws-1/learning-units":
+                return Self.response(request, status: 200, body: #"[{"id":"u-1","title":"比例","subject":"数学","grade_level":"七年级","topic":"比"},{"id":"u-2","title":"单元二","subject":null,"grade_level":null,"topic":null}]"#)
+            case "/api/v1/workspaces/ws-1/learning-units/u-1/notes":
+                return Self.response(request, status: 200, body: #"[{"id":"n-1","learning_unit_id":"u-1","version_no":1,"title":"旧笔记","markdown_object_key":"m1","json_object_key":"j1","download_urls":{"markdown":"https://download.test/n-1.md"}},{"id":"n-2","learning_unit_id":"u-1","version_no":2,"title":"新笔记","markdown_object_key":"m2","json_object_key":"j2","download_urls":{"highlighted":"https://download.test/n-2.md"}}]"#)
+            case "/api/v1/workspaces/ws-1/learning-units/u-2/notes":
+                return Self.response(request, status: 200, body: "[]")
+            default:
+                if request.url?.host == "download.test" {
+                    return Self.response(request, status: 200, body: "# 比例\n\n- 外项积等于内项积")
+                }
+                return Self.response(request, status: 500, body: #"{"detail":"unexpected request"}"#)
+            }
+        }
+        let model = NotePatchViewModel(
+            settings: SettingsStore(defaults: defaults, keychain: KeychainStore(service: suiteName)),
+            backendSession: session,
+            tusSession: session
+        )
+        model.session = SavedSession(baseURL: "https://api.test", tusBaseURL: "https://tus.test/", accessToken: "a", refreshToken: "r", expiresAt: "x", userId: "u", email: "u@test", fullName: nil, selectedWorkspaceId: "ws-1", aiHistoryEnabled: true)
+        model.selectedWorkspaceId = "ws-1"
+
+        model.loadNotesOverview()
+        try await Self.waitUntil { !model.isNotesLoading }
+        let group = try #require(model.studyNoteGroups.first)
+        #expect(model.studyNoteGroups.count == 1)
+        #expect(group.learningUnit.title == "比例")
+        #expect(group.notes.map(\.note.versionNo) == [2, 1])
+
+        let latest = try #require(group.notes.first)
+        model.openStudyNote(latest)
+        try await Self.waitUntil { !model.isStudyNoteLoading }
+        #expect(model.studyNoteMarkdown?.contains("外项积等于内项积") == true)
+        #expect(model.studyNoteReaderError == nil)
+    }
+
     @Test func persistentMutationRequests_matchDocumentedContracts() async throws {
         var requests: [URLRequest] = []
         var bodies: [String: [String: Any]] = [:]
@@ -733,15 +774,9 @@ struct NotePatchTests {
                 bodies[key] = try JSONSerialization.jsonObject(with: data) as? [String: Any]
             }
             switch key {
-<<<<<<< Updated upstream
-            case "DELETE /workspaces/ws-1/documents/doc%2F1":
-                return Self.response(request, status: 202, body: #"{"ok":true,"document_id":"doc/1","status":"deleted","purge_status":"queued","purge_task_id":"purge-1"}"#)
-            case "PATCH /workspaces/ws-1/ai/conversations/c-1":
-=======
             case "DELETE /api/v1/workspaces/ws-1/documents/doc%2F1":
                 return Self.response(request, status: 202, body: #"{"ok":true,"document_id":"doc/1","status":"deleted","purge_status":"queued","purge_task_id":"purge-1"}"#)
             case "PATCH /api/v1/workspaces/ws-1/ai/conversations/c-1":
->>>>>>> Stashed changes
                 return Self.response(request, status: 200, body: #"{"id":"c-1","workspace_id":"ws-1","title":"新标题","created_at":"","updated_at":""}"#)
             case "DELETE /api/v1/workspaces/ws-1/ai/conversations/c-1",
                  "DELETE /api/v1/workspaces/ws-1/homeworks/h-1/references/r-1":
@@ -961,24 +996,15 @@ struct NotePatchTests {
         MockURLProtocol.handler = { request in
             let key = "\(request.httpMethod ?? "") \(request.url?.path ?? "")"
             switch key {
-            case "DELETE /workspaces/ws-1/documents/doc-1":
+            case "DELETE /api/v1/workspaces/ws-1/documents/doc-1":
                 Thread.sleep(forTimeInterval: 0.08)
                 return Self.response(request, status: 202, body: #"{"ok":true,"document_id":"doc-1","status":"deleted","purge_status":"queued","purge_task_id":"purge-1"}"#)
-<<<<<<< Updated upstream
-            case "GET /workspaces/ws-1/tasks/purge-1":
+            case "GET /api/v1/workspaces/ws-1/tasks/purge-1":
                 return Self.response(request, status: 200, body: Self.purgeTaskJSON(id: "purge-1", status: "succeeded", progress: 100))
-            case "GET /workspaces/ws-1/tasks/purge-1/events":
+            case "GET /api/v1/workspaces/ws-1/tasks/purge-1/events":
                 return Self.response(request, status: 200, body: "[]")
             default:
                 return Self.response(request, status: 500, body: #"{"detail":"refresh unavailable"}"#)
-=======
-            }
-            if request.url?.path == "/api/v1/workspaces/ws-1/tasks/purge-1" {
-                return Self.response(request, status: 200, body: #"{"id":"purge-1","workspace_id":"ws-1","task_type":"purge_document","status":"succeeded","payload":{},"result":{},"progress":100}"#)
-            }
-            if request.url?.path == "/api/v1/workspaces/ws-1/tasks/purge-1/events" {
-                return Self.response(request, status: 200, body: "[]")
->>>>>>> Stashed changes
             }
         }
         model.errorMessage = nil
@@ -988,11 +1014,11 @@ struct NotePatchTests {
         #expect(model.documents.isEmpty)
         #expect(model.gradingDocuments.isEmpty)
         #expect(model.homeworkReferences.isEmpty)
-        #expect(model.selectedTab == .tasks)
+        #expect(model.selectedTab == .documents)
+        #expect(model.selectedDocumentsSection == .tasks)
         #expect(model.activeTask?.taskType == "purge_document")
         #expect(model.activeTask?.status == "succeeded")
         #expect(model.errorMessage == nil)
-<<<<<<< Updated upstream
         #expect(model.statusMessage.contains("文档及派生数据已清理，但刷新失败"))
     }
 
@@ -1004,21 +1030,21 @@ struct NotePatchTests {
         let session = Self.mockSession { request in
             let key = "\(request.httpMethod ?? "") \(request.url?.path ?? "")"
             switch key {
-            case "DELETE /workspaces/ws-1/documents/doc-1":
+            case "DELETE /api/v1/workspaces/ws-1/documents/doc-1":
                 deleteCount += 1
                 let taskId = deleteCount == 1 ? "purge-1" : "purge-2"
                 return Self.response(request, status: 202, body: "{\"ok\":true,\"document_id\":\"doc-1\",\"status\":\"deleted\",\"purge_status\":\"queued\",\"purge_task_id\":\"\(taskId)\"}")
-            case "GET /workspaces/ws-1/tasks/purge-1":
+            case "GET /api/v1/workspaces/ws-1/tasks/purge-1":
                 return Self.response(request, status: 200, body: Self.purgeTaskJSON(id: "purge-1", status: "failed", progress: 45, errorMessage: "purge failed"))
-            case "GET /workspaces/ws-1/tasks/purge-1/events":
+            case "GET /api/v1/workspaces/ws-1/tasks/purge-1/events":
                 return Self.response(request, status: 200, body: "[]")
-            case "GET /workspaces/ws-1/tasks/purge-2":
+            case "GET /api/v1/workspaces/ws-1/tasks/purge-2":
                 return Self.response(request, status: 200, body: Self.purgeTaskJSON(id: "purge-2", status: "succeeded", progress: 100))
-            case "GET /workspaces/ws-1/tasks/purge-2/events":
+            case "GET /api/v1/workspaces/ws-1/tasks/purge-2/events":
                 return Self.response(request, status: 200, body: "[]")
-            case "GET /workspaces/ws-1/documents",
-                 "GET /workspaces/ws-1/learning-units",
-                 "GET /workspaces/ws-1/homeworks":
+            case "GET /api/v1/workspaces/ws-1/documents",
+                 "GET /api/v1/workspaces/ws-1/learning-units",
+                 "GET /api/v1/workspaces/ws-1/homeworks":
                 return Self.response(request, status: 200, body: "[]")
             default:
                 return Self.response(request, status: 500, body: #"{"detail":"unexpected request"}"#)
@@ -1061,11 +1087,11 @@ struct NotePatchTests {
             requestCount += 1
             let key = "\(request.httpMethod ?? "") \(request.url?.path ?? "")"
             switch key {
-            case "POST /workspaces/ws-1/documents/doc-ready/process":
+            case "POST /api/v1/workspaces/ws-1/documents/doc-ready/process":
                 return Self.response(request, status: 201, body: Self.taskJSON)
-            case "GET /workspaces/ws-1/tasks/task-1":
+            case "GET /api/v1/workspaces/ws-1/tasks/task-1":
                 return Self.response(request, status: 200, body: #"{"id":"task-1","workspace_id":"ws-1","task_type":"process_document","status":"cancelled","resource_type":"document","resource_id":"doc-ready","payload":{},"result":null,"error_message":null,"progress":25,"cancel_requested_at":"2026-07-11T01:00:00Z","created_at":"","updated_at":""}"#)
-            case "GET /workspaces/ws-1/tasks/task-1/events":
+            case "GET /api/v1/workspaces/ws-1/tasks/task-1/events":
                 return Self.response(request, status: 200, body: #"[{"id":"event-1","workspace_id":"ws-1","task_id":"task-1","event_type":"task_cancelled","level":"warning","message":"Source document was deleted","progress":25,"data":{},"created_at":""}]"#)
             default:
                 resultReadCount += 1
@@ -1093,9 +1119,6 @@ struct NotePatchTests {
         #expect(model.taskEvents.last?.message == "Source document was deleted")
         #expect(model.errorMessage == "Source document was deleted")
         #expect(resultReadCount == 0)
-=======
-        #expect(model.statusMessage.contains("文档已清理，但刷新失败"))
->>>>>>> Stashed changes
     }
 
     @Test @MainActor func aiPreference_isSerializedPersistedAndRolledBackOnFailure() async throws {
@@ -1201,9 +1224,9 @@ struct NotePatchTests {
         let session = Self.mockSession { request in
             let key = "\(request.httpMethod ?? "") \(request.url?.path ?? "")"
             switch key {
-            case "PATCH /workspaces/ws-1/homeworks/h-1/grading-config":
+            case "PATCH /api/v1/workspaces/ws-1/homeworks/h-1/grading-config":
                 return Self.response(request, status: 200, body: #"{"id":"h-1","workspace_id":"ws-1","title":"作业","document_id":"homework-1","status":"draft","rubric_text":"新标准","max_score":100,"metadata":{},"created_by_user_id":"u","created_at":"","updated_at":""}"#)
-            case "POST /workspaces/ws-1/homeworks/h-1/references":
+            case "POST /api/v1/workspaces/ws-1/homeworks/h-1/references":
                 return Self.response(request, status: 201, body: #"{"id":"r-1","workspace_id":"ws-1","homework_id":"h-1","document_id":"answer-1","reference_type":"answer_key","created_at":""}"#)
             default:
                 return Self.response(request, status: 500, body: #"{"detail":"unexpected request"}"#)
@@ -1401,7 +1424,6 @@ private extension NotePatchTests {
         }
         """
 
-<<<<<<< Updated upstream
     static func purgeTaskJSON(
         id: String,
         status: String,
@@ -1428,7 +1450,7 @@ private extension NotePatchTests {
             }
             """
     }
-=======
+
     static let completedDocumentJSON =
         """
         {
@@ -1453,7 +1475,6 @@ private extension NotePatchTests {
           "artifacts": []
         }
         """
->>>>>>> Stashed changes
 
     @MainActor
     static func waitUntil(

@@ -273,9 +273,6 @@ struct LearningDocumentItem: Decodable, Equatable, Identifiable {
     let createdAt: String
     let updatedAt: String
     let artifacts: [DocumentArtifactItem]
-    let purgeStatus: String?
-    let purgeTaskId: String?
-    let purgedAt: String?
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -300,9 +297,6 @@ struct LearningDocumentItem: Decodable, Equatable, Identifiable {
         case createdAt = "created_at"
         case updatedAt = "updated_at"
         case artifacts
-        case purgeStatus = "purge_status"
-        case purgeTaskId = "purge_task_id"
-        case purgedAt = "purged_at"
     }
 
     init(
@@ -327,10 +321,7 @@ struct LearningDocumentItem: Decodable, Equatable, Identifiable {
         purgedAt: String? = nil,
         createdAt: String = "",
         updatedAt: String = "",
-        artifacts: [DocumentArtifactItem] = [],
-        purgeStatus: String? = nil,
-        purgeTaskId: String? = nil,
-        purgedAt: String? = nil
+        artifacts: [DocumentArtifactItem] = []
     ) {
         self.id = id
         self.workspaceId = workspaceId
@@ -354,30 +345,11 @@ struct LearningDocumentItem: Decodable, Equatable, Identifiable {
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.artifacts = artifacts
-        self.purgeStatus = purgeStatus
-        self.purgeTaskId = purgeTaskId
-        self.purgedAt = purgedAt
     }
 }
 
 struct DocumentDeleteResponse: Decodable, Equatable {
-    let ok: Bool
-    let documentId: String
-    let status: String
-    let purgeStatus: String
-    let purgeTaskId: String
-
-    enum CodingKeys: String, CodingKey {
-        case ok
-        case documentId = "document_id"
-        case status
-        case purgeStatus = "purge_status"
-        case purgeTaskId = "purge_task_id"
-    }
-}
-
-struct DocumentDeleteResponse: Decodable, Equatable {
-    let ok: Bool
+    let ok: Bool?
     let documentId: String
     let status: String
     let purgeStatus: String
@@ -633,6 +605,28 @@ struct StudyNoteVersion: Decodable, Equatable, Identifiable {
     var preferredDownloadURL: String? {
         downloadURLs["highlighted"] ?? downloadURLs["markdown"] ?? downloadURLs["json"]
     }
+
+    var preferredMarkdownDownloadURL: String? {
+        downloadURLs["highlighted"] ?? downloadURLs["markdown"]
+    }
+
+    var jsonDownloadURL: String? {
+        downloadURLs["json"]
+    }
+}
+
+struct StudyNoteListItem: Equatable, Identifiable {
+    let learningUnit: LearningUnit
+    let note: StudyNoteVersion
+
+    var id: String { "\(learningUnit.id)-\(note.id)" }
+}
+
+struct StudyNoteGroup: Equatable, Identifiable {
+    let learningUnit: LearningUnit
+    let notes: [StudyNoteListItem]
+
+    var id: String { learningUnit.id }
 }
 
 struct LearningMetadata: Equatable {
@@ -851,7 +845,6 @@ struct TaskItem: Decodable, Equatable, Identifiable {
     let updatedAt: String
     let startedAt: String?
     let finishedAt: String?
-    let cancelRequestedAt: String?
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -869,7 +862,6 @@ struct TaskItem: Decodable, Equatable, Identifiable {
         case updatedAt = "updated_at"
         case startedAt = "started_at"
         case finishedAt = "finished_at"
-        case cancelRequestedAt = "cancel_requested_at"
     }
 
     init(
@@ -925,7 +917,6 @@ struct TaskItem: Decodable, Equatable, Identifiable {
         updatedAt = try container.decodeIfPresent(String.self, forKey: .updatedAt) ?? ""
         startedAt = try container.decodeIfPresent(String.self, forKey: .startedAt)
         finishedAt = try container.decodeIfPresent(String.self, forKey: .finishedAt)
-        cancelRequestedAt = try container.decodeIfPresent(String.self, forKey: .cancelRequestedAt)
     }
 }
 

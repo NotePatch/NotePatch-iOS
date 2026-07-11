@@ -31,12 +31,8 @@ final class NotePatchUITests: XCTestCase {
         email.typeText("uitest")
         app.buttons["loginButton"].tap()
 
-<<<<<<< Updated upstream
         XCTAssertTrue(app.otherElements["workbenchTabs"].waitForExistence(timeout: 8))
         XCTAssertTrue(app.staticTexts["My Workspace"].exists)
-=======
-        XCTAssertTrue(app.staticTexts["My Workspace"].waitForExistence(timeout: 5))
->>>>>>> Stashed changes
         XCTAssertTrue(app.staticTexts["UI 离线测试模式"].exists)
         XCTAssertTrue(app.tabBars.buttons["笔记"].exists)
         XCTAssertTrue(app.tabBars.buttons["文档"].exists)
@@ -73,14 +69,28 @@ final class NotePatchUITests: XCTestCase {
     }
 
     @MainActor
-<<<<<<< Updated upstream
+    func testOfflineStudyNoteCanBeReadInsideTheApp() throws {
+        let app = XCUIApplication()
+        app.launchArguments.append("-NotePatchUITestWorkbench")
+        app.launch()
+
+        XCTAssertTrue(app.otherElements["workbenchTabs"].waitForExistence(timeout: 5))
+        app.tabBars.buttons["笔记"].tap()
+        let noteTitle = app.staticTexts["分数与比例笔记"]
+        XCTAssertTrue(noteTitle.waitForExistence(timeout: 3))
+        noteTitle.tap()
+        XCTAssertTrue(app.staticTexts["核心概念"].waitForExistence(timeout: 3))
+    }
+
+    @MainActor
     func testFailedDocumentPurgeShowsRetryAction() throws {
         let app = XCUIApplication()
         app.launchArguments.append(contentsOf: ["-NotePatchUITestWorkbench", "-NotePatchUITestPurgeFailure"])
         app.launch()
 
         XCTAssertTrue(app.otherElements["workbenchTabs"].waitForExistence(timeout: 5))
-        app.tabBars.buttons["任务"].tap()
+        app.tabBars.buttons["文档"].tap()
+        app.segmentedControls.firstMatch.buttons["任务"].tap()
 
         XCTAssertTrue(app.staticTexts["文档清理"].waitForExistence(timeout: 3))
         XCTAssertTrue(app.staticTexts["失败"].exists)
@@ -88,10 +98,7 @@ final class NotePatchUITests: XCTestCase {
     }
 
     @MainActor
-    func testPendingImagePreviewCanBeCancelled() throws {
-=======
     func testPendingImageAppearsInUploadQueueAndCanBeRemoved() throws {
->>>>>>> Stashed changes
         let app = XCUIApplication()
         app.launchArguments.append(contentsOf: ["-NotePatchUITestWorkbench", "-NotePatchUITestPendingImage"])
         app.launch()

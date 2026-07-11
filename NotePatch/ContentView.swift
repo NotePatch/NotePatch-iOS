@@ -199,7 +199,7 @@ private struct WorkbenchScreen: View {
             )
 
             TabView(selection: $model.selectedTab) {
-                NotesTab()
+                NotesTab(model: model)
                     .tag(WorkbenchTab.notes)
                     .tabItem { Label(WorkbenchTab.notes.title, systemImage: WorkbenchTab.notes.iconName) }
 
@@ -302,18 +302,162 @@ private struct CompactTopBar: View {
 }
 
 private struct NotesTab: View {
+    @ObservedObject var model: NotePatchViewModel
+    @State private var readerItem: StudyNoteListItem?
+
     var body: some View {
-        VStack {
-            Spacer()
-            EmptyState(
-                systemImage: "note.text",
-                title: "笔记功能准备中",
-                message: "这里将显示你的学习笔记。"
-            )
-            Spacer()
+        NavigationView {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    if model.isNotesLoading && model.studyNoteGroups.isEmpty {
+                        ProgressView("正在加载学习笔记...")
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 36)
+                    } else if model.studyNoteGroups.isEmpty {
+                        EmptyState(
+                            systemImage: "note.text",
+                            title: "暂无学习笔记",
+                            message: "上传并处理课件、笔记或试卷后，自动生成的学习笔记会显示在这里。"
+                        )
+                        .padding(.top, 56)
+                    } else {
+                        ForEach(model.studyNoteGroups) { group in
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text(group.learningUnit.title)
+                                    .cardTitle()
+                                let details = [group.learningUnit.subject, group.learningUnit.gradeLevel, group.learningUnit.topic]
+                                    .compactMap { $0?.isEmpty == false ? $0 : nil }
+                                if !details.isEmpty {
+                                    Text(details.joined(separator: " · "))
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                ForEach(group.notes) { item in
+                                    Button {
+                                        model.openStudyNote(item)
+                                        if model.isOfflineTestMode || item.note.preferredMarkdownDownloadURL != nil {
+                                            readerItem = item
+                                        }
+                                    } label: {
+                                        HStack(spacing: 12) {
+                                            Image(systemName: "note.text")
+                                                .font(.title3)
+                                                .foregroundStyle(Color.accentColor)
+                                                .frame(width: 28)
+                                            VStack(alignment: .leading, spacing: 3) {
+                                                Text(item.note.title.isEmpty ? "电子笔记" : item.note.title)
+                                                    .font(.subheadline.weight(.medium))
+                                                    .foregroundStyle(.primary)
+                                                    .lineLimit(2)
+                                                Text("版本 \(item.note.versionNo)")
+                                                    .font(.caption)
+                                                    .foregroundStyle(.secondary)
+                                            }
+                                            Spacer(minLength: 8)
+                                            Image(systemName: "chevron.right")
+                                                .font(.caption.weight(.semibold))
+                                                .foregroundStyle(.tertiary)
+                                        }
+                                        .padding(12)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .liquidGlassCard()
+                                    }
+                                    .buttonStyle(.plain)
+                                    .accessibilityIdentifier("studyNoteRow-\(item.note.id)")
+                                }
+                            }
+                        }
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 14)
+            }
+            .navigationTitle("笔记")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button {
+                        model.loadNotesOverview(allowOfflineNetwork: true)
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                    .disabled(model.isNotesLoading)
+                    .accessibilityLabel("刷新笔记")
+                }
+            }
         }
-        .padding(.horizontal, 16)
+        .navigationViewStyle(StackNavigationViewStyle())
+        .task { model.loadNotesOverview() }
+        .sheet(item: $readerItem, onDismiss: model.closeStudyNoteReader) { _ in
+            NavigationView {
+                StudyNoteReader(model: model)
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("完成") {
+                                readerItem = nil
+                            }
+                        }
+                    }
+            }
+            .navigationViewStyle(StackNavigationViewStyle())
+        }
         .accessibilityIdentifier("notesTab")
+    }
+}
+
+private struct StudyNoteReader: View {
+    @ObservedObject var model: NotePatchViewModel
+
+    var body: some View {
+        Group {
+            if let item = model.selectedStudyNoteItem {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 16) {
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text(item.note.title.isEmpty ? "电子笔记" : item.note.title)
+                                .font(.title2.weight(.bold))
+                            Text("\(item.learningUnit.title) · 版本 \(item.note.versionNo)")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                        }
+
+                        if model.isStudyNoteLoading {
+                            ProgressView("正在加载笔记内容...")
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 36)
+                        } else if let markdown = model.studyNoteMarkdown {
+                            LightweightMarkdownText(markdown: markdown, color: .primary)
+                        } else if let error = model.studyNoteReaderError {
+                            VStack(spacing: 14) {
+                                EmptyState(
+                                    systemImage: "exclamationmark.triangle",
+                                    title: "无法打开笔记",
+                                    message: error
+                                )
+                                Button("重试") {
+                                    model.openStudyNote(item)
+                                }
+                                .notePatchGlassButtonStyle()
+                            }
+                            .frame(maxWidth: .infinity)
+                            .padding(.top, 48)
+                        }
+                    }
+                    .padding(16)
+                }
+                .accessibilityIdentifier("studyNoteReader")
+                .navigationTitle("阅读笔记")
+                .navigationBarTitleDisplayMode(.inline)
+            } else {
+                EmptyState(
+                    systemImage: "note.text",
+                    title: "笔记已关闭",
+                    message: "请返回笔记列表重新选择。"
+                )
+                .padding(.horizontal, 16)
+                .accessibilityIdentifier("studyNoteReader")
+            }
+        }
     }
 }
 
@@ -801,11 +945,7 @@ private struct DocumentRow: View {
                             .frame(maxWidth: .infinity)
                     }
                     .notePatchGlassButtonStyle(prominent: true)
-<<<<<<< Updated upstream
                     .disabled(isBusy || !canProcess)
-=======
-                    .disabled(isBusy || !canProcessDocument(status: document.status))
->>>>>>> Stashed changes
 
                     Button(action: onDownload) {
                         Image(systemName: "arrow.down.to.line")
@@ -914,7 +1054,6 @@ private struct TaskTab: View {
 
     var body: some View {
         ScrollView {
-<<<<<<< Updated upstream
             TaskPanel(
                 activeTask: model.activeTask,
                 events: model.taskEvents,
@@ -924,24 +1063,6 @@ private struct TaskTab: View {
                 .padding(.horizontal, 16)
                 .padding(.top, 14)
                 .padding(.bottom, 24)
-=======
-            VStack(spacing: 12) {
-                TaskPanel(activeTask: model.activeTask, events: model.taskEvents)
-                if let document = model.failedPurgeDocument {
-                    Button {
-                        model.deleteDocument(document)
-                    } label: {
-                        Label("重试清理", systemImage: "arrow.clockwise")
-                            .frame(maxWidth: .infinity)
-                    }
-                    .notePatchGlassButtonStyle(prominent: true)
-                    .disabled(model.isBusy)
-                }
-            }
-            .padding(.horizontal, 16)
-            .padding(.top, 14)
-            .padding(.bottom, 24)
->>>>>>> Stashed changes
         }
         .accessibilityIdentifier("tasksTab")
     }
@@ -963,11 +1084,7 @@ private struct TaskPanel: View {
                         .font(.headline)
                     Spacer()
                     if let activeTask {
-<<<<<<< Updated upstream
                         StatusPill(text: taskStatusLabel(activeTask), color: taskStatusColor(activeTask))
-=======
-                        StatusPill(text: taskStatusLabel(activeTask), color: statusColor(activeTask.status))
->>>>>>> Stashed changes
                     }
                 }
 
@@ -1081,13 +1198,6 @@ private struct TaskPanel: View {
         }
         return task.errorMessage
     }
-}
-
-private func taskStatusLabel(_ task: TaskItem) -> String {
-    if task.cancelRequestedAt != nil, !["succeeded", "failed", "cancelled"].contains(task.status) {
-        return "取消中"
-    }
-    return statusLabel(task.status)
 }
 
 private struct TaskTime: View {
@@ -2374,14 +2484,14 @@ private func statusColor(_ status: String) -> Color {
 }
 
 private func taskStatusLabel(_ task: TaskItem) -> String {
-    if task.cancelRequestedAt != nil && (task.status == "queued" || task.status == "running") {
+    if task.cancelRequestedAt != nil && !["succeeded", "failed", "cancelled"].contains(task.status) {
         return "取消中"
     }
     return statusLabel(task.status)
 }
 
 private func taskStatusColor(_ task: TaskItem) -> Color {
-    if task.cancelRequestedAt != nil && (task.status == "queued" || task.status == "running") {
+    if task.cancelRequestedAt != nil && !["succeeded", "failed", "cancelled"].contains(task.status) {
         return .orange
     }
     return statusColor(task.status)

@@ -188,23 +188,12 @@ final class LearningBackendClient {
     }
 
     func deleteDocument(workspaceId: String, documentId: String) async throws -> DocumentDeleteResponse {
-<<<<<<< Updated upstream
         try await authedJSON(
-=======
-        let response = try await authedJSON(
->>>>>>> Stashed changes
             "DELETE",
             "/workspaces/\(workspaceId.pathSegment)/documents/\(documentId.pathSegment)",
             payload: nil,
             as: DocumentDeleteResponse.self
         )
-<<<<<<< Updated upstream
-=======
-        guard response.ok else {
-            throw LearningBackendError("服务器未确认文档删除成功。")
-        }
-        return response
->>>>>>> Stashed changes
     }
 
     func getDownloadURL(

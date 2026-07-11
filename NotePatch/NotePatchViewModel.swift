@@ -106,11 +106,7 @@ final class NotePatchViewModel: ObservableObject {
     @Published var documents: [LearningDocumentItem] = []
     @Published var activeTask: TaskItem?
     @Published var taskEvents: [TaskEventItem] = []
-<<<<<<< Updated upstream
     @Published private(set) var isDocumentPurgeRetryAvailable = false
-=======
-    @Published var failedPurgeDocument: LearningDocumentItem?
->>>>>>> Stashed changes
     @Published var selectedArtifactDocumentId: String?
     @Published var selectedArtifacts: [DocumentArtifactItem] = []
     @Published var selectedOcrDocumentId: String?
@@ -145,6 +141,12 @@ final class NotePatchViewModel: ObservableObject {
     @Published var selectedLearningUnitId: String?
     @Published var studyNotes: [StudyNoteVersion] = []
     @Published var isLearningLoading = false
+    @Published var studyNoteGroups: [StudyNoteGroup] = []
+    @Published var isNotesLoading = false
+    @Published var selectedStudyNoteItem: StudyNoteListItem?
+    @Published var studyNoteMarkdown: String?
+    @Published var studyNoteReaderError: String?
+    @Published var isStudyNoteLoading = false
     @Published var selectedLearningSection: LearningSection = .units
     @Published var knowledgeQuery = ""
     @Published var knowledgeLearningUnitId = ""
@@ -177,11 +179,8 @@ final class NotePatchViewModel: ObservableObject {
     private var nextOpenClawMessageId: Int64 = 1
     private var presenceTask: Task<Void, Never>?
     private var didRestoreSession = false
-<<<<<<< Updated upstream
     private var pendingUITestUploadFile: LocalUploadFile?
     private var retryableDocumentPurgeId: String?
-=======
->>>>>>> Stashed changes
 
     convenience init() {
         self.init(settings: SettingsStore())
@@ -674,7 +673,6 @@ final class NotePatchViewModel: ObservableObject {
         guard let activeSession = currentSessionOrError(), let workspaceId = selectedWorkspaceId, !isBusy else {
             return
         }
-<<<<<<< Updated upstream
         guard isProcessableDocument(document) else {
             errorMessage = "只有已上传、就绪或失败的文档可以处理。"
             return
@@ -683,12 +681,6 @@ final class NotePatchViewModel: ObservableObject {
         errorMessage = nil
         taskEvents = []
         statusMessage = "正在触发文档处理..."
-=======
-        guard canProcessDocument(status: document.status) else {
-            errorMessage = "当前文档状态不能开始处理，请等待上传完成。"
-            return
-        }
->>>>>>> Stashed changes
         Task {
             defer { isBusy = false }
             do {
@@ -983,6 +975,94 @@ final class NotePatchViewModel: ObservableObject {
         }
     }
 
+    func loadNotesOverview(allowOfflineNetwork: Bool = false) {
+        if isOfflineTestMode && !allowOfflineNetwork { return }
+        guard let activeSession = currentSessionOrError(), let workspaceId = selectedWorkspaceId else { return }
+        isNotesLoading = true
+        errorMessage = nil
+        Task {
+            defer { isNotesLoading = false }
+            do {
+                let client = clientFor(activeSession)
+                let units = try await client.listLearningUnits(workspaceId: workspaceId)
+                learningUnits = units
+                var groups: [StudyNoteGroup] = []
+                for unit in units {
+                    let notes = try await client.listStudyNotes(workspaceId: workspaceId, learningUnitId: unit.id)
+                        .sorted { lhs, rhs in lhs.versionNo > rhs.versionNo }
+                        .map { StudyNoteListItem(learningUnit: unit, note: $0) }
+                    if !notes.isEmpty {
+                        groups.append(StudyNoteGroup(learningUnit: unit, notes: notes))
+                    }
+                }
+                studyNoteGroups = groups
+            } catch {
+                showError(error)
+            }
+        }
+    }
+
+    func openStudyNote(_ item: StudyNoteListItem) {
+        selectedStudyNoteItem = item
+        studyNoteMarkdown = nil
+        studyNoteReaderError = nil
+
+        if isOfflineTestMode, item.note.id == "note-1" {
+            studyNoteMarkdown = """
+            # 分数与比例
+
+            ## 核心概念
+
+            分数表示整体的一部分，比例用于比较两个量之间的关系。
+
+            - 比的前项和后项必须使用相同单位。
+            - 比例式中，两个外项的积等于两个内项的积。
+
+            > 先统一单位，再化简和计算。
+            """
+            return
+        }
+
+        guard let downloadURL = item.note.preferredMarkdownDownloadURL, !downloadURL.isEmpty else {
+            if item.note.jsonDownloadURL != nil {
+                selectedStudyNoteItem = nil
+                downloadAndPreview(item.note)
+            } else {
+                studyNoteReaderError = "当前笔记没有可用的 Markdown 内容。"
+            }
+            return
+        }
+        guard let activeSession = currentSessionOrError() else { return }
+
+        isStudyNoteLoading = true
+        Task {
+            defer { isStudyNoteLoading = false }
+            do {
+                let filename = "\(item.note.id)-\(sanitizeFileName(item.note.title.isEmpty ? "study-note" : item.note.title)).md"
+                let targetURL = cacheDirectory
+                    .appendingPathComponent("study-notes", isDirectory: true)
+                    .appendingPathComponent(filename)
+                let downloadedURL = try await clientFor(activeSession).download(downloadURL: downloadURL, targetURL: targetURL)
+                guard let markdown = String(data: try Data(contentsOf: downloadedURL), encoding: .utf8) else {
+                    throw LearningBackendError("笔记内容不是 UTF-8 Markdown。")
+                }
+                guard selectedStudyNoteItem?.id == item.id else { return }
+                studyNoteMarkdown = markdown
+                statusMessage = "笔记已加载。"
+            } catch {
+                guard selectedStudyNoteItem?.id == item.id else { return }
+                studyNoteReaderError = friendlyError(error)
+            }
+        }
+    }
+
+    func closeStudyNoteReader() {
+        selectedStudyNoteItem = nil
+        studyNoteMarkdown = nil
+        studyNoteReaderError = nil
+        isStudyNoteLoading = false
+    }
+
     func selectLearningUnit(_ learningUnitId: String) {
         selectedLearningUnitId = learningUnitId
         guard let activeSession = currentSessionOrError(), let workspaceId = selectedWorkspaceId else { return }
@@ -1260,7 +1340,9 @@ final class NotePatchViewModel: ObservableObject {
     }
 
     func downloadAndPreview(_ note: StudyNoteVersion) {
-        guard let activeSession = currentSessionOrError(), let downloadURL = note.preferredDownloadURL, !downloadURL.isEmpty else {
+        let markdownURL = note.preferredMarkdownDownloadURL
+        let downloadURL = markdownURL ?? note.jsonDownloadURL
+        guard let activeSession = currentSessionOrError(), let downloadURL, !downloadURL.isEmpty else {
             errorMessage = "当前笔记没有可用预览链接。"
             return
         }
@@ -1268,11 +1350,12 @@ final class NotePatchViewModel: ObservableObject {
             isBusy = true
             defer { isBusy = false }
             do {
+                let isMarkdown = markdownURL != nil
                 try await downloadAndPreview(
                     client: clientFor(activeSession),
                     downloadURL: downloadURL,
-                    filename: "\(note.title.isEmpty ? note.id : note.title).md",
-                    mimeType: "text/markdown",
+                    filename: "\(note.title.isEmpty ? note.id : note.title).\(isMarkdown ? "md" : "json")",
+                    mimeType: isMarkdown ? "text/markdown" : "application/json",
                     completionMessage: "学习笔记已下载。"
                 )
             } catch {
@@ -1345,12 +1428,12 @@ final class NotePatchViewModel: ObservableObject {
             defer { isBusy = false }
             do {
                 let client = clientFor(activeSession)
-<<<<<<< Updated upstream
                 let response = try await client.deleteDocument(workspaceId: workspaceId, documentId: documentId)
                 deletionAccepted = true
                 retryableDocumentPurgeId = response.documentId
                 removeDeletedDocumentFromLocalState(response.documentId)
-                selectedTab = .tasks
+                selectedTab = .documents
+                selectedDocumentsSection = .tasks
                 statusMessage = "文档已删除，正在清理原件和派生数据..."
 
                 let initialTask = try await client.getTask(workspaceId: workspaceId, taskId: response.purgeTaskId)
@@ -1371,42 +1454,6 @@ final class NotePatchViewModel: ObservableObject {
                 statusMessage = "文档及派生数据清理完成。"
                 if let refreshError = await refreshAfterDocumentDeletion(activeSession: activeSession, workspaceId: workspaceId) {
                     handlePostCommitRefreshFailure(refreshError, completion: "文档及派生数据已清理")
-=======
-                let response = try await client.deleteDocument(workspaceId: workspaceId, documentId: document.id)
-                documents.removeAll { $0.id == document.id }
-                if selectedArtifactDocumentId == document.id {
-                    selectedArtifactDocumentId = nil
-                    selectedArtifacts = []
-                }
-                if selectedOcrDocumentId == document.id {
-                    selectedOcrDocumentId = nil
-                    selectedOcrArtifacts = []
-                }
-                gradingDocuments.removeAll { $0.id == document.id }
-                homeworkReferences.removeAll { $0.documentId == document.id }
-                failedPurgeDocument = nil
-                selectedTab = .documents
-                selectedDocumentsSection = .tasks
-                let task = try await client.getTask(workspaceId: workspaceId, taskId: response.purgeTaskId)
-                activeTask = task
-                do {
-                    _ = try await pollTask(activeSession: activeSession, workspaceId: workspaceId, taskId: task.id) { [weak self] task, events in
-                        self?.activeTask = task
-                        self?.taskEvents = events
-                        self?.statusMessage = "正在清理文档：\(task.progress.clamped(to: 0...100))%"
-                    }
-                    statusMessage = "文档及相关数据已清理。"
-                    if let refreshError = await refreshAfterDocumentDeletion(activeSession: activeSession, workspaceId: workspaceId) {
-                        handlePostCommitRefreshFailure(refreshError, completion: "文档已清理")
-                    }
-                } catch {
-                    if activeTask?.status == "cancelled" {
-                        statusMessage = "文档清理已取消。"
-                    } else {
-                        failedPurgeDocument = document
-                        errorMessage = activeTask?.errorMessage ?? friendlyError(error)
-                    }
->>>>>>> Stashed changes
                 }
             } catch {
                 if deletionAccepted && !shouldStopPostCommitRefresh(for: error) {
@@ -1649,6 +1696,12 @@ final class NotePatchViewModel: ObservableObject {
         documents = sampleDocuments
         learningUnits = [LearningUnit(id: "unit-1", title: "分数与比例", subject: "数学", gradeLevel: "七年级", topic: "比例")]
         studyNotes = [StudyNoteVersion(id: "note-1", learningUnitId: "unit-1", versionNo: 1, title: "分数与比例笔记", markdownObjectKey: "", jsonObjectKey: "", highlightedObjectKey: nil, highlightMapObjectKey: nil, downloadURLs: [:])]
+        studyNoteGroups = [
+            StudyNoteGroup(
+                learningUnit: learningUnits[0],
+                notes: [StudyNoteListItem(learningUnit: learningUnits[0], note: studyNotes[0])]
+            )
+        ]
         homeworks = [HomeworkItem(id: "homework-1", workspaceId: "ui-workspace", title: "代数作业 01", documentId: "homework-doc", rubricText: "每题 10 分", maxScore: 100)]
         selectedHomeworkId = "homework-1"
         homeworkRubricText = "每题 10 分"
@@ -1690,12 +1743,8 @@ final class NotePatchViewModel: ObservableObject {
         selectedOcrDocumentId = nil
         activeTask = nil
         taskEvents = []
-<<<<<<< Updated upstream
         retryableDocumentPurgeId = nil
         isDocumentPurgeRetryAvailable = false
-=======
-        failedPurgeDocument = nil
->>>>>>> Stashed changes
         conversations = []
         selectedConversationId = nil
         openClawMessages = [welcomeChatMessage]
@@ -1704,6 +1753,8 @@ final class NotePatchViewModel: ObservableObject {
         learningUnits = []
         selectedLearningUnitId = nil
         studyNotes = []
+        studyNoteGroups = []
+        closeStudyNoteReader()
         clearLearningWorkspaceState()
         aiHistoryEnabled = true
         passwordText = ""
@@ -2087,6 +2138,8 @@ final class NotePatchViewModel: ObservableObject {
         homeworkRubricText = ""
         homeworkMaxScoreText = "100"
         lastGradingTask = nil
+        studyNoteGroups = []
+        closeStudyNoteReader()
     }
 }
 
