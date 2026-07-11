@@ -1,4 +1,5 @@
 import Foundation
+import QuickLookThumbnailing
 import SwiftUI
 import Testing
 @testable import NotePatch
@@ -7,7 +8,8 @@ import Testing
 struct NotePatchTests {
     @Test func normalizeBaseURLs_defaultAndAddScheme() {
         #expect(normalizeLearningBackendBaseURL("") == defaultLearningBackendBaseURL)
-        #expect(normalizeLearningBackendBaseURL("192.168.100.123:8001/") == "http://192.168.100.123:8001")
+        #expect(normalizeLearningBackendBaseURL("192.168.100.123:8001/") == "http://192.168.100.123:8001/api/v1")
+        #expect(normalizeLearningBackendBaseURL("https://example.test/api/v1/") == "https://example.test/api/v1")
         #expect(normalizeLearningBackendBaseURL("https://example.test/api/") == "https://example.test/api")
 
         #expect(normalizeTUSBaseURL("") == defaultTUSDBaseURL)
@@ -22,6 +24,63 @@ struct NotePatchTests {
         #expect(replacingFilenameExtension("exam.pdf", with: "jpg") == "exam.jpg")
         #expect(formatBytes(512) == "512 B")
         #expect(formatBytes(2048) == "2.0 KB")
+    }
+
+    @Test @MainActor func uploadThumbnail_classificationCacheKeyAndImageDownsampling() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("notepatch-thumbnail-tests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let renderer = UIGraphicsImageRenderer(size: CGSize(width: 2400, height: 1600))
+        let sourceImage = renderer.image { context in
+            UIColor.systemBlue.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 2400, height: 1600))
+        }
+        let imageURL = root.appendingPathComponent("large.png")
+        try #require(sourceImage.pngData()).write(to: imageURL)
+        let imageFile = LocalUploadFile(url: imageURL, filename: "large.png", mimeType: "image/png")
+
+        #expect(uploadThumbnailKind(for: imageFile, canQuickLookPreview: false) == .image)
+        let thumbnail = try #require(downsampleUploadImage(at: imageURL, maxPixelSize: 160))
+        #expect(max(thumbnail.size.width * thumbnail.scale, thumbnail.size.height * thumbnail.scale) <= 160)
+        #expect(thumbnail.size.width < sourceImage.size.width)
+
+        let firstKey = uploadThumbnailCacheKey(for: imageFile)
+        var changedData = try Data(contentsOf: imageURL)
+        changedData.append(0)
+        try changedData.write(to: imageURL, options: .atomic)
+        let secondKey = uploadThumbnailCacheKey(for: imageFile)
+        #expect(firstKey != secondKey)
+
+        let pdfURL = root.appendingPathComponent("notes.pdf")
+        let pdfRenderer = UIGraphicsPDFRenderer(bounds: CGRect(x: 0, y: 0, width: 612, height: 792))
+        try pdfRenderer.pdfData { context in
+            context.beginPage()
+            NSString(string: "NotePatch PDF").draw(at: CGPoint(x: 40, y: 40), withAttributes: [.font: UIFont.systemFont(ofSize: 24)])
+        }.write(to: pdfURL)
+        let pdfFile = LocalUploadFile(url: pdfURL, filename: "notes.pdf", mimeType: "application/pdf")
+        let unknownFile = LocalUploadFile(url: root.appendingPathComponent("blob.unknown"), filename: "blob.unknown", mimeType: nil)
+        #expect(uploadThumbnailKind(for: pdfFile, canQuickLookPreview: true) == .quickLook)
+        #expect(uploadThumbnailKind(for: unknownFile, canQuickLookPreview: false) == .unsupported)
+
+        let request = QLThumbnailGenerator.Request(
+            fileAt: pdfURL,
+            size: CGSize(width: 56, height: 64),
+            scale: 2,
+            representationTypes: .thumbnail
+        )
+        let pdfThumbnail = await withCheckedContinuation { continuation in
+            QLThumbnailGenerator.shared.generateBestRepresentation(for: request) { representation, _ in
+                continuation.resume(returning: representation?.uiImage)
+            }
+        }
+        #expect(pdfThumbnail != nil)
+
+        let cache = UploadThumbnailCache.shared
+        cache.insert(thumbnail, forKey: uploadThumbnailCacheKey(for: imageFile))
+        #expect(cache.image(forKey: uploadThumbnailCacheKey(for: imageFile)) != nil)
+        cache.remove(file: imageFile)
+        #expect(cache.image(forKey: uploadThumbnailCacheKey(for: imageFile)) == nil)
     }
 
     @Test @MainActor func pendingUpload_previewClassificationAndCacheCleanup() async throws {
@@ -57,16 +116,20 @@ struct NotePatchTests {
         )
 
         model.stageUploadFileForPreview(pdfFile)
-        #expect(model.pendingUploadFile?.filename == "notes.pdf")
+        #expect(model.queuedUploadItems.count == 1)
+        #expect(model.queuedUploadItems.first?.file.filename == "notes.pdf")
+        #expect(model.queuedUploadItems.first?.documentKind == "homework")
         #expect(networkRequestCount == 0)
-        model.discardPendingUpload()
-        #expect(model.pendingUploadFile == nil)
+        let pdfId = try #require(model.queuedUploadItems.first?.id)
+        model.removeQueuedUpload(pdfId)
+        #expect(model.queuedUploadItems.isEmpty)
         #expect(!FileManager.default.fileExists(atPath: pdfURL.path))
 
         let externalURL = root.appendingPathComponent("external.bin")
         try Data([0x00, 0x01]).write(to: externalURL)
         model.stageUploadFileForPreview(LocalUploadFile(url: externalURL, filename: "external.bin", mimeType: nil))
-        model.discardPendingUpload()
+        let externalId = try #require(model.queuedUploadItems.first?.id)
+        model.removeQueuedUpload(externalId)
         #expect(FileManager.default.fileExists(atPath: externalURL.path))
 
         let confirmURL = cache.appendingPathComponent("confirm.pdf")
@@ -84,14 +147,25 @@ struct NotePatchTests {
             aiHistoryEnabled: true
         )
         model.selectedWorkspaceId = "ws-1"
+        model.uploadDocumentKind = "homework"
         model.stageUploadFileForPreview(LocalUploadFile(url: confirmURL, filename: "confirm.pdf", mimeType: "application/pdf"))
-        model.confirmPendingUpload()
-        #expect(model.pendingUploadFile == nil)
+        #expect(model.queuedUploadItems.first?.documentKind == "homework")
+        model.uploadDocumentKind = "note"
+        model.uploadSelectedQueuedFiles()
 
         for _ in 0..<50 where networkRequestCount == 0 {
             try await Task.sleep(nanoseconds: 20_000_000)
         }
+        for _ in 0..<50 where model.isBusy {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
         #expect(networkRequestCount == 1)
+        #expect(model.queuedUploadItems.count == 1)
+        if case .failed = model.queuedUploadItems[0].state {
+            // Expected: the mocked backend rejects the upload session request.
+        } else {
+            Issue.record("Failed queue items must remain available for retry")
+        }
     }
 
     @Test func tusHelpers_resolveURLAndUploadId() throws {
@@ -102,6 +176,69 @@ struct NotePatchTests {
         #expect(absolutePath == "http://192.168.100.123:1080/files/abc")
         #expect(otherHost == "http://other.test/upload/xyz")
         #expect(TusUploader.extractTusUploadId("http://192.168.100.123:1080/files/abc") == "abc")
+    }
+
+    @Test @MainActor func uploadQueue_preservesKindsUploadsInOrderAndRemovesSuccesses() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("NotePatchQueueTests-\(UUID().uuidString)", isDirectory: true)
+        let cache = root.appendingPathComponent("cache", isDirectory: true)
+        try FileManager.default.createDirectory(at: cache, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let firstURL = cache.appendingPathComponent("first.pdf")
+        let secondURL = cache.appendingPathComponent("second.pdf")
+        try Data().write(to: firstURL)
+        try Data().write(to: secondURL)
+
+        var kinds: [String] = []
+        var tusCreateCount = 0
+        let session = Self.mockSession { request in
+            let path = request.url?.path ?? ""
+            if request.httpMethod == "POST", path == "/api/v1/workspaces/ws-1/documents/upload-session" {
+                let body = try #require(Self.requestBodyData(request))
+                let object = try #require(try JSONSerialization.jsonObject(with: body) as? [String: Any])
+                kinds.append(try #require(object["document_kind"] as? String))
+                return Self.response(request, status: 201, body: Self.uploadSessionJSON)
+            }
+            if request.httpMethod == "POST", request.url?.host == "192.168.100.123", path.hasPrefix("/files") {
+                tusCreateCount += 1
+                let response = HTTPURLResponse(
+                    url: try #require(request.url),
+                    statusCode: 201,
+                    httpVersion: nil,
+                    headerFields: ["Location": "upload-\(tusCreateCount)", "Tus-Resumable": "1.0.0"]
+                )!
+                return (response, Data())
+            }
+            if request.httpMethod == "POST", path == "/api/v1/workspaces/ws-1/documents/complete-upload" {
+                return Self.response(request, status: 200, body: Self.completedDocumentJSON)
+            }
+            if request.httpMethod == "GET", path == "/api/v1/workspaces/ws-1/documents" {
+                return Self.response(request, status: 200, body: "[]")
+            }
+            return Self.response(request, status: 500, body: #"{"detail":"unexpected request"}"#)
+        }
+        let suiteName = "NotePatchQueueTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let model = NotePatchViewModel(
+            settings: SettingsStore(defaults: defaults, keychain: KeychainStore(service: suiteName)),
+            backendSession: session,
+            tusSession: session,
+            cacheDirectory: cache
+        )
+        model.session = SavedSession(baseURL: "https://api.test", tusBaseURL: "http://192.168.100.123:1080/files/", accessToken: "a", refreshToken: "r", expiresAt: "x", userId: "u", email: "u@test", fullName: nil, selectedWorkspaceId: "ws-1", aiHistoryEnabled: true)
+        model.selectedWorkspaceId = "ws-1"
+        model.uploadDocumentKind = "homework"
+        model.stageUploadFileForPreview(LocalUploadFile(url: firstURL, filename: "first.pdf", mimeType: "application/pdf"))
+        model.uploadDocumentKind = "note"
+        model.stageUploadFileForPreview(LocalUploadFile(url: secondURL, filename: "second.pdf", mimeType: "application/pdf"))
+
+        model.uploadSelectedQueuedFiles()
+        try await Self.waitUntil { model.queuedUploadItems.isEmpty || model.errorMessage != nil }
+
+        #expect(kinds == ["homework", "note"])
+        #expect(tusCreateCount == 2)
+        #expect(model.queuedUploadItems.isEmpty)
+        #expect(model.statusMessage == "已上传所选文件。")
     }
 
     @Test func decodeTokenWorkspaceUploadArtifactAndTaskJSON() throws {
@@ -200,6 +337,18 @@ struct NotePatchTests {
         #expect(task.payload?.objectStringValue(for: "conversation_id") == "conversation-1")
         #expect(task.result == .object(["runner": .string("mock"), "answer": .string("ok")]))
         #expect(formatOpenClawTaskResult(task.resultText) == "ok")
+
+        let deletion = try JSONDecoder.notepatch.decode(
+            DocumentDeleteResponse.self,
+            from: Data(#"{"ok":true,"document_id":"doc-1","status":"deleted","purge_status":"queued","purge_task_id":"purge-1"}"#.utf8)
+        )
+        #expect(deletion.purgeTaskId == "purge-1")
+
+        let cancellingTask = try JSONDecoder.notepatch.decode(
+            TaskItem.self,
+            from: Data(#"{"id":"task-cancel","workspace_id":"ws-1","status":"running","progress":20,"cancel_requested_at":"2026-07-11T00:00:00Z"}"#.utf8)
+        )
+        #expect(cancellingTask.cancelRequestedAt != nil)
 
         let documentDownload = try JSONDecoder.notepatch.decode(
             DownloadURLResponse.self,
@@ -322,9 +471,9 @@ struct NotePatchTests {
     @Test func authedRequest_refreshesTokenOnUnauthorized() async throws {
         let session = Self.mockSession { request in
             switch (request.httpMethod ?? "", request.url?.path ?? "") {
-            case ("GET", "/auth/me") where request.value(forHTTPHeaderField: "Authorization") == "Bearer expired":
+            case ("GET", "/api/v1/auth/me") where request.value(forHTTPHeaderField: "Authorization") == "Bearer expired":
                 return Self.response(request, status: 401, body: #"{"detail":"expired"}"#)
-            case ("POST", "/auth/refresh"):
+            case ("POST", "/api/v1/auth/refresh"):
                 return Self.response(
                     request,
                     status: 200,
@@ -345,7 +494,7 @@ struct NotePatchTests {
                     }
                     """
                 )
-            case ("GET", "/auth/me") where request.value(forHTTPHeaderField: "Authorization") == "Bearer new-access":
+            case ("GET", "/api/v1/auth/me") where request.value(forHTTPHeaderField: "Authorization") == "Bearer new-access":
                 return Self.response(
                     request,
                     status: 200,
@@ -408,7 +557,7 @@ struct NotePatchTests {
         )
 
         #expect(capturedRequest?.httpMethod == "POST")
-        #expect(capturedRequest?.url?.absoluteString == "https://api.test/workspaces/ws%201/documents/upload-session")
+        #expect(capturedRequest?.url?.absoluteString == "https://api.test/api/v1/workspaces/ws%201/documents/upload-session")
         #expect(capturedRequest?.value(forHTTPHeaderField: "Authorization") == "Bearer access")
         #expect(capturedBody?["filename"] as? String == "exam.pdf")
         #expect(capturedBody?["document_kind"] as? String == "homework")
@@ -439,7 +588,7 @@ struct NotePatchTests {
 
         let options = capturedBody?["options"] as? [String: Any]
         #expect(capturedRequest?.httpMethod == "POST")
-        #expect(capturedRequest?.url?.path == "/workspaces/ws-1/documents/doc-1/process")
+        #expect(capturedRequest?.url?.path == "/api/v1/workspaces/ws-1/documents/doc-1/process")
         #expect(options?["force_reprocess"] as? Bool == true)
         #expect(task.id == "task-1")
     }
@@ -464,7 +613,7 @@ struct NotePatchTests {
         let task = try await client.openClawChat(workspaceId: "ws-1", prompt: "总结本周错题", conversationId: "conversation-1")
 
         #expect(capturedRequest?.httpMethod == "POST")
-        #expect(capturedRequest?.url?.path == "/workspaces/ws-1/ai/chat")
+        #expect(capturedRequest?.url?.path == "/api/v1/workspaces/ws-1/ai/chat")
         #expect(capturedBody?["prompt"] as? String == "总结本周错题")
         #expect(capturedBody?["conversation_id"] as? String == "conversation-1")
         #expect(capturedBody?["input"] as? [String: Any] != nil)
@@ -477,7 +626,7 @@ struct NotePatchTests {
         let session = Self.mockSession { request in
             paths.append(request.url?.absoluteString ?? "")
             switch request.url?.path ?? "" {
-            case "/workspaces/ws-1/documents/doc-1/artifacts/artifact-1/download-url":
+            case "/api/v1/workspaces/ws-1/documents/doc-1/artifacts/artifact-1/download-url":
                 return Self.response(
                     request,
                     status: 200,
@@ -494,7 +643,7 @@ struct NotePatchTests {
                     }
                     """
                 )
-            case "/workspaces/ws-1/documents/doc-1/ocr":
+            case "/api/v1/workspaces/ws-1/documents/doc-1/ocr":
                 return Self.response(
                     request,
                     status: 200,
@@ -531,7 +680,7 @@ struct NotePatchTests {
 
         #expect(artifact.downloadURL == "https://download.test/ocr.txt")
         #expect(ocr.artifacts.first?.downloadURL == "https://download.test/ocr.txt")
-        #expect(paths.contains("https://api.test/workspaces/ws-1/documents/doc-1/ocr?include_download_url=true"))
+        #expect(paths.contains("https://api.test/api/v1/workspaces/ws-1/documents/doc-1/ocr?include_download_url=true"))
     }
 
     @Test func aiHistoryConversationAndLearningRequests_useDocumentedPaths() async throws {
@@ -539,18 +688,18 @@ struct NotePatchTests {
         let session = Self.mockSession { request in
             requests.append(request)
             switch request.url?.path ?? "" {
-            case "/auth/preferences":
+            case "/api/v1/auth/preferences":
                 return Self.response(request, status: 200, body: #"{"ai_history_enabled":false}"#)
-            case "/workspaces/ws-1/ai/conversations":
+            case "/api/v1/workspaces/ws-1/ai/conversations":
                 if request.httpMethod == "GET" {
                     return Self.response(request, status: 200, body: #"{"items":[{"id":"c-1","workspace_id":"ws-1","title":"复习","created_at":"","updated_at":""}],"page":1,"page_size":20,"total":1}"#)
                 }
                 return Self.response(request, status: 200, body: #"{"id":"c-1","workspace_id":"ws-1","title":"新标题","created_at":"","updated_at":""}"#)
-            case "/workspaces/ws-1/ai/conversations/c-1/messages":
+            case "/api/v1/workspaces/ws-1/ai/conversations/c-1/messages":
                 return Self.response(request, status: 200, body: #"{"items":[{"id":"m-1","conversation_id":"c-1","role":"assistant","content":"完成","status":"succeeded","created_at":""}],"page":1,"page_size":100,"total":1}"#)
-            case "/workspaces/ws-1/learning-units":
+            case "/api/v1/workspaces/ws-1/learning-units":
                 return Self.response(request, status: 200, body: #"[{"id":"u-1","title":"分数","subject":"数学","grade_level":"七年级","topic":"比例"}]"#)
-            case "/workspaces/ws-1/learning-units/u-1/notes":
+            case "/api/v1/workspaces/ws-1/learning-units/u-1/notes":
                 return Self.response(request, status: 200, body: #"[{"id":"n-1","learning_unit_id":"u-1","version_no":2,"title":"笔记","markdown_object_key":"m","json_object_key":"j","download_urls":{"highlighted":"https://download.test/highlighted"}}]"#)
             default:
                 return Self.response(request, status: 500, body: #"{"detail":"unexpected request"}"#)
@@ -584,14 +733,20 @@ struct NotePatchTests {
                 bodies[key] = try JSONSerialization.jsonObject(with: data) as? [String: Any]
             }
             switch key {
+<<<<<<< Updated upstream
             case "DELETE /workspaces/ws-1/documents/doc%2F1":
                 return Self.response(request, status: 202, body: #"{"ok":true,"document_id":"doc/1","status":"deleted","purge_status":"queued","purge_task_id":"purge-1"}"#)
             case "PATCH /workspaces/ws-1/ai/conversations/c-1":
+=======
+            case "DELETE /api/v1/workspaces/ws-1/documents/doc%2F1":
+                return Self.response(request, status: 202, body: #"{"ok":true,"document_id":"doc/1","status":"deleted","purge_status":"queued","purge_task_id":"purge-1"}"#)
+            case "PATCH /api/v1/workspaces/ws-1/ai/conversations/c-1":
+>>>>>>> Stashed changes
                 return Self.response(request, status: 200, body: #"{"id":"c-1","workspace_id":"ws-1","title":"新标题","created_at":"","updated_at":""}"#)
-            case "DELETE /workspaces/ws-1/ai/conversations/c-1",
-                 "DELETE /workspaces/ws-1/homeworks/h-1/references/r-1":
+            case "DELETE /api/v1/workspaces/ws-1/ai/conversations/c-1",
+                 "DELETE /api/v1/workspaces/ws-1/homeworks/h-1/references/r-1":
                 return Self.response(request, status: 204, body: "")
-            case "PATCH /auth/preferences":
+            case "PATCH /api/v1/auth/preferences":
                 return Self.response(request, status: 200, body: #"{"id":"u-1","email":"u@test","is_active":true,"ai_history_enabled":false,"created_at":""}"#)
             default:
                 return Self.response(request, status: 500, body: #"{"detail":"unexpected request"}"#)
@@ -609,8 +764,8 @@ struct NotePatchTests {
         #expect(deleted.purgeStatus == "queued")
         #expect(deleted.purgeTaskId == "purge-1")
         #expect(preference.aiHistoryEnabled == false)
-        #expect(bodies["PATCH /workspaces/ws-1/ai/conversations/c-1"]?["title"] as? String == "新标题")
-        #expect(bodies["PATCH /auth/preferences"]?["ai_history_enabled"] as? Bool == false)
+        #expect(bodies["PATCH /api/v1/workspaces/ws-1/ai/conversations/c-1"]?["title"] as? String == "新标题")
+        #expect(bodies["PATCH /api/v1/auth/preferences"]?["ai_history_enabled"] as? Bool == false)
         #expect(requests.filter { $0.httpMethod == "DELETE" }.count == 3)
     }
 
@@ -675,19 +830,19 @@ struct NotePatchTests {
                 bodies[key] = try JSONSerialization.jsonObject(with: data) as? [String: Any]
             }
             switch key {
-            case "POST /workspaces/ws-1/knowledge/search":
+            case "POST /api/v1/workspaces/ws-1/knowledge/search":
                 return Self.response(request, status: 200, body: #"{"items":[]}"#)
-            case "GET /workspaces/ws-1/homeworks":
+            case "GET /api/v1/workspaces/ws-1/homeworks":
                 return Self.response(request, status: 200, body: "[\(homeworkJSON)]")
-            case "GET /workspaces/ws-1/homeworks/h-1", "POST /workspaces/ws-1/homeworks", "PATCH /workspaces/ws-1/homeworks/h-1/grading-config":
+            case "GET /api/v1/workspaces/ws-1/homeworks/h-1", "POST /api/v1/workspaces/ws-1/homeworks", "PATCH /api/v1/workspaces/ws-1/homeworks/h-1/grading-config":
                 return Self.response(request, status: request.httpMethod == "POST" ? 201 : 200, body: homeworkJSON)
-            case "GET /workspaces/ws-1/homeworks/h-1/references":
+            case "GET /api/v1/workspaces/ws-1/homeworks/h-1/references":
                 return Self.response(request, status: 200, body: "[\(referenceJSON)]")
-            case "POST /workspaces/ws-1/homeworks/h-1/references":
+            case "POST /api/v1/workspaces/ws-1/homeworks/h-1/references":
                 return Self.response(request, status: 201, body: referenceJSON)
-            case "DELETE /workspaces/ws-1/homeworks/h-1/references/r-1":
+            case "DELETE /api/v1/workspaces/ws-1/homeworks/h-1/references/r-1":
                 return Self.response(request, status: 204, body: "")
-            case "POST /workspaces/ws-1/homeworks/h-1/grade":
+            case "POST /api/v1/workspaces/ws-1/homeworks/h-1/grade":
                 return Self.response(request, status: 201, body: Self.taskJSON)
             default:
                 return Self.response(request, status: 500, body: #"{"detail":"unexpected request"}"#)
@@ -704,13 +859,13 @@ struct NotePatchTests {
         try await client.deleteHomeworkReference(workspaceId: "ws-1", homeworkId: "h-1", referenceId: "r-1")
         _ = try await client.gradeHomework(workspaceId: "ws-1", homeworkId: "h-1")
 
-        #expect(bodies["POST /workspaces/ws-1/knowledge/search"]?["learning_unit_id"] as? String == "unit-1")
-        #expect(bodies["POST /workspaces/ws-1/knowledge/search"]?["limit"] as? Int == 6)
-        #expect(bodies["POST /workspaces/ws-1/homeworks"]?["document_id"] as? String == "doc-1")
-        #expect(bodies["PATCH /workspaces/ws-1/homeworks/h-1/grading-config"]?["max_score"] as? Double == 80)
-        #expect(bodies["PATCH /workspaces/ws-1/homeworks/h-1/grading-config"]?["rubric_text"] is NSNull)
-        #expect(bodies["POST /workspaces/ws-1/homeworks/h-1/references"]?["reference_type"] as? String == "answer_key")
-        #expect(bodies["POST /workspaces/ws-1/homeworks/h-1/grade"]?["student_user_id"] is NSNull)
+        #expect(bodies["POST /api/v1/workspaces/ws-1/knowledge/search"]?["learning_unit_id"] as? String == "unit-1")
+        #expect(bodies["POST /api/v1/workspaces/ws-1/knowledge/search"]?["limit"] as? Int == 6)
+        #expect(bodies["POST /api/v1/workspaces/ws-1/homeworks"]?["document_id"] as? String == "doc-1")
+        #expect(bodies["PATCH /api/v1/workspaces/ws-1/homeworks/h-1/grading-config"]?["max_score"] as? Double == 80)
+        #expect(bodies["PATCH /api/v1/workspaces/ws-1/homeworks/h-1/grading-config"]?["rubric_text"] is NSNull)
+        #expect(bodies["POST /api/v1/workspaces/ws-1/homeworks/h-1/references"]?["reference_type"] as? String == "answer_key")
+        #expect(bodies["POST /api/v1/workspaces/ws-1/homeworks/h-1/grade"]?["student_user_id"] is NSNull)
     }
 
     @Test @MainActor func conversationMutations_waitForServerAndDeduplicateRequests() async throws {
@@ -722,15 +877,15 @@ struct NotePatchTests {
         let session = Self.mockSession { request in
             let key = "\(request.httpMethod ?? "") \(request.url?.path ?? "")"
             switch key {
-            case "PATCH /workspaces/ws-1/ai/conversations/c-1":
+            case "PATCH /api/v1/workspaces/ws-1/ai/conversations/c-1":
                 renameCount += 1
                 Thread.sleep(forTimeInterval: 0.08)
                 return Self.response(request, status: 200, body: #"{"id":"c-1","workspace_id":"ws-1","title":"新标题","created_at":"","updated_at":""}"#)
-            case "DELETE /workspaces/ws-1/ai/conversations/c-1":
+            case "DELETE /api/v1/workspaces/ws-1/ai/conversations/c-1":
                 deleteCount += 1
                 Thread.sleep(forTimeInterval: 0.08)
                 return Self.response(request, status: 204, body: "")
-            case "GET /workspaces/ws-1/ai/conversations":
+            case "GET /api/v1/workspaces/ws-1/ai/conversations":
                 return Self.response(request, status: 200, body: #"{"items":[],"page":1,"page_size":20,"total":0}"#)
             default:
                 return Self.response(request, status: 500, body: #"{"detail":"unexpected request"}"#)
@@ -809,12 +964,21 @@ struct NotePatchTests {
             case "DELETE /workspaces/ws-1/documents/doc-1":
                 Thread.sleep(forTimeInterval: 0.08)
                 return Self.response(request, status: 202, body: #"{"ok":true,"document_id":"doc-1","status":"deleted","purge_status":"queued","purge_task_id":"purge-1"}"#)
+<<<<<<< Updated upstream
             case "GET /workspaces/ws-1/tasks/purge-1":
                 return Self.response(request, status: 200, body: Self.purgeTaskJSON(id: "purge-1", status: "succeeded", progress: 100))
             case "GET /workspaces/ws-1/tasks/purge-1/events":
                 return Self.response(request, status: 200, body: "[]")
             default:
                 return Self.response(request, status: 500, body: #"{"detail":"refresh unavailable"}"#)
+=======
+            }
+            if request.url?.path == "/api/v1/workspaces/ws-1/tasks/purge-1" {
+                return Self.response(request, status: 200, body: #"{"id":"purge-1","workspace_id":"ws-1","task_type":"purge_document","status":"succeeded","payload":{},"result":{},"progress":100}"#)
+            }
+            if request.url?.path == "/api/v1/workspaces/ws-1/tasks/purge-1/events" {
+                return Self.response(request, status: 200, body: "[]")
+>>>>>>> Stashed changes
             }
         }
         model.errorMessage = nil
@@ -828,6 +992,7 @@ struct NotePatchTests {
         #expect(model.activeTask?.taskType == "purge_document")
         #expect(model.activeTask?.status == "succeeded")
         #expect(model.errorMessage == nil)
+<<<<<<< Updated upstream
         #expect(model.statusMessage.contains("文档及派生数据已清理，但刷新失败"))
     }
 
@@ -928,6 +1093,9 @@ struct NotePatchTests {
         #expect(model.taskEvents.last?.message == "Source document was deleted")
         #expect(model.errorMessage == "Source document was deleted")
         #expect(resultReadCount == 0)
+=======
+        #expect(model.statusMessage.contains("文档已清理，但刷新失败"))
+>>>>>>> Stashed changes
     }
 
     @Test @MainActor func aiPreference_isSerializedPersistedAndRolledBackOnFailure() async throws {
@@ -978,13 +1146,13 @@ struct NotePatchTests {
         let session = Self.mockSession { request in
             let key = "\(request.httpMethod ?? "") \(request.url?.path ?? "")"
             switch key {
-            case "PATCH /workspaces/ws-1/homeworks/h-1/grading-config":
+            case "PATCH /api/v1/workspaces/ws-1/homeworks/h-1/grading-config":
                 return Self.response(request, status: 500, body: #"{"detail":"grading rejected"}"#)
-            case "DELETE /workspaces/ws-1/homeworks/h-1/references/r-1":
+            case "DELETE /api/v1/workspaces/ws-1/homeworks/h-1/references/r-1":
                 referenceDeleteCount += 1
                 Thread.sleep(forTimeInterval: 0.08)
                 return Self.response(request, status: 204, body: "")
-            case "GET /workspaces/ws-1/homeworks/h-1/references":
+            case "GET /api/v1/workspaces/ws-1/homeworks/h-1/references":
                 return Self.response(request, status: 200, body: "[]")
             default:
                 return Self.response(request, status: 500, body: #"{"detail":"unexpected request"}"#)
@@ -1079,7 +1247,7 @@ struct NotePatchTests {
         model.saveServerURLs()
 
         let restored = NotePatchViewModel(settings: SettingsStore(defaults: defaults, keychain: KeychainStore(service: suiteName)))
-        #expect(restored.apiBaseURLText == "https://api.example.test")
+        #expect(restored.apiBaseURLText == "https://api.example.test/api/v1")
         #expect(restored.tusBaseURLText == "https://tus.example.test/files/")
     }
 
@@ -1233,6 +1401,7 @@ private extension NotePatchTests {
         }
         """
 
+<<<<<<< Updated upstream
     static func purgeTaskJSON(
         id: String,
         status: String,
@@ -1259,6 +1428,32 @@ private extension NotePatchTests {
             }
             """
     }
+=======
+    static let completedDocumentJSON =
+        """
+        {
+          "id": "doc-completed",
+          "workspace_id": "ws-1",
+          "uploaded_by": "user-1",
+          "title": "Uploaded",
+          "original_filename": "uploaded.pdf",
+          "mime_type": "application/pdf",
+          "file_size": 0,
+          "file_type": "pdf",
+          "document_kind": "other",
+          "storage_backend": "s3",
+          "bucket": "notepatch",
+          "object_key": "workspaces/ws-1/documents/doc-completed/original/uploaded.pdf",
+          "upload_id": null,
+          "tus_upload_url": null,
+          "sha256": null,
+          "status": "uploaded",
+          "created_at": "",
+          "updated_at": "",
+          "artifacts": []
+        }
+        """
+>>>>>>> Stashed changes
 
     @MainActor
     static func waitUntil(

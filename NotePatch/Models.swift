@@ -1,6 +1,6 @@
 import Foundation
 
-let defaultLearningBackendBaseURL = "http://192.168.100.123:8001"
+let defaultLearningBackendBaseURL = "http://192.168.100.123:8001/api/v1"
 let defaultTUSDBaseURL = "http://192.168.100.123:1080/files/"
 
 func normalizeLearningBackendBaseURL(_ rawBaseURL: String) -> String {
@@ -14,7 +14,14 @@ func normalizeLearningBackendBaseURL(_ rawBaseURL: String) -> String {
     } else {
         withScheme = "http://\(trimmed)"
     }
-    return withScheme.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+    let normalized = withScheme.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+    guard var components = URLComponents(string: normalized) else {
+        return normalized
+    }
+    if components.path.isEmpty || components.path == "/" {
+        components.path = "/api/v1"
+    }
+    return components.string?.trimmingCharacters(in: CharacterSet(charactersIn: "/")) ?? normalized
 }
 
 func normalizeTUSBaseURL(_ rawBaseURL: String) -> String {
@@ -266,6 +273,9 @@ struct LearningDocumentItem: Decodable, Equatable, Identifiable {
     let createdAt: String
     let updatedAt: String
     let artifacts: [DocumentArtifactItem]
+    let purgeStatus: String?
+    let purgeTaskId: String?
+    let purgedAt: String?
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -290,6 +300,9 @@ struct LearningDocumentItem: Decodable, Equatable, Identifiable {
         case createdAt = "created_at"
         case updatedAt = "updated_at"
         case artifacts
+        case purgeStatus = "purge_status"
+        case purgeTaskId = "purge_task_id"
+        case purgedAt = "purged_at"
     }
 
     init(
@@ -314,7 +327,10 @@ struct LearningDocumentItem: Decodable, Equatable, Identifiable {
         purgedAt: String? = nil,
         createdAt: String = "",
         updatedAt: String = "",
-        artifacts: [DocumentArtifactItem] = []
+        artifacts: [DocumentArtifactItem] = [],
+        purgeStatus: String? = nil,
+        purgeTaskId: String? = nil,
+        purgedAt: String? = nil
     ) {
         self.id = id
         self.workspaceId = workspaceId
@@ -338,6 +354,25 @@ struct LearningDocumentItem: Decodable, Equatable, Identifiable {
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.artifacts = artifacts
+        self.purgeStatus = purgeStatus
+        self.purgeTaskId = purgeTaskId
+        self.purgedAt = purgedAt
+    }
+}
+
+struct DocumentDeleteResponse: Decodable, Equatable {
+    let ok: Bool
+    let documentId: String
+    let status: String
+    let purgeStatus: String
+    let purgeTaskId: String
+
+    enum CodingKeys: String, CodingKey {
+        case ok
+        case documentId = "document_id"
+        case status
+        case purgeStatus = "purge_status"
+        case purgeTaskId = "purge_task_id"
     }
 }
 
@@ -816,6 +851,7 @@ struct TaskItem: Decodable, Equatable, Identifiable {
     let updatedAt: String
     let startedAt: String?
     let finishedAt: String?
+    let cancelRequestedAt: String?
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -833,6 +869,7 @@ struct TaskItem: Decodable, Equatable, Identifiable {
         case updatedAt = "updated_at"
         case startedAt = "started_at"
         case finishedAt = "finished_at"
+        case cancelRequestedAt = "cancel_requested_at"
     }
 
     init(
@@ -888,6 +925,7 @@ struct TaskItem: Decodable, Equatable, Identifiable {
         updatedAt = try container.decodeIfPresent(String.self, forKey: .updatedAt) ?? ""
         startedAt = try container.decodeIfPresent(String.self, forKey: .startedAt)
         finishedAt = try container.decodeIfPresent(String.self, forKey: .finishedAt)
+        cancelRequestedAt = try container.decodeIfPresent(String.self, forKey: .cancelRequestedAt)
     }
 }
 

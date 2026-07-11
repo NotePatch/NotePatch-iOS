@@ -5,18 +5,20 @@
 ## Base URL
 
 ```bash
-VITE_API_BASE_URL=http://192.168.100.123:8001
+VITE_API_BASE_URL=http://192.168.100.123:8001/api/v1
 VITE_TUSD_BASE_URL=http://192.168.100.123:1080/files/
 ```
 
 本机开发可用：
 
 ```bash
-VITE_API_BASE_URL=http://localhost:8001
+VITE_API_BASE_URL=http://localhost:8001/api/v1
 VITE_TUSD_BASE_URL=http://localhost:1080/files/
 ```
 
 前端只需要配置 FastAPI 和 tusd 两个地址。不要配置或调用 `docserver`、SeaweedFS S3、OpenClaw Gateway；这些都是后端/worker 内部依赖，直接暴露给浏览器会绕过 NotePatch 的权限校验。
+
+后端不保留未版本化兼容路由。Android/Web 必须把所有 auth、presence、workspace、document、task、learning 和 AI 请求拼到 `VITE_API_BASE_URL`（即 `/api/v1`）之后；例如心跳是 `/api/v1/presence/heartbeat`，旧 `/presence/heartbeat` 会返回 `404`。
 
 ## Backend Snapshot
 
@@ -31,8 +33,8 @@ Backend internal
   -> PostgreSQL: metadata, task status, workspace isolation
   -> SeaweedFS S3: original files and artifacts
   -> Redis: task queues and online presence
-  -> worker(default): document_processing_pipeline, OpenClaw, grading, learning workflow tasks
-  -> ocr-worker(ocr profile): reserved for ocr_document / real PaddleOCR
+  -> worker(default): OpenClaw、grading、knowledge、notes 与 purge tasks
+  -> ocr-worker(ocr profile): document_processing_pipeline、ocr_document 与真实 PaddleOCR
   -> docserver: DocTr image rectification, internal only
   -> OpenClaw per-user gateway: internal only
 ```
@@ -46,7 +48,7 @@ Backend internal
 
 ## Web Admin Frontend
 
-仓库内置运维管理后台在 `admin/`，是独立 Vite React 应用。它面向运维管理员，不是普通用户 Web 端；移动端和用户端不应调用 `/admin/api/*`。
+仓库内置运维管理后台在 `web/admin/`，是独立 Vite React 应用。它面向运维管理员，不是普通用户 Web 端；移动端和用户端不应调用 `/admin/*`。
 
 启动：
 
@@ -61,24 +63,24 @@ docker compose up -d --build api admin-web
 http://localhost:5173
 ```
 
-管理后台仍使用现有 `/auth/login`，然后调用 `/admin/api/me` 校验登录邮箱是否在后端 `.env` 的 `ADMIN_EMAILS` 白名单中。`ADMIN_EMAILS` 为空时，后台 API 默认禁用并返回 403。
+管理后台使用 `${VITE_API_BASE_URL}/auth/login`，然后调用 `${VITE_API_BASE_URL}/admin/me` 校验登录邮箱是否在后端 `.env` 的 `ADMIN_EMAILS` 白名单中。`ADMIN_EMAILS` 为空时，后台 API 默认禁用并返回 403。
 
 后台接口只读优先：
 
 ```http
-GET /admin/api/overview
-GET /admin/api/users
-GET /admin/api/users/{user_id}
-GET /admin/api/documents
-GET /admin/api/documents/{document_id}
-GET /admin/api/documents/{document_id}/artifacts
-GET /admin/api/documents/{document_id}/download-url
-GET /admin/api/artifacts/{artifact_id}/download-url
-GET /admin/api/tasks
-GET /admin/api/tasks/{task_id}
-GET /admin/api/tasks/{task_id}/events
-GET /admin/api/queues
-GET /admin/api/services
+GET /admin/overview
+GET /admin/users
+GET /admin/users/{user_id}
+GET /admin/documents
+GET /admin/documents/{document_id}
+GET /admin/documents/{document_id}/artifacts
+GET /admin/documents/{document_id}/download-url
+GET /admin/artifacts/{artifact_id}/download-url
+GET /admin/tasks
+GET /admin/tasks/{task_id}
+GET /admin/tasks/{task_id}/events
+GET /admin/queues
+GET /admin/services
 ```
 
 后台可跨 personal workspace 做排障查询，但不会改变用户端 workspace 隔离规则。第一版不提供删除用户、删除文件、重跑 OCR 或任务重试等破坏性操作。
@@ -102,7 +104,7 @@ register/login
 ## Auth Client
 
 ```ts
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8001";
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8001/api/v1";
 
 const tokenState = {
   accessToken: localStorage.getItem("access_token"),
@@ -650,7 +652,7 @@ UI 建议：
 - 如果 latest note 有 `highlighted` 下载 URL，优先展示高亮版；否则展示普通 markdown。
 - 前端不要直接调用 OpenClaw skill；当前 skill 执行和后续替换都由后端 worker 管理。
 
-后端内部区分 `default` 和 `ocr` 两个 worker queue：`process` 创建的 `document_processing_pipeline` 与独立 `ocr_document` 都进入 `ocr` queue，其他 AI/学习任务进入 `default` queue。这个拆分不改变前端 API；前端仍只调用 `process`、轮询 task/events、读取 `/ocr` 和 artifact download-url。真实 PaddleOCR worker 由部署侧通过 `docker compose up -d --build ocr-worker` 启动，前端不需要也不能选择 worker。
+后端内部区分 `default` 和 `ocr` 两个 worker queue：`process` 创建的 `document_processing_pipeline` 与独立 `ocr_document` 都进入 `ocr` queue，其他 AI/学习任务进入 `default` queue。这个拆分不改变前端 API；前端仍只调用 `process`、轮询 task/events、读取 `/ocr` 和 artifact download-url。真实 PaddleOCR worker 由部署侧通过 `docker compose --profile ocr up -d --build ocr-worker` 启动，前端不需要也不能选择 worker。
 
 `POST /workspaces/{workspace_id}/ai/chat` 是唯一的 AI 对话入口。它创建后端异步 OpenClaw 任务，前端不直接调用 OpenClaw Gateway，也不要启动/停止容器。请求体使用 `{ "prompt": string, "conversation_id"?: string, "input": object, "options": object }`，响应是 `TaskRead`；随后轮询 task 与 events 获取 `task.result.answer` 或失败原因。会话历史由后端保存，是否注入 OpenClaw 由用户全局 `ai_history_enabled` 控制。后端会为每个用户维护独立 OpenClaw gateway 配置和用户数据目录；用户在线时 supervisor 保持 gateway 运行，worker 在任务前把该用户 personal workspace 的文档镜像到 OpenClaw workspace，再把 OpenClaw 输出上传回 SeaweedFS。
 
@@ -703,7 +705,7 @@ questions_json    application/json, OpenClaw question extractor 的结构化题�
 
 ## Knowledge Search And Grading References
 
-以下接口都需要 `Authorization: Bearer <access_token>`，并严格限制在当前 personal workspace。权威 OpenAPI 可从 `GET /openapi.json` 获取；局域网开发环境为 `http://192.168.100.123:8001/openapi.json`。
+以下接口都需要 `Authorization: Bearer <access_token>`，并严格限制在当前 personal workspace。权威 OpenAPI 可从 `GET /openapi.json` 获取；局域网开发环境为 `http://192.168.100.123:8001/api/v1/openapi.json`。
 
 ### Knowledge Search
 

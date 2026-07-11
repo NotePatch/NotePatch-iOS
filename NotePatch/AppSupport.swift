@@ -33,6 +33,36 @@ struct LocalUploadFile: Equatable, Identifiable {
     }
 }
 
+enum QueuedUploadState: Equatable {
+    case pending
+    case uploading
+    case failed(String)
+}
+
+struct QueuedUploadItem: Identifiable, Equatable {
+    let id: UUID
+    let file: LocalUploadFile
+    let documentKind: String
+    let learningMetadata: LearningMetadata
+    var isSelected: Bool
+    var state: QueuedUploadState
+
+    init(
+        file: LocalUploadFile,
+        documentKind: String,
+        learningMetadata: LearningMetadata,
+        isSelected: Bool = true,
+        state: QueuedUploadState = .pending
+    ) {
+        id = file.id
+        self.file = file
+        self.documentKind = documentKind
+        self.learningMetadata = learningMetadata
+        self.isSelected = isSelected
+        self.state = state
+    }
+}
+
 struct DownloadedPreview: Identifiable, Equatable {
     let id = UUID()
     let url: URL
@@ -228,9 +258,14 @@ func statusLabel(_ value: String) -> String {
     case "succeeded": return "成功"
     case "cancelled": return "已取消"
     case "completed": return "完成"
+    case "cancelled": return "已取消"
     case "draft": return "草稿"
     default: return value
     }
+}
+
+func canProcessDocument(status: String) -> Bool {
+    ["uploaded", "ready", "failed"].contains(status)
 }
 
 func documentKindLabel(_ value: String) -> String {

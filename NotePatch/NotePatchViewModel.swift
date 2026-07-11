@@ -10,31 +10,42 @@ private let defaultPresenceHeartbeatIntervalSeconds = 30
 private let defaultPersonalWorkspaceName = "My Workspace"
 
 enum WorkbenchTab: Int, CaseIterable, Identifiable {
+    case notes
     case documents
-    case tasks
     case openClaw
     case learning
-    case settings
 
     var id: Int { rawValue }
 
     var title: String {
         switch self {
+        case .notes: return "笔记"
         case .documents: return "文档"
-        case .tasks: return "任务"
-        case .openClaw: return "OpenClaw"
-        case .learning: return "学习"
-        case .settings: return "设置"
+        case .openClaw: return "AI"
+        case .learning: return "复习"
         }
     }
 
     var iconName: String {
         switch self {
+        case .notes: return "note.text"
         case .documents: return "doc.text"
-        case .tasks: return "checklist"
-        case .openClaw: return "bubble.left.and.bubble.right"
+        case .openClaw: return "sparkles"
         case .learning: return "book.closed"
-        case .settings: return "gearshape"
+        }
+    }
+}
+
+enum DocumentsSection: String, CaseIterable, Identifiable {
+    case documents
+    case tasks
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .documents: return "文档"
+        case .tasks: return "任务"
         }
     }
 }
@@ -88,13 +99,18 @@ final class NotePatchViewModel: ObservableObject {
     @Published var statusMessage = ""
     @Published var errorMessage: String?
     @Published var selectedTab: WorkbenchTab = .documents
+    @Published var selectedDocumentsSection: DocumentsSection = .documents
 
     @Published var workspaces: [WorkspaceItem] = []
     @Published var selectedWorkspaceId: String?
     @Published var documents: [LearningDocumentItem] = []
     @Published var activeTask: TaskItem?
     @Published var taskEvents: [TaskEventItem] = []
+<<<<<<< Updated upstream
     @Published private(set) var isDocumentPurgeRetryAvailable = false
+=======
+    @Published var failedPurgeDocument: LearningDocumentItem?
+>>>>>>> Stashed changes
     @Published var selectedArtifactDocumentId: String?
     @Published var selectedArtifacts: [DocumentArtifactItem] = []
     @Published var selectedOcrDocumentId: String?
@@ -151,7 +167,7 @@ final class NotePatchViewModel: ObservableObject {
     @Published var uploadGradeLevel = ""
     @Published var uploadTopic = ""
     @Published var downloadedPreview: DownloadedPreview?
-    @Published var pendingUploadFile: LocalUploadFile?
+    @Published var queuedUploadItems: [QueuedUploadItem] = []
     @Published private(set) var isOfflineTestMode = false
 
     private let settings: SettingsStore
@@ -161,8 +177,11 @@ final class NotePatchViewModel: ObservableObject {
     private var nextOpenClawMessageId: Int64 = 1
     private var presenceTask: Task<Void, Never>?
     private var didRestoreSession = false
+<<<<<<< Updated upstream
     private var pendingUITestUploadFile: LocalUploadFile?
     private var retryableDocumentPurgeId: String?
+=======
+>>>>>>> Stashed changes
 
     convenience init() {
         self.init(settings: SettingsStore())
@@ -193,16 +212,13 @@ final class NotePatchViewModel: ObservableObject {
             activateOfflineTestMode()
         }
         if ProcessInfo.processInfo.arguments.contains("-NotePatchUITestPendingImage") {
-            self.pendingUITestUploadFile = makeUITestPendingImage(in: cacheDirectory)
+            if let file = makeUITestPendingImage(in: cacheDirectory) {
+                queuedUploadItems = [QueuedUploadItem(file: file, documentKind: uploadDocumentKind, learningMetadata: uploadLearningMetadata)]
+            }
         }
     }
 
     func restoreIfNeeded() async {
-        if let fixture = pendingUITestUploadFile {
-            pendingUITestUploadFile = nil
-            await Task.yield()
-            pendingUploadFile = fixture
-        }
         guard !didRestoreSession, let activeSession = session else {
             return
         }
@@ -460,54 +476,68 @@ final class NotePatchViewModel: ObservableObject {
     }
 
     func uploadPickedFile(from sourceURL: URL) {
+        uploadPickedFiles(from: [sourceURL])
+    }
+
+    func uploadPickedFiles(from sourceURLs: [URL]) {
+        let documentKind = uploadDocumentKind
+        let learningMetadata = uploadLearningMetadata
         Task {
             isBusy = true
             errorMessage = nil
-            statusMessage = "正在读取文件..."
-            let didAccess = sourceURL.startAccessingSecurityScopedResource()
-            defer {
-                if didAccess {
-                    sourceURL.stopAccessingSecurityScopedResource()
+            defer { isBusy = false }
+            for sourceURL in sourceURLs {
+                statusMessage = "正在读取 \(sourceURL.lastPathComponent)..."
+                let didAccess = sourceURL.startAccessingSecurityScopedResource()
+                defer {
+                    if didAccess { sourceURL.stopAccessingSecurityScopedResource() }
                 }
-            }
-            do {
-                let uploadFile = try copyFileToUploadCache(
-                    sourceURL: sourceURL,
-                    fallbackPrefix: "file",
-                    cacheDirectory: cacheDirectory,
-                    suggestedMimeType: contentTypeForFilename(sourceURL.lastPathComponent)
-                )
-                isBusy = false
-                stageUploadFileForPreview(uploadFile)
-            } catch {
-                showError(error)
-                isBusy = false
+                do {
+                    let uploadFile = try copyFileToUploadCache(
+                        sourceURL: sourceURL,
+                        fallbackPrefix: "file",
+                        cacheDirectory: cacheDirectory,
+                        suggestedMimeType: contentTypeForFilename(sourceURL.lastPathComponent)
+                    )
+                    stageUploadFileForPreview(uploadFile, documentKind: documentKind, learningMetadata: learningMetadata)
+                } catch {
+                    showError(error)
+                }
             }
         }
     }
 
     func uploadPhotoData(_ data: Data, suggestedFilename: String, mimeType: String?) {
+        uploadPhotoData([(data: data, suggestedFilename: suggestedFilename, mimeType: mimeType)])
+    }
+
+    func uploadPhotoData(_ selections: [(data: Data, suggestedFilename: String, mimeType: String?)]) {
+        let documentKind = uploadDocumentKind
+        let learningMetadata = uploadLearningMetadata
         Task {
             isBusy = true
             errorMessage = nil
-            statusMessage = "正在读取图片..."
-            do {
-                let uploadFile = try writePhotoDataToUploadCache(
-                    data,
-                    suggestedFilename: suggestedFilename,
-                    mimeType: mimeType,
-                    cacheDirectory: cacheDirectory
-                )
-                isBusy = false
-                stageUploadFileForPreview(uploadFile)
-            } catch {
-                showError(error)
-                isBusy = false
+            defer { isBusy = false }
+            for selection in selections {
+                statusMessage = "正在读取 \(selection.suggestedFilename)..."
+                do {
+                    let uploadFile = try writePhotoDataToUploadCache(
+                        selection.data,
+                        suggestedFilename: selection.suggestedFilename,
+                        mimeType: selection.mimeType,
+                        cacheDirectory: cacheDirectory
+                    )
+                    stageUploadFileForPreview(uploadFile, documentKind: documentKind, learningMetadata: learningMetadata)
+                } catch {
+                    showError(error)
+                }
             }
         }
     }
 
     func uploadCameraImage(_ image: UIImage) {
+        let documentKind = uploadDocumentKind
+        let learningMetadata = uploadLearningMetadata
         Task {
             isBusy = true
             errorMessage = nil
@@ -515,7 +545,7 @@ final class NotePatchViewModel: ObservableObject {
             do {
                 let uploadFile = try writeImageToUploadCache(image, cacheDirectory: cacheDirectory)
                 isBusy = false
-                stageUploadFileForPreview(uploadFile)
+                stageUploadFileForPreview(uploadFile, documentKind: documentKind, learningMetadata: learningMetadata)
             } catch {
                 showError(error)
                 isBusy = false
@@ -524,102 +554,127 @@ final class NotePatchViewModel: ObservableObject {
     }
 
     func stageUploadFileForPreview(_ uploadFile: LocalUploadFile) {
-        removeCachedUploadFile(pendingUploadFile)
-        pendingUploadFile = uploadFile
+        stageUploadFileForPreview(uploadFile, documentKind: uploadDocumentKind, learningMetadata: uploadLearningMetadata)
+    }
+
+    private func stageUploadFileForPreview(
+        _ uploadFile: LocalUploadFile,
+        documentKind: String,
+        learningMetadata: LearningMetadata
+    ) {
+        queuedUploadItems.append(
+            QueuedUploadItem(
+                file: uploadFile,
+                documentKind: documentKind,
+                learningMetadata: learningMetadata
+            )
+        )
         errorMessage = nil
-        statusMessage = "已选择 \(uploadFile.filename)，请确认上传。"
+        statusMessage = "已将 \(uploadFile.filename) 加入待上传列表。"
     }
 
-    func confirmPendingUpload() {
-        guard session != nil else {
-            errorMessage = "登录状态已失效，请重新登录。"
-            return
-        }
-        guard selectedWorkspaceId != nil else {
-            errorMessage = "请先选择或恢复个人空间。"
-            return
-        }
-        guard let uploadFile = pendingUploadFile else {
-            return
-        }
-        pendingUploadFile = nil
-        uploadDocument(uploadFile)
+    func toggleQueuedUpload(_ id: UUID) {
+        guard !isBusy, let index = queuedUploadItems.firstIndex(where: { $0.id == id }) else { return }
+        queuedUploadItems[index].isSelected.toggle()
     }
 
-    func discardPendingUpload() {
-        let discardedName = pendingUploadFile?.filename
-        removeCachedUploadFile(pendingUploadFile)
-        pendingUploadFile = nil
-        if discardedName != nil {
-            errorMessage = nil
-            statusMessage = "已取消本次上传。"
-        }
+    func removeQueuedUpload(_ id: UUID) {
+        guard !isBusy, let index = queuedUploadItems.firstIndex(where: { $0.id == id }) else { return }
+        let item = queuedUploadItems.remove(at: index)
+        UploadThumbnailCache.shared.remove(file: item.file)
+        removeCachedUploadFile(item.file)
     }
 
-    func uploadDocument(_ localUploadFile: LocalUploadFile) {
-        guard let activeSession = currentSessionOrError() else {
+    func uploadSelectedQueuedFiles() {
+        guard !isBusy, let activeSession = currentSessionOrError(), let workspaceId = selectedWorkspaceId else { return }
+        let selectedIds = queuedUploadItems.filter(\.isSelected).map(\.id)
+        guard !selectedIds.isEmpty else {
+            errorMessage = "请先勾选要上传的文件或照片。"
             return
         }
-        guard let workspaceId = selectedWorkspaceId else {
-            errorMessage = "请先选择或恢复个人空间。"
-            return
-        }
+
+        isBusy = true
+        errorMessage = nil
         Task {
-            isBusy = true
-            errorMessage = nil
-            uploadProgressPercent = 0
-            uploadProgressLabel = localUploadFile.filename
-            statusMessage = "正在准备文件..."
-            defer {
-                uploadProgressPercent = nil
-                uploadProgressLabel = ""
-                isBusy = false
-            }
-            do {
-                let prepared = try prepareUploadFile(localUploadFile, cacheDirectory: cacheDirectory)
-                let client = clientFor(activeSession)
-                statusMessage = "正在创建上传会话..."
-                let uploadSession = try await client.createUploadSession(
-                    workspaceId: workspaceId,
-                    filename: prepared.filename,
-                    mimeType: prepared.mimeType ?? "application/octet-stream",
-                    fileSize: prepared.fileSize,
-                    documentKind: uploadDocumentKind,
-                    learningMetadata: uploadLearningMetadata
-                )
-                statusMessage = "正在 tus 上传..."
-                let endpoint = uploadSession.tusEndpoint.isEmpty ? activeSession.tusBaseURL : uploadSession.tusEndpoint
-                let tusResult = try await TusUploader(session: tusSession).upload(
-                    fileURL: prepared.url,
-                    endpoint: endpoint,
-                    metadataHeader: uploadSession.tusMetadataHeader
-                ) { [weak self] uploaded, total in
-                    let progress = total <= 0 ? 0 : Int((uploaded * 100) / total).clamped(to: 0...100)
-                    await MainActor.run {
-                        self?.uploadProgressPercent = progress
-                        self?.statusMessage = "正在 tus 上传：\(progress)%"
+            var failureMessages: [String] = []
+            var successCount = 0
+            for (offset, id) in selectedIds.enumerated() {
+                guard let index = queuedUploadItems.firstIndex(where: { $0.id == id }) else { continue }
+                queuedUploadItems[index].state = .uploading
+                let item = queuedUploadItems[index]
+                uploadProgressLabel = "\(offset + 1)/\(selectedIds.count) · \(item.file.filename)"
+                uploadProgressPercent = 0
+                do {
+                    try await performUpload(item, activeSession: activeSession, workspaceId: workspaceId)
+                    if let completedIndex = queuedUploadItems.firstIndex(where: { $0.id == id }) {
+                        let completed = queuedUploadItems.remove(at: completedIndex)
+                        UploadThumbnailCache.shared.remove(file: completed.file)
+                        removeCachedUploadFile(completed.file)
+                    }
+                    successCount += 1
+                } catch {
+                    let message = friendlyError(error)
+                    failureMessages.append("\(item.file.filename)：\(message)")
+                    if let failedIndex = queuedUploadItems.firstIndex(where: { $0.id == id }) {
+                        queuedUploadItems[failedIndex].state = .failed(message)
+                        queuedUploadItems[failedIndex].isSelected = true
                     }
                 }
-                statusMessage = "正在确认上传..."
-                _ = try await completeUploadWithRetry(
-                    client: client,
-                    workspaceId: workspaceId,
-                    uploadSession: uploadSession,
-                    tusResult: tusResult,
-                    file: prepared
-                )
-                try await refreshWorkspaceContent(activeSession: activeSession, workspaceId: workspaceId)
-                statusMessage = "文档上传完成。"
-            } catch {
-                showError(error)
+            }
+            if successCount > 0 {
+                try? await refreshWorkspaceContent(activeSession: activeSession, workspaceId: workspaceId)
+            }
+            uploadProgressPercent = nil
+            uploadProgressLabel = ""
+            isBusy = false
+            if failureMessages.isEmpty {
+                statusMessage = "已上传所选文件。"
+            } else {
+                errorMessage = "部分文件上传失败，可保留后重试。\n" + failureMessages.joined(separator: "\n")
             }
         }
+    }
+
+    private func performUpload(_ item: QueuedUploadItem, activeSession: SavedSession, workspaceId: String) async throws {
+        let prepared = try prepareUploadFile(item.file, cacheDirectory: cacheDirectory)
+        let client = clientFor(activeSession)
+        statusMessage = "正在创建上传会话..."
+        let uploadSession = try await client.createUploadSession(
+            workspaceId: workspaceId,
+            filename: prepared.filename,
+            mimeType: prepared.mimeType ?? "application/octet-stream",
+            fileSize: prepared.fileSize,
+            documentKind: item.documentKind,
+            learningMetadata: item.learningMetadata
+        )
+        statusMessage = "正在 tus 上传..."
+        let endpoint = uploadSession.tusEndpoint.isEmpty ? activeSession.tusBaseURL : uploadSession.tusEndpoint
+        let tusResult = try await TusUploader(session: tusSession).upload(
+            fileURL: prepared.url,
+            endpoint: endpoint,
+            metadataHeader: uploadSession.tusMetadataHeader
+        ) { [weak self] uploaded, total in
+            let progress = total <= 0 ? 0 : Int((uploaded * 100) / total).clamped(to: 0...100)
+            await MainActor.run {
+                self?.uploadProgressPercent = progress
+                self?.statusMessage = "正在 tus 上传：\(progress)%"
+            }
+        }
+        statusMessage = "正在确认上传..."
+        _ = try await completeUploadWithRetry(
+            client: client,
+            workspaceId: workspaceId,
+            uploadSession: uploadSession,
+            tusResult: tusResult,
+            file: prepared
+        )
     }
 
     func startProcessing(_ document: LearningDocumentItem) {
         guard let activeSession = currentSessionOrError(), let workspaceId = selectedWorkspaceId, !isBusy else {
             return
         }
+<<<<<<< Updated upstream
         guard isProcessableDocument(document) else {
             errorMessage = "只有已上传、就绪或失败的文档可以处理。"
             return
@@ -628,6 +683,12 @@ final class NotePatchViewModel: ObservableObject {
         errorMessage = nil
         taskEvents = []
         statusMessage = "正在触发文档处理..."
+=======
+        guard canProcessDocument(status: document.status) else {
+            errorMessage = "当前文档状态不能开始处理，请等待上传完成。"
+            return
+        }
+>>>>>>> Stashed changes
         Task {
             defer { isBusy = false }
             do {
@@ -638,7 +699,8 @@ final class NotePatchViewModel: ObservableObject {
                     forceReprocess: shouldForceReprocess(document)
                 )
                 activeTask = task
-                selectedTab = .tasks
+                selectedTab = .documents
+                selectedDocumentsSection = .tasks
                 let finishedTask = try await pollTask(activeSession: activeSession, workspaceId: workspaceId, taskId: task.id) { [weak self] updatedTask, events in
                     self?.activeTask = updatedTask
                     self?.taskEvents = events
@@ -1180,7 +1242,8 @@ final class NotePatchViewModel: ObservableObject {
             do {
                 let task = try await clientFor(activeSession).gradeHomework(workspaceId: workspaceId, homeworkId: homeworkId)
                 activeTask = task
-                selectedTab = .tasks
+                selectedTab = .documents
+                selectedDocumentsSection = .tasks
                 let finished = try await pollTask(activeSession: activeSession, workspaceId: workspaceId, taskId: task.id) { [weak self] task, events in
                     self?.activeTask = task
                     self?.taskEvents = events
@@ -1282,6 +1345,7 @@ final class NotePatchViewModel: ObservableObject {
             defer { isBusy = false }
             do {
                 let client = clientFor(activeSession)
+<<<<<<< Updated upstream
                 let response = try await client.deleteDocument(workspaceId: workspaceId, documentId: documentId)
                 deletionAccepted = true
                 retryableDocumentPurgeId = response.documentId
@@ -1307,6 +1371,42 @@ final class NotePatchViewModel: ObservableObject {
                 statusMessage = "文档及派生数据清理完成。"
                 if let refreshError = await refreshAfterDocumentDeletion(activeSession: activeSession, workspaceId: workspaceId) {
                     handlePostCommitRefreshFailure(refreshError, completion: "文档及派生数据已清理")
+=======
+                let response = try await client.deleteDocument(workspaceId: workspaceId, documentId: document.id)
+                documents.removeAll { $0.id == document.id }
+                if selectedArtifactDocumentId == document.id {
+                    selectedArtifactDocumentId = nil
+                    selectedArtifacts = []
+                }
+                if selectedOcrDocumentId == document.id {
+                    selectedOcrDocumentId = nil
+                    selectedOcrArtifacts = []
+                }
+                gradingDocuments.removeAll { $0.id == document.id }
+                homeworkReferences.removeAll { $0.documentId == document.id }
+                failedPurgeDocument = nil
+                selectedTab = .documents
+                selectedDocumentsSection = .tasks
+                let task = try await client.getTask(workspaceId: workspaceId, taskId: response.purgeTaskId)
+                activeTask = task
+                do {
+                    _ = try await pollTask(activeSession: activeSession, workspaceId: workspaceId, taskId: task.id) { [weak self] task, events in
+                        self?.activeTask = task
+                        self?.taskEvents = events
+                        self?.statusMessage = "正在清理文档：\(task.progress.clamped(to: 0...100))%"
+                    }
+                    statusMessage = "文档及相关数据已清理。"
+                    if let refreshError = await refreshAfterDocumentDeletion(activeSession: activeSession, workspaceId: workspaceId) {
+                        handlePostCommitRefreshFailure(refreshError, completion: "文档已清理")
+                    }
+                } catch {
+                    if activeTask?.status == "cancelled" {
+                        statusMessage = "文档清理已取消。"
+                    } else {
+                        failedPurgeDocument = document
+                        errorMessage = activeTask?.errorMessage ?? friendlyError(error)
+                    }
+>>>>>>> Stashed changes
                 }
             } catch {
                 if deletionAccepted && !shouldStopPostCommitRefresh(for: error) {
@@ -1590,8 +1690,12 @@ final class NotePatchViewModel: ObservableObject {
         selectedOcrDocumentId = nil
         activeTask = nil
         taskEvents = []
+<<<<<<< Updated upstream
         retryableDocumentPurgeId = nil
         isDocumentPurgeRetryAvailable = false
+=======
+        failedPurgeDocument = nil
+>>>>>>> Stashed changes
         conversations = []
         selectedConversationId = nil
         openClawMessages = [welcomeChatMessage]
@@ -1603,8 +1707,11 @@ final class NotePatchViewModel: ObservableObject {
         clearLearningWorkspaceState()
         aiHistoryEnabled = true
         passwordText = ""
-        removeCachedUploadFile(pendingUploadFile)
-        pendingUploadFile = nil
+        queuedUploadItems.forEach {
+            UploadThumbnailCache.shared.remove(file: $0.file)
+            removeCachedUploadFile($0.file)
+        }
+        queuedUploadItems = []
     }
 
     private func removeCachedUploadFile(_ file: LocalUploadFile?) {
@@ -1966,6 +2073,11 @@ final class NotePatchViewModel: ObservableObject {
     }
 
     private func clearLearningWorkspaceState() {
+        queuedUploadItems.forEach {
+            UploadThumbnailCache.shared.remove(file: $0.file)
+            removeCachedUploadFile($0.file)
+        }
+        queuedUploadItems = []
         knowledgeResults = []
         hasSearchedKnowledge = false
         homeworks = []

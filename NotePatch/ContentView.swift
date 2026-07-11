@@ -7,22 +7,13 @@ import UIKit
 struct ContentView: View {
     @StateObject private var model = NotePatchViewModel()
     @Environment(\.scenePhase) private var scenePhase
-    @State private var isShowingCamera = false
-    @State private var isShowingPhotoLibrary = false
-    @State private var isShowingFileImporter = false
-    @State private var capturedCameraImage: UIImage?
 
     var body: some View {
         Group {
             if model.session == nil {
                 AuthScreen(model: model)
             } else {
-                WorkbenchScreen(
-                    model: model,
-                    onCameraUpload: { isShowingCamera = true },
-                    onGalleryUpload: { isShowingPhotoLibrary = true },
-                    onFileUpload: { isShowingFileImporter = true }
-                )
+                WorkbenchScreen(model: model)
             }
         }
         .task {
@@ -31,44 +22,6 @@ struct ContentView: View {
         .onChange(of: scenePhase) { newPhase in
             model.handleScenePhase(newPhase)
         }
-        .fileImporter(isPresented: $isShowingFileImporter, allowedContentTypes: [.item], allowsMultipleSelection: false) { result in
-            if case .success(let urls) = result, let url = urls.first {
-                model.uploadPickedFile(from: url)
-            }
-        }
-        .sheet(isPresented: $isShowingCamera, onDismiss: stageCapturedImage) {
-            CameraPicker { image in
-                capturedCameraImage = image
-            }
-            .ignoresSafeArea()
-        }
-        .sheet(isPresented: $isShowingPhotoLibrary) {
-            PhotoLibraryPicker { result in
-                isShowingPhotoLibrary = false
-                guard let result else {
-                    return
-                }
-                switch result {
-                case .success(let selection):
-                    model.uploadPhotoData(
-                        selection.data,
-                        suggestedFilename: selection.filename,
-                        mimeType: selection.mimeType
-                    )
-                case .failure(let error):
-                    model.errorMessage = friendlyError(error)
-                }
-            }
-            .ignoresSafeArea()
-        }
-        .fullScreenCover(item: $model.pendingUploadFile) { file in
-            UploadPreviewScreen(
-                file: file,
-                documentKind: model.uploadDocumentKind,
-                onCancel: model.discardPendingUpload,
-                onUpload: model.confirmPendingUpload
-            )
-        }
         .sheet(item: $model.downloadedPreview) { preview in
             if preview.isImage {
                 ImagePreview(url: preview.url)
@@ -76,14 +29,6 @@ struct ContentView: View {
                 QuickLookPreview(url: preview.url)
             }
         }
-    }
-
-    private func stageCapturedImage() {
-        guard let image = capturedCameraImage else {
-            return
-        }
-        capturedCameraImage = nil
-        model.uploadCameraImage(image)
     }
 
 }
@@ -121,7 +66,7 @@ private struct AuthScreen: View {
                     VStack(spacing: 16) {
                         VStack(spacing: 10) {
                             AuthField(title: "API 地址", systemImage: "network") {
-                                TextField("http://192.168.100.123:8001", text: $model.apiBaseURLText)
+                                TextField("http://192.168.100.123:8001/api/v1", text: $model.apiBaseURLText)
                                     .textInputAutocapitalization(.never)
                                     .keyboardType(.URL)
                                     .accessibilityIdentifier("apiAddressField")
@@ -240,13 +185,13 @@ private struct AuthField<Field: View>: View {
 
 private struct WorkbenchScreen: View {
     @ObservedObject var model: NotePatchViewModel
-    let onCameraUpload: () -> Void
-    let onGalleryUpload: () -> Void
-    let onFileUpload: () -> Void
+    @State private var isSettingsPresented = false
 
     var body: some View {
         VStack(spacing: 0) {
-            CompactTopBar(model: model)
+            CompactTopBar(model: model) {
+                isSettingsPresented = true
+            }
             StatusBanner(
                 isBusy: model.isBusy || model.isConversationMutating || model.isAIPreferenceUpdating || model.isHomeworkLoading,
                 statusMessage: model.statusMessage,
@@ -254,18 +199,13 @@ private struct WorkbenchScreen: View {
             )
 
             TabView(selection: $model.selectedTab) {
-                DocumentsTab(
-                    model: model,
-                    onCameraUpload: onCameraUpload,
-                    onGalleryUpload: onGalleryUpload,
-                    onFileUpload: onFileUpload
-                )
+                NotesTab()
+                    .tag(WorkbenchTab.notes)
+                    .tabItem { Label(WorkbenchTab.notes.title, systemImage: WorkbenchTab.notes.iconName) }
+
+                DocumentsTab(model: model)
                 .tag(WorkbenchTab.documents)
                 .tabItem { Label(WorkbenchTab.documents.title, systemImage: WorkbenchTab.documents.iconName) }
-
-                TaskTab(model: model)
-                    .tag(WorkbenchTab.tasks)
-                    .tabItem { Label(WorkbenchTab.tasks.title, systemImage: WorkbenchTab.tasks.iconName) }
 
                 OpenClawChatTab(model: model)
                     .tag(WorkbenchTab.openClaw)
@@ -274,10 +214,6 @@ private struct WorkbenchScreen: View {
                 LearningTab(model: model)
                     .tag(WorkbenchTab.learning)
                     .tabItem { Label(WorkbenchTab.learning.title, systemImage: WorkbenchTab.learning.iconName) }
-
-                SettingsTab(model: model)
-                    .tag(WorkbenchTab.settings)
-                    .tabItem { Label(WorkbenchTab.settings.title, systemImage: WorkbenchTab.settings.iconName) }
             }
             .animation(.spring(response: 0.35, dampingFraction: 0.85), value: model.selectedTab)
             .onChange(of: model.selectedTab) { selectedTab in
@@ -288,11 +224,31 @@ private struct WorkbenchScreen: View {
             .accessibilityIdentifier("workbenchTabs")
         }
         .background(LiquidGlassBackdrop())
+        .sheet(isPresented: $isSettingsPresented) {
+            NavigationView {
+                SettingsTab(model: model)
+                    .navigationTitle("设置")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("完成") {
+                                isSettingsPresented = false
+                            }
+                        }
+                    }
+            }
+        }
+        .onChange(of: model.session) { session in
+            if session == nil {
+                isSettingsPresented = false
+            }
+        }
     }
 }
 
 private struct CompactTopBar: View {
     @ObservedObject var model: NotePatchViewModel
+    let onSettings: () -> Void
 
     var body: some View {
         let workspaceName = model.workspaces.first(where: { $0.id == model.selectedWorkspaceId })?.name
@@ -319,6 +275,15 @@ private struct CompactTopBar: View {
             .disabled(model.isBusy || model.selectedWorkspaceId == nil)
             .accessibilityLabel("刷新个人空间")
 
+            Button(action: onSettings) {
+                Image(systemName: "gearshape")
+                    .frame(width: 32, height: 32)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .accessibilityLabel("设置")
+            .accessibilityIdentifier("settingsButton")
+
             Text(accountInitial)
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(Color.accentColor)
@@ -328,7 +293,6 @@ private struct CompactTopBar: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
         .liquidGlassPanel()
-        .accessibilityIdentifier("workbenchTopBar")
     }
 
     private var accountInitial: String {
@@ -337,29 +301,73 @@ private struct CompactTopBar: View {
     }
 }
 
+private struct NotesTab: View {
+    var body: some View {
+        VStack {
+            Spacer()
+            EmptyState(
+                systemImage: "note.text",
+                title: "笔记功能准备中",
+                message: "这里将显示你的学习笔记。"
+            )
+            Spacer()
+        }
+        .padding(.horizontal, 16)
+        .accessibilityIdentifier("notesTab")
+    }
+}
+
 private struct DocumentsTab: View {
     @ObservedObject var model: NotePatchViewModel
-    let onCameraUpload: () -> Void
-    let onGalleryUpload: () -> Void
-    let onFileUpload: () -> Void
-    @State private var uploadExpanded = true
+    @State private var isUploadPresented = false
     @State private var filtersExpanded = false
 
     var body: some View {
+        VStack(spacing: 0) {
+            Picker("文档视图", selection: $model.selectedDocumentsSection) {
+                ForEach(DocumentsSection.allCases) { section in
+                    Text(section.title).tag(section)
+                }
+            }
+            .pickerStyle(.segmented)
+            .padding(.horizontal, 16)
+            .padding(.top, 12)
+            .padding(.bottom, 4)
+
+            if model.selectedDocumentsSection == .documents {
+                documentList
+            } else {
+                TaskTab(model: model)
+            }
+        }
+        .accessibilityIdentifier("documentsTab")
+        .sheet(isPresented: $isUploadPresented) {
+            NavigationView {
+                UploadDocumentScreen(model: model)
+                .navigationTitle("上传文件")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("关闭") {
+                            isUploadPresented = false
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private var documentList: some View {
         ScrollView {
             VStack(spacing: 16) {
-                CollapsibleSection(
-                    title: "上传文档",
-                    summary: model.uploadProgressPercent.map { "\(model.uploadProgressLabel) · \($0)%" } ?? documentKindLabel(model.uploadDocumentKind),
-                    expanded: $uploadExpanded
-                ) {
-                    UploadPanel(
-                        model: model,
-                        onCameraUpload: onCameraUpload,
-                        onGalleryUpload: onGalleryUpload,
-                        onFileUpload: onFileUpload
-                    )
+                Button {
+                    isUploadPresented = true
+                } label: {
+                    Label("上传文件", systemImage: "arrow.up.doc")
+                        .frame(maxWidth: .infinity)
                 }
+                .notePatchGlassButtonStyle(prominent: true)
+                .accessibilityIdentifier("showUploadPageButton")
 
                 CollapsibleSection(
                     title: "筛选",
@@ -406,7 +414,181 @@ private struct DocumentsTab: View {
             .padding(.bottom, 24)
         }
         .animation(.cardEntry, value: model.documents.count)
-        .accessibilityIdentifier("documentsTab")
+    }
+
+}
+
+private struct UploadDocumentScreen: View {
+    @ObservedObject var model: NotePatchViewModel
+    @State private var isShowingCamera = false
+    @State private var isShowingPhotoLibrary = false
+    @State private var isShowingFileImporter = false
+    @State private var queuedPreview: DownloadedPreview?
+
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 16) {
+                SectionContainer {
+                    UploadPanel(
+                        model: model,
+                        onCameraUpload: { isShowingCamera = true },
+                        onGalleryUpload: { isShowingPhotoLibrary = true },
+                        onFileUpload: { isShowingFileImporter = true }
+                    )
+                }
+
+                SectionContainer {
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack {
+                            Label("待上传", systemImage: "tray.and.arrow.up")
+                                .cardTitle()
+                            Spacer()
+                            Text("\(model.queuedUploadItems.count) 项")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+
+                        if model.queuedUploadItems.isEmpty {
+                            EmptyState(
+                                systemImage: "tray",
+                                title: "暂无待上传文件",
+                                message: "选择文件、相册或拍照后，内容会先出现在这里。"
+                            )
+                        } else {
+                            VStack(spacing: 10) {
+                                ForEach(model.queuedUploadItems) { item in
+                                    QueuedUploadRow(
+                                        item: item,
+                                        isBusy: model.isBusy,
+                                        onToggle: { model.toggleQueuedUpload(item.id) },
+                                        onPreview: { queuedPreview = DownloadedPreview(url: item.file.url, mimeType: item.file.mimeType) },
+                                        onRemove: { model.removeQueuedUpload(item.id) }
+                                    )
+                                }
+                            }
+
+                            Button {
+                                model.uploadSelectedQueuedFiles()
+                            } label: {
+                                Label("上传已选（\(model.queuedUploadItems.filter(\.isSelected).count)）", systemImage: "arrow.up.circle.fill")
+                                    .frame(maxWidth: .infinity)
+                            }
+                            .notePatchGlassButtonStyle(prominent: true)
+                            .disabled(model.isBusy || !model.queuedUploadItems.contains(where: \.isSelected))
+                            .accessibilityIdentifier("uploadSelectedQueueButton")
+                        }
+                    }
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 14)
+            .padding(.bottom, 24)
+        }
+        .background(LiquidGlassBackdrop())
+        .fileImporter(isPresented: $isShowingFileImporter, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
+            if case .success(let urls) = result {
+                model.uploadPickedFiles(from: urls)
+            }
+        }
+        .sheet(isPresented: $isShowingCamera) {
+            CameraPicker { image in
+                model.uploadCameraImage(image)
+            }
+            .ignoresSafeArea()
+        }
+        .sheet(isPresented: $isShowingPhotoLibrary) {
+            PhotoLibraryPicker { result in
+                isShowingPhotoLibrary = false
+                guard let result else { return }
+                switch result {
+                case .success(let selections):
+                    model.uploadPhotoData(selections.map {
+                        (data: $0.data, suggestedFilename: $0.filename, mimeType: $0.mimeType)
+                    })
+                case .failure(let error):
+                    model.errorMessage = friendlyError(error)
+                }
+            }
+            .ignoresSafeArea()
+        }
+        .sheet(item: $queuedPreview) { preview in
+            if preview.isImage {
+                ImagePreview(url: preview.url)
+            } else {
+                QuickLookPreview(url: preview.url)
+            }
+        }
+    }
+}
+
+private struct QueuedUploadRow: View {
+    let item: QueuedUploadItem
+    let isBusy: Bool
+    let onToggle: () -> Void
+    let onPreview: () -> Void
+    let onRemove: () -> Void
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Button(action: onToggle) {
+                Image(systemName: item.isSelected ? "checkmark.circle.fill" : "circle")
+                    .font(.title3)
+                    .foregroundStyle(item.isSelected ? Color.accentColor : .secondary)
+            }
+            .buttonStyle(.plain)
+            .disabled(isBusy)
+            .accessibilityLabel(item.isSelected ? "取消选择 \(item.file.filename)" : "选择 \(item.file.filename)")
+
+            UploadThumbnailView(file: item.file, onPreview: onPreview)
+                .disabled(isBusy)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(item.file.filename)
+                    .font(.subheadline.weight(.medium))
+                    .lineLimit(2)
+                Text("\(documentKindLabel(item.documentKind)) · \(formatBytes(item.file.fileSize))")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                queueStateView
+            }
+
+            Spacer(minLength: 0)
+
+            Button(action: onPreview) {
+                Image(systemName: "eye")
+                    .frame(width: 28, height: 28)
+            }
+            .buttonStyle(.plain)
+            .disabled(isBusy)
+            .accessibilityLabel("预览 \(item.file.filename)")
+
+            Button(role: .destructive, action: onRemove) {
+                Image(systemName: "trash")
+                    .frame(width: 28, height: 28)
+            }
+            .buttonStyle(.plain)
+            .disabled(isBusy)
+            .accessibilityLabel("移除 \(item.file.filename)")
+        }
+        .padding(10)
+        .liquidGlassField()
+    }
+
+    @ViewBuilder
+    private var queueStateView: some View {
+        switch item.state {
+        case .pending:
+            EmptyView()
+        case .uploading:
+            Label("正在上传", systemImage: "arrow.up.circle")
+                .font(.caption)
+                .foregroundStyle(Color.accentColor)
+        case .failed(let message):
+            Text(message)
+                .font(.caption)
+                .foregroundStyle(.red)
+                .lineLimit(2)
+        }
     }
 }
 
@@ -619,7 +801,11 @@ private struct DocumentRow: View {
                             .frame(maxWidth: .infinity)
                     }
                     .notePatchGlassButtonStyle(prominent: true)
+<<<<<<< Updated upstream
                     .disabled(isBusy || !canProcess)
+=======
+                    .disabled(isBusy || !canProcessDocument(status: document.status))
+>>>>>>> Stashed changes
 
                     Button(action: onDownload) {
                         Image(systemName: "arrow.down.to.line")
@@ -728,6 +914,7 @@ private struct TaskTab: View {
 
     var body: some View {
         ScrollView {
+<<<<<<< Updated upstream
             TaskPanel(
                 activeTask: model.activeTask,
                 events: model.taskEvents,
@@ -737,6 +924,24 @@ private struct TaskTab: View {
                 .padding(.horizontal, 16)
                 .padding(.top, 14)
                 .padding(.bottom, 24)
+=======
+            VStack(spacing: 12) {
+                TaskPanel(activeTask: model.activeTask, events: model.taskEvents)
+                if let document = model.failedPurgeDocument {
+                    Button {
+                        model.deleteDocument(document)
+                    } label: {
+                        Label("重试清理", systemImage: "arrow.clockwise")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .notePatchGlassButtonStyle(prominent: true)
+                    .disabled(model.isBusy)
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 14)
+            .padding(.bottom, 24)
+>>>>>>> Stashed changes
         }
         .accessibilityIdentifier("tasksTab")
     }
@@ -758,7 +963,11 @@ private struct TaskPanel: View {
                         .font(.headline)
                     Spacer()
                     if let activeTask {
+<<<<<<< Updated upstream
                         StatusPill(text: taskStatusLabel(activeTask), color: taskStatusColor(activeTask))
+=======
+                        StatusPill(text: taskStatusLabel(activeTask), color: statusColor(activeTask.status))
+>>>>>>> Stashed changes
                     }
                 }
 
@@ -872,6 +1081,13 @@ private struct TaskPanel: View {
         }
         return task.errorMessage
     }
+}
+
+private func taskStatusLabel(_ task: TaskItem) -> String {
+    if task.cancelRequestedAt != nil, !["succeeded", "failed", "cancelled"].contains(task.status) {
+        return "取消中"
+    }
+    return statusLabel(task.status)
 }
 
 private struct TaskTime: View {
@@ -2191,12 +2407,12 @@ private struct PhotoLibrarySelection {
 }
 
 private struct PhotoLibraryPicker: UIViewControllerRepresentable {
-    let onComplete: (Result<PhotoLibrarySelection, Error>?) -> Void
+    let onComplete: (Result<[PhotoLibrarySelection], Error>?) -> Void
 
     func makeUIViewController(context: Context) -> PHPickerViewController {
         var configuration = PHPickerConfiguration(photoLibrary: .shared())
         configuration.filter = .images
-        configuration.selectionLimit = 1
+        configuration.selectionLimit = 0
         let picker = PHPickerViewController(configuration: configuration)
         picker.delegate = context.coordinator
         return picker
@@ -2209,50 +2425,61 @@ private struct PhotoLibraryPicker: UIViewControllerRepresentable {
     }
 
     final class Coordinator: NSObject, PHPickerViewControllerDelegate {
-        let onComplete: (Result<PhotoLibrarySelection, Error>?) -> Void
+        let onComplete: (Result<[PhotoLibrarySelection], Error>?) -> Void
 
-        init(onComplete: @escaping (Result<PhotoLibrarySelection, Error>?) -> Void) {
+        init(onComplete: @escaping (Result<[PhotoLibrarySelection], Error>?) -> Void) {
             self.onComplete = onComplete
         }
 
         func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
-            guard let provider = results.first?.itemProvider else {
+            guard !results.isEmpty else {
                 onComplete(nil)
                 return
             }
-            guard let typeIdentifier = provider.registeredTypeIdentifiers.first(where: {
-                UTType($0)?.conforms(to: .image) == true
-            }) else {
-                onComplete(.failure(LearningBackendError("无法识别所选图片格式。")))
-                return
-            }
+            let group = DispatchGroup()
+            var selections = Array<PhotoLibrarySelection?>(repeating: nil, count: results.count)
+            var firstError: Error?
 
-            provider.loadDataRepresentation(forTypeIdentifier: typeIdentifier) { [onComplete] data, error in
-                DispatchQueue.main.async {
-                    if let error {
-                        onComplete(.failure(error))
-                        return
+            for (index, result) in results.enumerated() {
+                let provider = result.itemProvider
+                guard let typeIdentifier = provider.registeredTypeIdentifiers.first(where: {
+                    UTType($0)?.conforms(to: .image) == true
+                }) else {
+                    firstError = firstError ?? LearningBackendError("无法识别所选图片格式。")
+                    continue
+                }
+                group.enter()
+                provider.loadDataRepresentation(forTypeIdentifier: typeIdentifier) { data, error in
+                    DispatchQueue.main.async {
+                        defer { group.leave() }
+                        if let error {
+                            firstError = firstError ?? error
+                            return
+                        }
+                        guard let data else {
+                            firstError = firstError ?? LearningBackendError("无法读取选择的图片。")
+                            return
+                        }
+                        let type = UTType(typeIdentifier)
+                        let fileExtension = type?.preferredFilenameExtension ?? "jpg"
+                        let suggestedName = provider.suggestedName?.trimmingCharacters(in: .whitespacesAndNewlines)
+                        let filename = suggestedName?.isEmpty == false
+                            ? ((suggestedName! as NSString).pathExtension.isEmpty ? "\(suggestedName!).\(fileExtension)" : suggestedName!)
+                            : "selected-\(Int(Date().timeIntervalSince1970 * 1000))-\(index).\(fileExtension)"
+                        selections[index] = PhotoLibrarySelection(
+                            data: data,
+                            filename: filename,
+                            mimeType: type?.preferredMIMEType ?? contentTypeForFilename(filename)
+                        )
                     }
-                    guard let data else {
-                        onComplete(.failure(LearningBackendError("无法读取选择的图片。")))
-                        return
-                    }
-                    let type = UTType(typeIdentifier)
-                    let fileExtension = type?.preferredFilenameExtension ?? "jpg"
-                    let suggestedName = provider.suggestedName?.trimmingCharacters(in: .whitespacesAndNewlines)
-                    let filename: String
-                    if let suggestedName, !suggestedName.isEmpty {
-                        filename = (suggestedName as NSString).pathExtension.isEmpty
-                            ? "\(suggestedName).\(fileExtension)"
-                            : suggestedName
-                    } else {
-                        filename = "selected-\(Int(Date().timeIntervalSince1970 * 1000)).\(fileExtension)"
-                    }
-                    onComplete(.success(PhotoLibrarySelection(
-                        data: data,
-                        filename: filename,
-                        mimeType: type?.preferredMIMEType ?? contentTypeForFilename(filename)
-                    )))
+                }
+            }
+            group.notify(queue: .main) {
+                let loaded = selections.compactMap { $0 }
+                if loaded.isEmpty, let firstError {
+                    self.onComplete(.failure(firstError))
+                } else {
+                    self.onComplete(.success(loaded))
                 }
             }
         }
@@ -2329,126 +2556,6 @@ private struct QuickLookPreview: UIViewControllerRepresentable {
         func previewController(_ controller: QLPreviewController, previewItemAt index: Int) -> QLPreviewItem {
             url as NSURL
         }
-    }
-}
-
-private struct UploadPreviewScreen: View {
-    let file: LocalUploadFile
-    let documentKind: String
-    let onCancel: () -> Void
-    let onUpload: () -> Void
-
-    var body: some View {
-        NavigationView {
-            preview
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(previewBackground)
-                .safeAreaInset(edge: .bottom, spacing: 0) {
-                    uploadControls
-                }
-                .navigationTitle("上传预览")
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .cancellationAction) {
-                        Button(action: onCancel) {
-                            Image(systemName: "xmark")
-                        }
-                        .accessibilityLabel("取消上传")
-                    }
-                }
-        }
-        .navigationViewStyle(StackNavigationViewStyle())
-        .accessibilityIdentifier("uploadPreviewScreen")
-    }
-
-    @ViewBuilder
-    private var preview: some View {
-        switch previewKind {
-        case .image:
-            if UIImage(contentsOfFile: file.url.path) != nil {
-                ZoomableImagePreview(url: file.url)
-            } else {
-                UnsupportedUploadPreview(file: file, message: "无法读取所选图片")
-            }
-        case .quickLook:
-            QuickLookPreview(url: file.url)
-        case .unsupported:
-            UnsupportedUploadPreview(file: file, message: "此格式不支持预览，但仍可正常上传")
-        }
-    }
-
-    private var previewKind: UploadPreviewKind {
-        file.previewKind(canQuickLookPreview: QLPreviewController.canPreview(file.url as NSURL))
-    }
-
-    private var previewBackground: Color {
-        previewKind == .image ? .black : Color(.systemGroupedBackground)
-    }
-
-    private var uploadControls: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(file.filename)
-                    .font(.subheadline.weight(.semibold))
-                    .lineLimit(2)
-                    .accessibilityIdentifier("uploadPreviewFilename")
-                Text(fileDetails)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-            }
-
-            HStack(spacing: 10) {
-                Button(action: onCancel) {
-                    Text("取消")
-                        .frame(maxWidth: .infinity)
-                }
-                .notePatchGlassButtonStyle()
-                .accessibilityIdentifier("cancelPendingUploadButton")
-
-                Button(action: onUpload) {
-                    Label("上传", systemImage: "arrow.up.circle.fill")
-                        .frame(maxWidth: .infinity)
-                }
-                .notePatchGlassButtonStyle(prominent: true)
-                .accessibilityIdentifier("confirmPendingUploadButton")
-            }
-        }
-        .padding(.horizontal, 16)
-        .padding(.top, 12)
-        .padding(.bottom, 10)
-        .liquidGlassStickyFooter()
-    }
-
-    private var fileDetails: String {
-        [
-            documentKindLabel(documentKind),
-            file.mimeType ?? "未知类型",
-            formatBytes(file.fileSize)
-        ].joined(separator: " · ")
-    }
-}
-
-private struct UnsupportedUploadPreview: View {
-    let file: LocalUploadFile
-    let message: String
-
-    var body: some View {
-        VStack(spacing: 14) {
-            Image(systemName: "doc.questionmark")
-                .font(.system(size: 54, weight: .light))
-                .foregroundStyle(Color.accentColor)
-            Text(file.filename)
-                .font(.headline)
-                .multilineTextAlignment(.center)
-                .lineLimit(3)
-            Text(message)
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-        }
-        .padding(28)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
@@ -2552,12 +2659,9 @@ private struct ImagePreview: View {
     var body: some View {
         ZStack(alignment: .topTrailing) {
             Color.black.ignoresSafeArea()
-            if let image = UIImage(contentsOfFile: url.path) {
-                Image(uiImage: image)
-                    .resizable()
-                    .scaledToFit()
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .padding(12)
+            if UIImage(contentsOfFile: url.path) != nil {
+                ZoomableImagePreview(url: url)
+                    .ignoresSafeArea()
             } else {
                 Text("无法预览图片")
                     .foregroundStyle(.white)

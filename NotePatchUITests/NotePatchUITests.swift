@@ -31,12 +31,17 @@ final class NotePatchUITests: XCTestCase {
         email.typeText("uitest")
         app.buttons["loginButton"].tap()
 
+<<<<<<< Updated upstream
         XCTAssertTrue(app.otherElements["workbenchTabs"].waitForExistence(timeout: 8))
         XCTAssertTrue(app.staticTexts["My Workspace"].exists)
+=======
+        XCTAssertTrue(app.staticTexts["My Workspace"].waitForExistence(timeout: 5))
+>>>>>>> Stashed changes
         XCTAssertTrue(app.staticTexts["UI 离线测试模式"].exists)
+        XCTAssertTrue(app.tabBars.buttons["笔记"].exists)
         XCTAssertTrue(app.tabBars.buttons["文档"].exists)
-        XCTAssertTrue(app.tabBars.buttons["OpenClaw"].exists)
-        XCTAssertTrue(app.tabBars.buttons["学习"].exists)
+        XCTAssertTrue(app.tabBars.buttons["AI"].exists)
+        XCTAssertTrue(app.tabBars.buttons["复习"].exists)
     }
 
     @MainActor
@@ -47,19 +52,28 @@ final class NotePatchUITests: XCTestCase {
 
         XCTAssertTrue(app.otherElements["workbenchTabs"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["My Workspace"].exists)
+        XCTAssertTrue(app.tabBars.buttons["笔记"].exists)
         XCTAssertTrue(app.tabBars.buttons["文档"].exists)
-        XCTAssertTrue(app.tabBars.buttons["任务"].exists)
-        XCTAssertTrue(app.tabBars.buttons["OpenClaw"].exists)
-        XCTAssertTrue(app.tabBars.buttons["学习"].exists)
-        XCTAssertTrue(app.tabBars.buttons["设置"].exists)
-        app.tabBars.buttons["学习"].tap()
+        XCTAssertTrue(app.tabBars.buttons["AI"].exists)
+        XCTAssertTrue(app.tabBars.buttons["复习"].exists)
+        app.tabBars.buttons["文档"].tap()
+        let documentSections = app.segmentedControls.firstMatch
+        XCTAssertTrue(documentSections.waitForExistence(timeout: 3))
+        XCTAssertTrue(documentSections.buttons["文档"].exists)
+        XCTAssertTrue(documentSections.buttons["任务"].exists)
+        documentSections.buttons["任务"].tap()
+        XCTAssertTrue(app.staticTexts["当前任务"].waitForExistence(timeout: 3))
+        app.tabBars.buttons["复习"].tap()
         XCTAssertTrue(app.descendants(matching: .any)["learningTab"].waitForExistence(timeout: 3))
+        app.buttons["settingsButton"].tap()
+        XCTAssertTrue(app.descendants(matching: .any)["settingsTab"].waitForExistence(timeout: 3))
         XCTAssertFalse(app.staticTexts["family"].exists)
         XCTAssertFalse(app.staticTexts["class"].exists)
         XCTAssertFalse(app.staticTexts["school"].exists)
     }
 
     @MainActor
+<<<<<<< Updated upstream
     func testFailedDocumentPurgeShowsRetryAction() throws {
         let app = XCUIApplication()
         app.launchArguments.append(contentsOf: ["-NotePatchUITestWorkbench", "-NotePatchUITestPurgeFailure"])
@@ -75,20 +89,23 @@ final class NotePatchUITests: XCTestCase {
 
     @MainActor
     func testPendingImagePreviewCanBeCancelled() throws {
+=======
+    func testPendingImageAppearsInUploadQueueAndCanBeRemoved() throws {
+>>>>>>> Stashed changes
         let app = XCUIApplication()
         app.launchArguments.append(contentsOf: ["-NotePatchUITestWorkbench", "-NotePatchUITestPendingImage"])
         app.launch()
 
-        XCTAssertTrue(app.otherElements["uploadPreviewScreen"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.staticTexts["uploadPreviewFilename"].exists)
-        XCTAssertTrue(app.buttons["confirmPendingUploadButton"].exists)
-
-        let cancelButton = app.buttons["cancelPendingUploadButton"]
-        XCTAssertTrue(cancelButton.exists)
-        cancelButton.tap()
-
         XCTAssertTrue(app.otherElements["workbenchTabs"].waitForExistence(timeout: 5))
-        XCTAssertFalse(app.otherElements["uploadPreviewScreen"].exists)
+        app.tabBars.buttons["文档"].tap()
+        app.buttons["showUploadPageButton"].tap()
+        XCTAssertTrue(app.staticTexts["待上传"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.buttons["uploadQueueThumbnail"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.buttons["uploadSelectedQueueButton"].exists)
+        let removeButton = app.buttons.matching(NSPredicate(format: "label BEGINSWITH '移除 '")).firstMatch
+        XCTAssertTrue(removeButton.exists)
+        removeButton.tap()
+        XCTAssertTrue(app.staticTexts["暂无待上传文件"].waitForExistence(timeout: 3))
     }
 
     @MainActor
@@ -98,7 +115,7 @@ final class NotePatchUITests: XCTestCase {
         app.launch()
 
         XCTAssertTrue(app.otherElements["workbenchTabs"].waitForExistence(timeout: 5))
-        app.tabBars.buttons["OpenClaw"].tap()
+        app.tabBars.buttons["AI"].tap()
 
         let editor = app.textViews["问 OpenClaw"]
         XCTAssertTrue(editor.waitForExistence(timeout: 3))
@@ -114,7 +131,7 @@ final class NotePatchUITests: XCTestCase {
         app.launch()
 
         XCTAssertTrue(app.otherElements["workbenchTabs"].waitForExistence(timeout: 5))
-        app.tabBars.buttons["OpenClaw"].tap()
+        app.tabBars.buttons["AI"].tap()
 
         let editor = app.textViews["问 OpenClaw"]
         XCTAssertTrue(editor.waitForExistence(timeout: 3))
@@ -140,7 +157,7 @@ final class NotePatchUITests: XCTestCase {
         app.launch()
 
         XCTAssertTrue(app.otherElements["workbenchTabs"].waitForExistence(timeout: 5))
-        app.tabBars.buttons["学习"].tap()
+        app.tabBars.buttons["复习"].tap()
 
         let segments = app.segmentedControls.firstMatch
         XCTAssertTrue(segments.waitForExistence(timeout: 3))
