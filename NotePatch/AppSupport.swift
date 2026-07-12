@@ -99,7 +99,7 @@ func normalizeImageOrientation(_ sourceURL: URL, cacheDirectory: URL) throws -> 
         image.draw(in: CGRect(origin: .zero, size: image.size))
     }
     guard let data = rendered.jpegData(compressionQuality: 0.95) else {
-        throw LearningBackendError("无法读取图片，不能校正照片方向。")
+        throw LearningBackendError("Unable to read image; cannot correct photo orientation.")
     }
     let directory = cacheDirectory.appendingPathComponent("normalized", isDirectory: true)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -131,7 +131,7 @@ func copyFileToUploadCache(
 
 func writeImageToUploadCache(_ image: UIImage, cacheDirectory: URL) throws -> LocalUploadFile {
     guard let data = image.jpegData(compressionQuality: 0.95) else {
-        throw LearningBackendError("无法读取图片，不能校正照片方向。")
+        throw LearningBackendError("Unable to read image; cannot correct photo orientation.")
     }
     let directory = cacheDirectory.appendingPathComponent("camera", isDirectory: true)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -202,36 +202,36 @@ func friendlyError(_ error: Error) -> String {
     if let urlError = error as? URLError {
         switch urlError.code {
         case .badURL, .unsupportedURL:
-            return "服务器地址格式不正确，请检查 API 或 tus 地址。"
+            return "The server address format is incorrect. Please check the API or TUS URL."
         case .cannotFindHost, .dnsLookupFailed:
-            return "无法解析服务器地址，请检查服务器地址或网络。"
+            return "Could not resolve the server address. Please check the server address or network."
         case .cannotConnectToHost, .networkConnectionLost, .notConnectedToInternet:
-            return "无法连接到服务器，请确认设备和服务器在同一内网。"
+            return "Could not connect to the server. Please make sure the device and server are on the same local network."
         case .timedOut:
-            return "连接服务器超时。若设备浏览器能访问服务器，请检查系统是否允许 NotePatch 使用网络。"
+            return "Connection timed out. If the server is reachable from a browser, please check whether the system allows NotePatch to access the network."
         default:
             break
         }
     }
     let nsError = error as NSError
     if nsError.domain == NSCocoaErrorDomain {
-        return "网络或文件读写失败：\(nsError.localizedDescription)"
+        return "Network or file I/O error: \(nsError.localizedDescription)"
     }
     return error.localizedDescription
 }
 
 func activeFilterSummary(status: String, documentKind: String, fileType: String) -> String {
     let filters = [
-        status.isEmpty ? nil : "状态 \(statusLabel(status))",
-        documentKind.isEmpty ? nil : "类型 \(documentKindLabel(documentKind))",
-        fileType.isEmpty ? nil : "文件 \(fileTypeLabel(fileType))"
+        status.isEmpty ? nil : "Status \(statusLabel(status))",
+        documentKind.isEmpty ? nil : "Type \(documentKindLabel(documentKind))",
+        fileType.isEmpty ? nil : "File \(fileTypeLabel(fileType))"
     ].compactMap { $0 }
-    return filters.isEmpty ? "全部文档" : filters.joined(separator: " · ")
+    return filters.isEmpty ? "All Documents" : filters.joined(separator: " · ")
 }
 
 func filterChoiceLabel(_ value: String) -> String {
     if value.isEmpty {
-        return "全部"
+        return "All"
     }
     let status = statusLabel(value)
     if status != value {
@@ -246,19 +246,19 @@ func filterChoiceLabel(_ value: String) -> String {
 
 func statusLabel(_ value: String) -> String {
     switch value {
-    case "created": return "已创建"
-    case "uploading": return "上传中"
-    case "uploaded": return "已上传"
-    case "processing": return "处理中"
-    case "ready": return "就绪"
-    case "failed": return "失败"
-    case "deleted": return "已删除"
-    case "queued": return "排队"
-    case "running": return "运行中"
-    case "succeeded": return "成功"
-    case "cancelled": return "已取消"
-    case "completed": return "完成"
-    case "draft": return "草稿"
+    case "created": return "Created"
+    case "uploading": return "Uploading"
+    case "uploaded": return "Uploaded"
+    case "processing": return "Processing"
+    case "ready": return "Ready"
+    case "failed": return "Failed"
+    case "deleted": return "Deleted"
+    case "queued": return "Queued"
+    case "running": return "Running"
+    case "succeeded": return "Succeeded"
+    case "cancelled": return "Cancelled"
+    case "completed": return "Complete"
+    case "draft": return "Draft"
     default: return value
     }
 }
@@ -269,43 +269,43 @@ func canProcessDocument(status: String) -> Bool {
 
 func documentKindLabel(_ value: String) -> String {
     switch value {
-    case "homework": return "作业"
-    case "corrected_homework": return "批改作业"
-    case "courseware": return "课件"
-    case "note": return "笔记"
-    case "exam": return "试卷"
-    case "answer_key": return "答案参考"
-    case "rubric": return "评分标准"
-    case "other": return "其他"
+    case "homework": return "Homework"
+    case "corrected_homework": return "Graded Work"
+    case "courseware": return "Courseware"
+    case "note": return "Note"
+    case "exam": return "Exam"
+    case "answer_key": return "Answer Key"
+    case "rubric": return "Rubric"
+    case "other": return "Other"
     default: return value
     }
 }
 
 func fileTypeLabel(_ value: String) -> String {
     switch value {
-    case "image": return "图片"
+    case "image": return "Image"
     case "pdf": return "PDF"
     case "docx": return "DOCX"
     case "pptx": return "PPTX"
-    case "audio": return "音频"
-    case "video": return "视频"
-    case "other": return "其他"
+    case "audio": return "Audio"
+    case "video": return "Video"
+    case "other": return "Other"
     default: return value
     }
 }
 
 func artifactTypeLabel(_ value: String) -> String {
     switch value {
-    case "original": return "原始文件"
-    case "deskewed_image": return "矫正图片"
+    case "original": return "Original"
+    case "deskewed_image": return "Deskewed Image"
     case "ocr_json": return "OCR JSON"
     case "ocr_markdown": return "OCR Markdown"
-    case "ocr_text": return "OCR 文本"
-    case "questions_json": return "题目 JSON"
-    case "grading_report": return "批改报告"
-    case "summary": return "摘要"
-    case "flashcards": return "闪卡"
-    case "other": return "其他"
+    case "ocr_text": return "OCR Text"
+    case "questions_json": return "Questions JSON"
+    case "grading_report": return "Grading Report"
+    case "summary": return "Summary"
+    case "flashcards": return "Flashcards"
+    case "other": return "Other"
     default: return value
     }
 }

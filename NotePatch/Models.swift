@@ -705,10 +705,10 @@ struct StudyNoteVersion: Decodable, Equatable, Identifiable {
 
     var revisionOriginLabel: String {
         switch editOrigin {
-        case "user": return "用户修订"
-        case "admin": return "管理员修订"
-        case "skill": return "自动生成"
-        default: return versionNo > 1 ? "修订版本" : "自动生成"
+        case "user": return "User Revision"
+        case "admin": return "Admin Revision"
+        case "skill": return "Auto-generated"
+        default: return versionNo > 1 ? "Revised" : "Auto-generated"
         }
     }
 }

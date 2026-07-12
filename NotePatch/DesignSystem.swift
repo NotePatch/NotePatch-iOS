@@ -164,6 +164,58 @@ struct NPIconButtonStyle: ButtonStyle {
     }
 }
 
+// MARK: - Document Card Button Styles
+
+/// 文档卡片主操作按钮：白底 + 品牌绿描边 + 品牌绿文字，紧凑高度 36pt
+struct NPDocumentPrimaryButtonStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var isEnabled
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(NPColors.brandDark)
+            .frame(height: 36)
+            .frame(maxWidth: .infinity)
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(NPColors.brandLight.opacity(0.25))
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(NPColors.brand.opacity(0.40), lineWidth: 1)
+            }
+            .scaleEffect(configuration.isPressed ? 0.97 : 1.0)
+            .opacity(isEnabled ? 1.0 : 0.5)
+            .animation(.spring(response: 0.3, dampingFraction: 0.75), value: configuration.isPressed)
+    }
+}
+
+/// 文档卡片裸图标按钮：无边框、无背景、深灰 icon
+struct NPDocumentIconButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 17, weight: .regular))
+            .foregroundStyle(NPColors.textSecondary)
+            .scaleEffect(configuration.isPressed ? 0.88 : 1.0)
+            .animation(.spring(response: 0.3, dampingFraction: 0.75), value: configuration.isPressed)
+    }
+}
+
+/// 头部工具栏纯图标按钮：无边框、无背景、品牌绿 icon
+struct NPToolbarIconButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 18, weight: .medium))
+            .foregroundStyle(NPColors.brandDark)
+            .frame(width: 36, height: 36)
+            .background(
+                Circle()
+                    .fill(NPColors.brandLight.opacity(configuration.isPressed ? 0.40 : 0.20))
+            )
+            .scaleEffect(configuration.isPressed ? 0.93 : 1.0)
+            .animation(.spring(response: 0.3, dampingFraction: 0.75), value: configuration.isPressed)
+    }
+}
+
 // MARK: - Typography
 
 extension View {
@@ -207,8 +259,8 @@ struct NPStatusChip: View {
 
         var bg: Color {
             switch self {
-            case .brand:       return NPColors.brandLight
-            case .neutral:     return NPColors.divider
+            case .brand:       return NPColors.brandLight.opacity(0.30)
+            case .neutral:     return NPColors.divider.opacity(0.60)
             case .warning:     return NPColors.warning.opacity(0.15)
             case .destructive: return NPColors.destructive.opacity(0.12)
             }
@@ -277,3 +329,27 @@ extension Animation {
     static let npCardEntry    = Animation.spring(response: 0.35, dampingFraction: 0.85)
     static let npSheetSpring  = Animation.spring(response: 0.40, dampingFraction: 0.84)
 }
+
+// MARK: - Input Field Modifier
+
+/// 标准输入框：白底 + 14px 圆角 + 1px 细边框 + 聚焦时品牌绿描边
+struct NPInputFieldModifier: ViewModifier {
+    var isFocused: Bool = false
+
+    func body(content: Content) -> some View {
+        content
+            .background(NPColors.surface)
+            .clipShape(RoundedRectangle(cornerRadius: NPRadius.input, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: NPRadius.input, style: .continuous)
+                    .stroke(isFocused ? NPColors.brand : NPColors.border, lineWidth: 1)
+            }
+    }
+}
+
+extension View {
+    func npInputField(isFocused: Bool = false) -> some View {
+        modifier(NPInputFieldModifier(isFocused: isFocused))
+    }
+}
+

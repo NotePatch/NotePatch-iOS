@@ -21,7 +21,7 @@ final class TusUploader {
         onProgress: @escaping (Int64, Int64) async -> Void
     ) async throws -> TusUploadResult {
         guard FileManager.default.fileExists(atPath: fileURL.path) else {
-            throw LearningBackendError("上传文件不存在。")
+            throw LearningBackendError("Upload file does not exist.")
         }
         let sizeBytes = try fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize.map(Int64.init) ?? 0
         let uploadURL = try await createUpload(endpoint: endpoint, sizeBytes: sizeBytes, metadataHeader: metadataHeader)
@@ -31,7 +31,7 @@ final class TusUploader {
 
     private func createUpload(endpoint: String, sizeBytes: Int64, metadataHeader: String) async throws -> String {
         guard let url = URL(string: endpoint) else {
-            throw LearningBackendError("服务器地址格式不正确，请检查 API 或 tus 地址。")
+            throw LearningBackendError("Server address format is invalid. Please check the API or TUS address.")
         }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
@@ -45,7 +45,7 @@ final class TusUploader {
         let (data, response) = try await session.upload(for: request, from: Data())
         try validate(response: response, data: data)
         guard let location = (response as? HTTPURLResponse)?.value(forHTTPHeaderField: "Location") else {
-            throw LearningBackendError("tusd 没有返回 Location。")
+            throw LearningBackendError("TUSD did not return a Location header.")
         }
         return try Self.resolveUploadURL(endpoint: endpoint, location: location)
     }
@@ -88,14 +88,14 @@ final class TusUploader {
             }
         }
         throw LearningBackendError(
-            "tus 分块上传失败：\(lastError?.localizedDescription ?? "未知错误")",
+            "TUS chunk upload failed: \(lastError?.localizedDescription ?? "Unknown error")",
             cause: lastError
         )
     }
 
     private func patchChunk(uploadURL: String, offset: Int64, chunk: Data) async throws -> Int64 {
         guard let url = URL(string: uploadURL) else {
-            throw LearningBackendError("服务器地址格式不正确，请检查 API 或 tus 地址。")
+            throw LearningBackendError("Server address format is invalid. Please check the API or TUS address.")
         }
         var request = URLRequest(url: url)
         request.httpMethod = "PATCH"
@@ -114,7 +114,7 @@ final class TusUploader {
 
     static func checkEndpoint(_ endpoint: String, session: URLSession = .shared) async throws {
         guard let url = URL(string: endpoint) else {
-            throw LearningBackendError("服务器地址格式不正确，请检查 API 或 tus 地址。")
+            throw LearningBackendError("Server address format is invalid. Please check the API or TUS address.")
         }
         var request = URLRequest(url: url)
         request.httpMethod = "OPTIONS"
@@ -123,14 +123,14 @@ final class TusUploader {
         try validate(response: response, data: data)
         let tusVersion = (response as? HTTPURLResponse)?.value(forHTTPHeaderField: "Tus-Resumable") ?? ""
         if tusVersion.isEmpty {
-            throw LearningBackendError("tusd 没有返回 Tus-Resumable。")
+            throw LearningBackendError("TUSD did not return Tus-Resumable header.")
         }
     }
 
     static func resolveUploadURL(endpoint: String, location: String) throws -> String {
         guard let endpointURL = URL(string: endpoint),
               let resolved = URL(string: location, relativeTo: endpointURL)?.absoluteURL else {
-            throw LearningBackendError("tusd 返回的 Location 无效。")
+            throw LearningBackendError("TUSD returned an invalid Location.")
         }
         return resolved.absoluteString
     }
@@ -145,7 +145,7 @@ final class TusUploader {
 
     private static func validate(response: URLResponse, data: Data) throws {
         guard let httpResponse = response as? HTTPURLResponse else {
-            throw LearningBackendError("服务器响应无效。")
+            throw LearningBackendError("Server response is invalid.")
         }
         guard (200...299).contains(httpResponse.statusCode) else {
             throw LearningBackendError(

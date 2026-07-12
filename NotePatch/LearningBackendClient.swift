@@ -536,7 +536,7 @@ final class LearningBackendClient {
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         if status == 401, allowRefresh {
             guard let refreshToken else {
-                throw LearningBackendError("登录已过期，请重新登录。", statusCode: status, shouldClearSession: true)
+                throw LearningBackendError("Session expired. Please sign in again.", statusCode: status, shouldClearSession: true)
             }
             let attemptedRefreshToken = refreshToken
             let refreshed: TokenResponse
@@ -583,7 +583,7 @@ final class LearningBackendClient {
         )
         return try await RefreshSingleFlight.shared.value(for: key) { [weak self] in
             guard let self else {
-                throw LearningBackendError("刷新登录状态已取消。")
+                throw LearningBackendError("Session refresh was cancelled.")
             }
             return try await self.refreshTokenInternal(token)
         }
@@ -591,7 +591,7 @@ final class LearningBackendClient {
 
     private func bearerHeader() throws -> String {
         guard let accessToken, !accessToken.isEmpty else {
-            throw LearningBackendError("请先登录。", statusCode: 401, shouldClearSession: true)
+            throw LearningBackendError("Please sign in first.", statusCode: 401, shouldClearSession: true)
         }
         return "Bearer \(accessToken)"
     }
@@ -600,13 +600,13 @@ final class LearningBackendClient {
         let url: URL
         if pathOrURL.hasPrefix("http://") || pathOrURL.hasPrefix("https://") {
             guard let absoluteURL = URL(string: pathOrURL) else {
-                throw LearningBackendError("服务器地址格式不正确，请检查 API 或 tus 地址。")
+                throw LearningBackendError("Server address format is invalid. Please check the API or TUS address.")
             }
             url = absoluteURL
         } else {
             let path = pathOrURL.hasPrefix("/") ? pathOrURL : "/\(pathOrURL)"
             guard let absoluteURL = URL(string: "\(normalizedBaseURL)\(path)") else {
-                throw LearningBackendError("服务器地址格式不正确，请检查 API 或 tus 地址。")
+                throw LearningBackendError("Server address format is invalid. Please check the API or TUS address.")
             }
             url = absoluteURL
         }
@@ -626,7 +626,7 @@ final class LearningBackendClient {
 
     private func validate(response: URLResponse, data: Data) throws {
         guard let httpResponse = response as? HTTPURLResponse else {
-            throw LearningBackendError("服务器响应无效。")
+            throw LearningBackendError("Server response is invalid.")
         }
         guard (200...299).contains(httpResponse.statusCode) else {
             throw LearningBackendError(
@@ -679,19 +679,19 @@ final class LearningBackendClient {
     private static func defaultErrorMessage(_ status: Int) -> String {
         switch status {
         case 401:
-            return "登录已过期或无效，请重新登录。"
+            return "Session expired or invalid. Please sign in again."
         case 403:
-            return "当前账号无权访问该个人空间。"
+            return "This account does not have access to that workspace."
         case 404:
-            return "资源不存在或已被删除。"
+            return "Resource not found or has been deleted."
         case 409:
-            return "上传尚未完成或请求冲突，请稍后重试。"
+            return "Upload not yet complete or request conflict. Please try again later."
         case 410:
-            return "当前接口已禁用。"
+            return "This endpoint is currently disabled."
         case 422:
-            return "请求参数不符合服务器要求。"
+            return "Request parameters do not meet server requirements."
         default:
-            return "服务器请求失败：HTTP \(status)"
+            return "Server request failed: HTTP \(status)"
         }
     }
 }
