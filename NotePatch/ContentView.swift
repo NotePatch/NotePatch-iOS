@@ -404,7 +404,7 @@ private struct NotesTab: View {
             .toolbar {
                 ToolbarItem(placement: .principal) {
                     Text("Notes")
-                        .font(.system(size: 26, weight: .medium, design: .serif))
+                        .font(.system(size: 26, weight: .bold, design: .default))
                         .foregroundStyle(NPColors.textPrimary)
                         .frame(height: 48, alignment: .center)
                 }
@@ -618,7 +618,7 @@ private struct DocumentsTab: View {
     var body: some View {
         VStack(spacing: 0) {
             Text("Documents")
-                .font(.system(size: 26, weight: .medium, design: .serif))
+                .font(.system(size: 26, weight: .bold, design: .default))
                 .foregroundStyle(NPColors.textPrimary)
                 .frame(height: 48, alignment: .center)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -1792,7 +1792,7 @@ private struct LearningTab: View {
     var body: some View {
         VStack(spacing: 0) {
             Text("Review")
-                .font(.system(size: 26, weight: .medium, design: .serif))
+                .font(.system(size: 26, weight: .bold, design: .default))
                 .foregroundStyle(NPColors.textPrimary)
                 .frame(height: 48, alignment: .center)
                 .frame(maxWidth: .infinity, alignment: .leading)

@@ -42,22 +42,23 @@ extension Color {
 // MARK: - Color Tokens
 
 struct NPColors {
-    // Background
-    static let background = Color(hex: "#F8F9F7")
+    // Background — cool-toned subtle grey for depth layering
+    static let background = Color(hex: "#F5F7F8")
     static let surface     = Color(hex: "#FFFFFF")
 
     // Text
     static let textPrimary   = Color(hex: "#171717")
-    static let textSecondary = Color(hex: "#737373")
+    static let textSecondary = Color(hex: "#6B7280")
 
-    // Dividers & Borders
-    static let divider = Color(hex: "#ECEEEA")
-    static let border  = Color(hex: "#E8E8E8")
+    // Dividers & Borders — lighter, almost invisible
+    static let divider = Color(hex: "#F0F1F3")
+    static let border  = Color(hex: "#E5E7EB")
 
-    // Brand Green
+    // Brand Green — micro‑gradient endpoints
     static let brandLight = Color(hex: "#C6E3C9")
     static let brand      = Color(hex: "#7EB88B")
     static let brandDark  = Color(hex: "#4F8A63")
+    static let brandGlow  = Color(hex: "#5CBF7B")  // slightly teal‑tinted for gradient
 
     // AI bubble tint
     static let aiUserBubble = Color(hex: "#EDF8EF")
@@ -92,11 +93,11 @@ struct NPRadius {
 struct NPCardShadow: ViewModifier {
     func body(content: Content) -> some View {
         content
-            .shadow(color: Color.black.opacity(0.06), radius: 12, x: 0, y: 2)
+            .shadow(color: Color.black.opacity(0.04), radius: 16, x: 0, y: 4)
     }
 }
 
-// MARK: - Card Modifier
+// MARK: - Card Modifier (no border — floats via shadow alone)
 
 struct NPCardModifier: ViewModifier {
     var radius: CGFloat = NPRadius.card
@@ -108,10 +109,6 @@ struct NPCardModifier: ViewModifier {
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(NPColors.surface)
             .clipShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: radius, style: .continuous)
-                    .stroke(NPColors.border, lineWidth: 1)
-            }
             .modifier(NPCardShadow())
     }
 }
@@ -122,13 +119,19 @@ struct NPPrimaryButtonStyle: ButtonStyle {
     @Environment(\.isEnabled) private var isEnabled
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.body.weight(.semibold))
+            .font(.system(size: 15, weight: .semibold))
             .foregroundStyle(.white)
             .frame(height: 48)
             .frame(maxWidth: .infinity)
             .background(
                 RoundedRectangle(cornerRadius: NPRadius.button, style: .continuous)
-                    .fill(NPColors.brand)
+                    .fill(
+                        LinearGradient(
+                            colors: [NPColors.brandGlow, NPColors.brandDark],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
             )
             .scaleEffect(configuration.isPressed ? 0.97 : 1.0)
             .opacity(isEnabled ? 1.0 : 0.5)
@@ -140,13 +143,13 @@ struct NPSecondaryButtonStyle: ButtonStyle {
     @Environment(\.isEnabled) private var isEnabled
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.body.weight(.medium))
+            .font(.system(size: 14, weight: .semibold))
             .foregroundStyle(NPColors.brandDark)
             .frame(height: 44)
             .frame(maxWidth: .infinity)
             .background(
                 RoundedRectangle(cornerRadius: NPRadius.button, style: .continuous)
-                    .stroke(NPColors.brandLight, lineWidth: 1.5)
+                    .fill(NPColors.brandLight.opacity(0.30))
             )
             .scaleEffect(configuration.isPressed ? 0.97 : 1.0)
             .opacity(isEnabled ? 1.0 : 0.5)
@@ -166,7 +169,7 @@ struct NPIconButtonStyle: ButtonStyle {
 
 // MARK: - Document Card Button Styles
 
-/// 文档卡片主操作按钮：白底 + 品牌绿描边 + 品牌绿文字，紧凑高度 36pt
+/// 文档卡片主操作按钮：纯浅绿块 + 深绿文字，无边框
 struct NPDocumentPrimaryButtonStyle: ButtonStyle {
     @Environment(\.isEnabled) private var isEnabled
     func makeBody(configuration: Configuration) -> some View {
@@ -177,12 +180,8 @@ struct NPDocumentPrimaryButtonStyle: ButtonStyle {
             .frame(maxWidth: .infinity)
             .background(
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(NPColors.brandLight.opacity(0.25))
+                    .fill(NPColors.brandLight.opacity(0.30))
             )
-            .overlay {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .stroke(NPColors.brand.opacity(0.40), lineWidth: 1)
-            }
             .scaleEffect(configuration.isPressed ? 0.97 : 1.0)
             .opacity(isEnabled ? 1.0 : 0.5)
             .animation(.spring(response: 0.3, dampingFraction: 0.75), value: configuration.isPressed)
@@ -332,7 +331,7 @@ extension Animation {
 
 // MARK: - Input Field Modifier
 
-/// 标准输入框：白底 + 14px 圆角 + 1px 细边框 + 聚焦时品牌绿描边
+/// 标准输入框：白底 + 14px 圆角，聚焦时品牌绿描边，默认无边框仅靠阴影区分
 struct NPInputFieldModifier: ViewModifier {
     var isFocused: Bool = false
 
@@ -340,9 +339,10 @@ struct NPInputFieldModifier: ViewModifier {
         content
             .background(NPColors.surface)
             .clipShape(RoundedRectangle(cornerRadius: NPRadius.input, style: .continuous))
+            .shadow(color: Color.black.opacity(0.03), radius: 4, x: 0, y: 1)
             .overlay {
                 RoundedRectangle(cornerRadius: NPRadius.input, style: .continuous)
-                    .stroke(isFocused ? NPColors.brand : NPColors.border, lineWidth: 1)
+                    .stroke(isFocused ? NPColors.brandGlow : NPColors.divider, lineWidth: isFocused ? 1.5 : 0.5)
             }
     }
 }
