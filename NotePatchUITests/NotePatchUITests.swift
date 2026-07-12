@@ -80,6 +80,12 @@ final class NotePatchUITests: XCTestCase {
         XCTAssertTrue(noteTitle.waitForExistence(timeout: 3))
         noteTitle.tap()
         XCTAssertTrue(app.staticTexts["核心概念"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.buttons["editStudyNoteButton"].exists)
+        app.buttons["editStudyNoteButton"].tap()
+        XCTAssertTrue(app.textFields["studyNoteEditorTitle"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.textViews["studyNoteEditorMarkdown"].exists)
+        XCTAssertTrue(app.textFields["studyNoteEditorSummary"].exists)
+        app.buttons["取消"].tap()
     }
 
     @MainActor
@@ -126,13 +132,16 @@ final class NotePatchUITests: XCTestCase {
 
         let editor = app.textViews["问 OpenClaw"]
         XCTAssertTrue(editor.waitForExistence(timeout: 3))
+        let newConversationButton = app.buttons["新建对话"]
+        let collapsedButtonY = newConversationButton.frame.minY
         editor.tap()
+        XCTAssertGreaterThan(newConversationButton.frame.minY, collapsedButtonY)
         editor.typeText("第一行\n第二行")
         XCTAssertTrue(app.buttons["发送"].isEnabled)
     }
 
     @MainActor
-    func testOpenClawKeyboardCanBeDismissed() throws {
+    func testOpenClawKeyboardStaysVisibleAfterTyping() throws {
         let app = XCUIApplication()
         app.launchArguments.append("-NotePatchUITestWorkbench")
         app.launch()
@@ -146,15 +155,9 @@ final class NotePatchUITests: XCTestCase {
 
         let keyboard = app.keyboards.firstMatch
         XCTAssertTrue(keyboard.waitForExistence(timeout: 3))
-        let dismissButton = app.buttons["收起键盘"]
-        XCTAssertTrue(dismissButton.waitForExistence(timeout: 2))
-        dismissButton.tap()
-
-        let keyboardDismissed = expectation(
-            for: NSPredicate(format: "exists == false"),
-            evaluatedWith: keyboard
-        )
-        wait(for: [keyboardDismissed], timeout: 3)
+        editor.typeText("a")
+        XCTAssertTrue(keyboard.exists)
+        XCTAssertFalse(app.buttons["收起键盘"].exists)
     }
 
     @MainActor

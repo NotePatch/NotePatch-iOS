@@ -26,6 +26,116 @@ struct NotePatchTests {
         #expect(formatBytes(2048) == "2.0 KB")
     }
 
+    @Test @MainActor func startupLoadsOnlyDocumentsAndDefersOtherTabs() async throws {
+        let suiteName = "NotePatchTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        var paths: [String] = []
+        let session = Self.mockSession { request in
+            let path = request.url?.path ?? ""
+            paths.append(path)
+            switch path {
+            case "/api/v1/auth/me":
+                return Self.response(request, status: 200, body: #"{"id":"u-1","email":"user@example.com","full_name":"User","is_active":true,"created_at":""}"#)
+            case "/api/v1/workspaces":
+                return Self.response(request, status: 200, body: #"[{"id":"ws-1","name":"My Workspace","type":"personal","owner_user_id":"u-1","created_at":"","updated_at":""}]"#)
+            case "/api/v1/workspaces/ws-1/documents":
+                return Self.response(request, status: 200, body: "[]")
+            case "/api/v1/workspaces/ws-1/learning-units":
+                return Self.response(request, status: 200, body: #"[{"id":"unit-1","title":"比例","subject":"数学","grade_level":"七年级","topic":""}]"#)
+            case "/api/v1/workspaces/ws-1/learning-units/unit-1/notes":
+                return Self.response(request, status: 200, body: #"[{"id":"note-1","learning_unit_id":"unit-1","version_no":1,"title":"笔记","markdown_object_key":"m","json_object_key":"j","download_urls":{}}]"#)
+            default:
+                return Self.response(request, status: 500, body: #"{"detail":"unexpected request"}"#)
+            }
+        }
+        let model = NotePatchViewModel(
+            settings: SettingsStore(defaults: defaults, keychain: KeychainStore(service: suiteName)),
+            backendSession: session,
+            tusSession: session
+        )
+        model.session = SavedSession(
+            baseURL: "https://api.test",
+            tusBaseURL: "https://tus.test/",
+            accessToken: "a",
+            refreshToken: "r",
+            expiresAt: "x",
+            userId: "u-1",
+            email: "user@example.com",
+            fullName: "User",
+            selectedWorkspaceId: "ws-1",
+            aiHistoryEnabled: true
+        )
+        model.selectedWorkspaceId = "ws-1"
+
+        await model.restoreIfNeeded()
+
+        #expect(paths == [
+            "/api/v1/auth/me",
+            "/api/v1/workspaces",
+            "/api/v1/workspaces/ws-1/documents"
+        ])
+
+        model.selectedTab = .notes
+        model.ensureContentForSelectedTabLoaded()
+        try await Self.waitUntil { !model.isNotesLoading && model.studyNoteGroups.count == 1 }
+        #expect(paths.filter { $0 == "/api/v1/workspaces/ws-1/learning-units" }.count == 1)
+        #expect(paths.filter { $0 == "/api/v1/workspaces/ws-1/learning-units/unit-1/notes" }.count == 1)
+
+        model.ensureContentForSelectedTabLoaded()
+        try await Task.sleep(nanoseconds: 50_000_000)
+        #expect(paths.filter { $0 == "/api/v1/workspaces/ws-1/learning-units" }.count == 1)
+    }
+
+    @Test @MainActor func notesOverviewKeepsSuccessfulGroupsWhenOneUnitFails() async throws {
+        let suiteName = "NotePatchTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let session = Self.mockSession { request in
+            switch request.url?.path ?? "" {
+            case "/api/v1/workspaces/ws-1/learning-units":
+                return Self.response(request, status: 200, body: #"[{"id":"unit-1","title":"成功","subject":null,"grade_level":null,"topic":null},{"id":"unit-2","title":"失败","subject":null,"grade_level":null,"topic":null}]"#)
+            case "/api/v1/workspaces/ws-1/learning-units/unit-1/notes":
+                return Self.response(request, status: 200, body: #"[{"id":"note-1","learning_unit_id":"unit-1","version_no":1,"title":"笔记","markdown_object_key":"m","json_object_key":"j","download_urls":{}}]"#)
+            case "/api/v1/workspaces/ws-1/learning-units/unit-2/notes":
+                return Self.response(request, status: 500, body: #"{"detail":"worker unavailable"}"#)
+            default:
+                return Self.response(request, status: 500, body: #"{"detail":"unexpected request"}"#)
+            }
+        }
+        let model = NotePatchViewModel(
+            settings: SettingsStore(defaults: defaults, keychain: KeychainStore(service: suiteName)),
+            backendSession: session,
+            tusSession: session
+        )
+        model.session = SavedSession(baseURL: "https://api.test", tusBaseURL: "https://tus.test/", accessToken: "a", refreshToken: "r", expiresAt: "x", userId: "u", email: "u@test", fullName: nil, selectedWorkspaceId: "ws-1", aiHistoryEnabled: true)
+        model.selectedWorkspaceId = "ws-1"
+
+        model.loadNotesOverview()
+        try await Self.waitUntil { !model.isNotesLoading }
+
+        #expect(model.studyNoteGroups.map(\.learningUnit.id) == ["unit-1"])
+        #expect(model.statusMessage.contains("1 个单元加载失败"))
+    }
+
+    @Test @MainActor func markdownRenderingCachesStableBlocks() async throws {
+        clearMarkdownRenderCache()
+        let markdown = "# 标题\n\n正文 **加粗**"
+        let first = parseMarkdownBlocks(markdown)
+        let second = parseMarkdownBlocks(markdown)
+        #expect(first.map(\.id) == second.map(\.id))
+
+        let renderer = MarkdownRenderState()
+        renderer.load(markdown)
+        #expect(renderer.blocks == first)
+        #expect(cachedMarkdownInlineTokens("正文 **加粗**") == cachedMarkdownInlineTokens("正文 **加粗**"))
+
+        let longMarkdown = String(repeating: "段落内容\n\n", count: 1_000)
+        renderer.load(longMarkdown)
+        try await Self.waitUntil { !renderer.blocks.isEmpty }
+        #expect(renderer.blocks.first?.id == "block-0")
+    }
+
     @Test @MainActor func uploadThumbnail_classificationCacheKeyAndImageDownsampling() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("notepatch-thumbnail-tests-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -233,7 +343,9 @@ struct NotePatchTests {
         model.stageUploadFileForPreview(LocalUploadFile(url: secondURL, filename: "second.pdf", mimeType: "application/pdf"))
 
         model.uploadSelectedQueuedFiles()
-        try await Self.waitUntil { model.queuedUploadItems.isEmpty || model.errorMessage != nil }
+        try await Self.waitUntil {
+            model.statusMessage == "已上传所选文件。" || model.errorMessage != nil
+        }
 
         #expect(kinds == ["homework", "note"])
         #expect(tusCreateCount == 2)
@@ -520,13 +632,111 @@ struct NotePatchTests {
             accessToken: "expired",
             refreshToken: "refresh",
             session: session
-        ) { token in
+        ) { token, _ in
             refreshed = token
         }
 
         let user = try await client.me()
         #expect(user.email == "alice@example.com")
         #expect(refreshed?.accessToken == "new-access")
+    }
+
+    @Test @MainActor func concurrentUnauthorizedRequests_shareOneTokenRefresh() async throws {
+        var refreshRequestCount = 0
+        var retriedRequestCount = 0
+        let session = Self.mockSession { request in
+            switch (request.httpMethod ?? "", request.url?.path ?? "") {
+            case ("GET", "/api/v1/auth/me") where request.value(forHTTPHeaderField: "Authorization") == "Bearer expired":
+                return Self.response(request, status: 401, body: #"{"detail":"expired"}"#)
+            case ("POST", "/api/v1/auth/refresh"):
+                refreshRequestCount += 1
+                Thread.sleep(forTimeInterval: 0.05)
+                return Self.response(
+                    request,
+                    status: 200,
+                    body:
+                    """
+                    {
+                      "access_token": "new-access",
+                      "refresh_token": "new-refresh",
+                      "token_type": "bearer",
+                      "expires_at": "2026-07-09T12:00:00Z",
+                      "user": {
+                        "id": "user-1",
+                        "email": "alice@example.com",
+                        "full_name": "Alice",
+                        "is_active": true,
+                        "created_at": "2026-07-09T11:00:00Z"
+                      }
+                    }
+                    """
+                )
+            case ("GET", "/api/v1/auth/me") where request.value(forHTTPHeaderField: "Authorization") == "Bearer new-access":
+                retriedRequestCount += 1
+                return Self.response(
+                    request,
+                    status: 200,
+                    body:
+                    """
+                    {
+                      "id": "user-1",
+                      "email": "alice@example.com",
+                      "full_name": "Alice",
+                      "is_active": true,
+                      "created_at": "2026-07-09T11:00:00Z"
+                    }
+                    """
+                )
+            default:
+                return Self.response(request, status: 500, body: #"{"detail":"unexpected request"}"#)
+            }
+        }
+
+        let firstClient = LearningBackendClient(
+            baseURL: "https://api.test",
+            accessToken: "expired",
+            refreshToken: "refresh",
+            session: session
+        )
+        let secondClient = LearningBackendClient(
+            baseURL: "https://api.test",
+            accessToken: "expired",
+            refreshToken: "refresh",
+            session: session
+        )
+
+        async let firstUser = firstClient.me()
+        async let secondUser = secondClient.me()
+        let (first, second) = try await (firstUser, secondUser)
+
+        #expect(first.email == "alice@example.com")
+        #expect(second.email == "alice@example.com")
+        #expect(refreshRequestCount == 1)
+        #expect(retriedRequestCount == 2)
+    }
+
+    @Test func staleRefreshFailure_doesNotClearNewerSession() {
+        let staleRefreshFailure = LearningBackendError(
+            "refresh token expired",
+            statusCode: 401,
+            shouldClearSession: true,
+            refreshTokenAttempt: "old-refresh"
+        )
+
+        #expect(!shouldClearPersistedSession(for: staleRefreshFailure, currentRefreshToken: "new-refresh"))
+        #expect(shouldClearPersistedSession(for: staleRefreshFailure, currentRefreshToken: "old-refresh"))
+        #expect(
+            shouldClearPersistedSession(
+                for: LearningBackendError("unauthorized", statusCode: 401, shouldClearSession: true),
+                currentRefreshToken: "new-refresh"
+            )
+        )
+        #expect(
+            !shouldClearPersistedSession(
+                for: LearningBackendError("forbidden", statusCode: 403),
+                currentRefreshToken: "new-refresh"
+            )
+        )
     }
 
     @Test func createUploadSession_sendsExpectedRequestShape() async throws {
@@ -696,7 +906,7 @@ struct NotePatchTests {
                 }
                 return Self.response(request, status: 200, body: #"{"id":"c-1","workspace_id":"ws-1","title":"新标题","created_at":"","updated_at":""}"#)
             case "/api/v1/workspaces/ws-1/ai/conversations/c-1/messages":
-                return Self.response(request, status: 200, body: #"{"items":[{"id":"m-1","conversation_id":"c-1","role":"assistant","content":"完成","status":"succeeded","created_at":""}],"page":1,"page_size":100,"total":1}"#)
+                return Self.response(request, status: 200, body: #"{"items":[{"id":"m-1","conversation_id":"c-1","role":"assistant","content":"完成","status":"succeeded","created_at":"","citations":[{"chunk_id":"chunk-1","document_id":"doc-1","score":0.72,"metadata":{"page":2}}],"source_status":"partially_unavailable"}],"page":1,"page_size":100,"total":1}"#)
             case "/api/v1/workspaces/ws-1/learning-units":
                 return Self.response(request, status: 200, body: #"[{"id":"u-1","title":"分数","subject":"数学","grade_level":"七年级","topic":"比例"}]"#)
             case "/api/v1/workspaces/ws-1/learning-units/u-1/notes":
@@ -715,6 +925,9 @@ struct NotePatchTests {
         #expect(preference.aiHistoryEnabled == false)
         #expect(conversations.items.first?.title == "复习")
         #expect(messages.items.first?.status == "succeeded")
+        #expect(messages.items.first?.citations?.first?.documentId == "doc-1")
+        #expect(messages.items.first?.citations?.first?.metadata?["page"] == .number(2))
+        #expect(messages.items.first?.sourceStatus == "partially_unavailable")
         #expect(units.first?.gradeLevel == "七年级")
         #expect(notes.first?.preferredDownloadURL == "https://download.test/highlighted")
         #expect(requests.contains { $0.url?.query == "include_download_url=true" })
@@ -759,6 +972,108 @@ struct NotePatchTests {
         try await Self.waitUntil { !model.isStudyNoteLoading }
         #expect(model.studyNoteMarkdown?.contains("外项积等于内项积") == true)
         #expect(model.studyNoteReaderError == nil)
+    }
+
+    @Test @MainActor func studyNoteRevision_decodesSavesRefreshesAndPreservesConflictDraft() async throws {
+        let decoded = try JSONDecoder.notepatch.decode(
+            StudyNoteVersion.self,
+            from: Data(#"{"id":"n-1","learning_unit_id":"u-1","version_no":2,"title":"用户笔记","markdown_object_key":"m","json_object_key":"j","source_version_id":"n-0","edit_origin":"user","edit_summary":"补充例题","download_urls":null}"#.utf8)
+        )
+        #expect(decoded.downloadURLs.isEmpty)
+        #expect(decoded.sourceVersionId == "n-0")
+        #expect(decoded.revisionOriginLabel == "用户修订")
+
+        var revisionBodies: [[String: Any]] = []
+        var phase = 0
+        let suiteName = "NotePatchTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let session = Self.mockSession { request in
+            let encodedPath = request.url.flatMap {
+                URLComponents(url: $0, resolvingAgainstBaseURL: false)?.percentEncodedPath
+            } ?? ""
+            if request.httpMethod == "POST", let data = Self.requestBodyData(request) {
+                revisionBodies.append(try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:])
+            }
+            if request.url?.host == "download.test" {
+                return Self.response(request, status: 200, body: "# 服务端最新版本")
+            }
+            switch encodedPath {
+            case "/api/v1/workspaces/ws%2F1/learning-units/unit%2F1/notes/note%2F1/revisions":
+                return Self.response(request, status: 201, body: #"{"note":{"id":"new-1","learning_unit_id":"unit/1","version_no":3,"title":"新标题","markdown_object_key":"m3","json_object_key":"j3","source_version_id":"note/1","edit_origin":"user","edit_summary":"补充例题","download_urls":null},"downstream_tasks":[]}"#)
+            default:
+                return Self.response(request, status: 500, body: #"{"detail":"unexpected request"}"#)
+            }
+        }
+        let escapedClient = LearningBackendClient(baseURL: "https://api.test", accessToken: "a", refreshToken: "r", session: session)
+        let response = try await escapedClient.createStudyNoteRevision(
+            workspaceId: "ws/1",
+            learningUnitId: "unit/1",
+            baseVersionId: "note/1",
+            input: StudyNoteRevisionInput(markdown: "# 新内容", title: "新标题", editSummary: "补充例题")
+        )
+        #expect(response.note.id == "new-1")
+        #expect(response.note.downloadURLs.isEmpty)
+        #expect(revisionBodies.first?["markdown"] as? String == "# 新内容")
+        #expect(revisionBodies.first?["title"] as? String == "新标题")
+        #expect(revisionBodies.first?["edit_summary"] as? String == "补充例题")
+
+        phase = 1
+        let modelSession = Self.mockSession { request in
+            let path = request.url?.path ?? ""
+            if request.url?.host == "download.test" {
+                return Self.response(request, status: 200, body: "# 服务端最新版本")
+            }
+            switch (phase, request.httpMethod ?? "", path) {
+            case (1, "POST", "/api/v1/workspaces/ws-1/learning-units/u-1/notes/n-2/revisions"):
+                return Self.response(request, status: 201, body: #"{"note":{"id":"n-3","learning_unit_id":"u-1","version_no":3,"title":"新标题","markdown_object_key":"m3","json_object_key":"j3","source_version_id":"n-2","edit_origin":"user","edit_summary":"补充例题","download_urls":null}}"#)
+            case (1, "GET", "/api/v1/workspaces/ws-1/learning-units/u-1/notes"):
+                return Self.response(request, status: 200, body: #"[{"id":"n-3","learning_unit_id":"u-1","version_no":3,"title":"新标题","markdown_object_key":"m3","json_object_key":"j3","source_version_id":"n-2","edit_origin":"user","edit_summary":"补充例题","download_urls":{"markdown":"https://download.test/n-3.md"}},{"id":"n-2","learning_unit_id":"u-1","version_no":2,"title":"当前笔记","markdown_object_key":"m2","json_object_key":"j2","download_urls":{"markdown":"https://download.test/n-2.md"}},{"id":"n-1","learning_unit_id":"u-1","version_no":1,"title":"历史笔记","markdown_object_key":"m1","json_object_key":"j1","download_urls":{"markdown":"https://download.test/n-1.md"}}]"#)
+            case (2, "POST", "/api/v1/workspaces/ws-1/learning-units/u-1/notes/n-3/revisions"):
+                return Self.response(request, status: 409, body: #"{"detail":"base version is stale"}"#)
+            case (2, "GET", "/api/v1/workspaces/ws-1/learning-units/u-1/notes"):
+                return Self.response(request, status: 200, body: #"[{"id":"n-4","learning_unit_id":"u-1","version_no":4,"title":"服务端笔记","markdown_object_key":"m4","json_object_key":"j4","source_version_id":"n-3","edit_origin":"skill","edit_summary":null,"download_urls":{"markdown":"https://download.test/n-4.md"}},{"id":"n-3","learning_unit_id":"u-1","version_no":3,"title":"新标题","markdown_object_key":"m3","json_object_key":"j3","download_urls":{"markdown":"https://download.test/n-3.md"}}]"#)
+            default:
+                return Self.response(request, status: 500, body: #"{"detail":"unexpected request"}"#)
+            }
+        }
+        let model = NotePatchViewModel(
+            settings: SettingsStore(defaults: defaults, keychain: KeychainStore(service: suiteName)),
+            backendSession: modelSession,
+            tusSession: modelSession
+        )
+        model.session = SavedSession(baseURL: "https://api.test", tusBaseURL: "https://tus.test/", accessToken: "a", refreshToken: "r", expiresAt: "x", userId: "u", email: "u@test", fullName: nil, selectedWorkspaceId: "ws-1", aiHistoryEnabled: true)
+        model.selectedWorkspaceId = "ws-1"
+        let unit = LearningUnit(id: "u-1", title: "比例", subject: "数学", gradeLevel: nil, topic: nil)
+        let old = StudyNoteListItem(learningUnit: unit, note: StudyNoteVersion(id: "n-1", learningUnitId: "u-1", versionNo: 1, title: "历史笔记", markdownObjectKey: "m1", jsonObjectKey: "j1"))
+        let current = StudyNoteListItem(learningUnit: unit, note: StudyNoteVersion(id: "n-2", learningUnitId: "u-1", versionNo: 2, title: "当前笔记", markdownObjectKey: "m2", jsonObjectKey: "j2"))
+        model.studyNoteGroups = [StudyNoteGroup(learningUnit: unit, notes: [current, old])]
+        model.selectedStudyNoteItem = old
+        model.studyNoteMarkdown = "# 历史"
+        #expect(!model.canEditSelectedStudyNote)
+
+        model.selectedStudyNoteItem = current
+        model.studyNoteMarkdown = "# 当前"
+        model.beginStudyNoteEditing()
+        model.studyNoteDraftTitle = "新标题"
+        model.studyNoteDraftMarkdown = "# 本地新内容"
+        model.studyNoteDraftSummary = "补充例题"
+        model.saveStudyNoteRevision()
+        try await Self.waitUntil { !model.isStudyNoteSaving }
+        #expect(model.selectedStudyNoteItem?.note.id == "n-3")
+        #expect(model.studyNoteGroups.first?.notes.first?.note.id == "n-3")
+        #expect(model.studyNoteMarkdown == "# 本地新内容")
+        #expect(!model.isStudyNoteEditorPresented)
+
+        phase = 2
+        model.beginStudyNoteEditing()
+        model.studyNoteDraftMarkdown = "# 保留的本地草稿"
+        model.saveStudyNoteRevision()
+        try await Self.waitUntil { !model.isStudyNoteSaving }
+        #expect(model.isStudyNoteConflictPending)
+        #expect(model.selectedStudyNoteItem?.note.id == "n-4")
+        #expect(model.studyNoteDraftMarkdown == "# 保留的本地草稿")
+        #expect(model.studyNoteMarkdown == "# 服务端最新版本")
     }
 
     @Test func persistentMutationRequests_matchDocumentedContracts() async throws {

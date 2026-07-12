@@ -9,6 +9,17 @@ private let completeUploadMaxRetries = 5
 private let defaultPresenceHeartbeatIntervalSeconds = 30
 private let defaultPersonalWorkspaceName = "My Workspace"
 
+private enum DeferredWorkspaceContent: Hashable {
+    case notes
+    case chat
+    case learning
+}
+
+private struct DeferredWorkspaceLoadKey: Hashable {
+    let workspaceId: String
+    let content: DeferredWorkspaceContent
+}
+
 enum WorkbenchTab: Int, CaseIterable, Identifiable {
     case notes
     case documents
@@ -85,6 +96,30 @@ struct OpenClawChatMessage: Identifiable, Equatable {
     var taskId: String?
     var progress: Int?
     var events: [TaskEventItem]
+    var citations: [ChatCitation]
+    var sourceStatus: String?
+
+    init(
+        id: String,
+        role: OpenClawChatRole,
+        content: String,
+        status: OpenClawMessageStatus,
+        taskId: String?,
+        progress: Int?,
+        events: [TaskEventItem],
+        citations: [ChatCitation] = [],
+        sourceStatus: String? = nil
+    ) {
+        self.id = id
+        self.role = role
+        self.content = content
+        self.status = status
+        self.taskId = taskId
+        self.progress = progress
+        self.events = events
+        self.citations = citations
+        self.sourceStatus = sourceStatus
+    }
 }
 
 @MainActor
@@ -147,6 +182,13 @@ final class NotePatchViewModel: ObservableObject {
     @Published var studyNoteMarkdown: String?
     @Published var studyNoteReaderError: String?
     @Published var isStudyNoteLoading = false
+    @Published var isStudyNoteEditorPresented = false
+    @Published var studyNoteDraftTitle = ""
+    @Published var studyNoteDraftMarkdown = ""
+    @Published var studyNoteDraftSummary = "手动编辑"
+    @Published var studyNoteEditorError: String?
+    @Published var isStudyNoteSaving = false
+    @Published var isStudyNoteConflictPending = false
     @Published var selectedLearningSection: LearningSection = .units
     @Published var knowledgeQuery = ""
     @Published var knowledgeLearningUnitId = ""
@@ -181,6 +223,9 @@ final class NotePatchViewModel: ObservableObject {
     private var didRestoreSession = false
     private var pendingUITestUploadFile: LocalUploadFile?
     private var retryableDocumentPurgeId: String?
+    private var loadedDeferredContent = Set<DeferredWorkspaceLoadKey>()
+    private var deferredLoadTasks: [DeferredWorkspaceLoadKey: Task<Void, Never>] = [:]
+    private var deferredLoadGenerations: [DeferredWorkspaceLoadKey: UUID] = [:]
 
     convenience init() {
         self.init(settings: SettingsStore())
@@ -245,6 +290,26 @@ final class NotePatchViewModel: ObservableObject {
             stopPresence(activeSession: session, sendOffline: true, clearClientId: false)
         @unknown default:
             break
+        }
+    }
+
+    func ensureContentForSelectedTabLoaded() {
+        switch selectedTab {
+        case .notes:
+            loadNotesOverview(force: false)
+        case .openClaw:
+            loadChatHistory(force: false)
+        case .learning:
+            loadLearningDashboard(force: false)
+        case .documents:
+            break
+        }
+    }
+
+    func dismissStatusBanner() {
+        errorMessage = nil
+        if !isBusy {
+            statusMessage = ""
         }
     }
 
@@ -822,21 +887,27 @@ final class NotePatchViewModel: ObservableObject {
         )
     }
 
-    func loadChatHistory() {
-        if isOfflineTestMode { return }
-        guard let activeSession = currentSessionOrError(), let workspaceId = selectedWorkspaceId else { return }
-        Task {
-            isChatHistoryLoading = true
-            defer { isChatHistoryLoading = false }
-            do {
-                try await refreshConversations(activeSession: activeSession, workspaceId: workspaceId)
-                if let conversationId = selectedConversationId {
-                    try await refreshConversationMessages(activeSession: activeSession, workspaceId: workspaceId, conversationId: conversationId)
-                } else {
-                    openClawMessages = [welcomeChatMessage]
-                }
-            } catch {
-                showError(error)
+    func loadChatHistory(force: Bool = true) {
+        beginDeferredLoad(
+            .chat,
+            force: force,
+            setLoading: { [weak self] isLoading in self?.isChatHistoryLoading = isLoading }
+        ) { [weak self] activeSession, workspaceId, isCurrent in
+            guard let self else { return }
+            try await self.refreshConversations(
+                activeSession: activeSession,
+                workspaceId: workspaceId,
+                shouldApply: isCurrent
+            )
+            if let conversationId = self.selectedConversationId {
+                try await self.refreshConversationMessages(
+                    activeSession: activeSession,
+                    workspaceId: workspaceId,
+                    conversationId: conversationId,
+                    shouldApply: isCurrent
+                )
+            } else if isCurrent() {
+                self.openClawMessages = [self.welcomeChatMessage]
             }
         }
     }
@@ -956,53 +1027,43 @@ final class NotePatchViewModel: ObservableObject {
         }
     }
 
-    func loadLearningDashboard(allowOfflineNetwork: Bool = false) {
-        if isOfflineTestMode && !allowOfflineNetwork { return }
-        guard let activeSession = currentSessionOrError(), let workspaceId = selectedWorkspaceId else { return }
-        Task {
-            isLearningLoading = true
-            isHomeworkLoading = true
-            defer {
-                isLearningLoading = false
-                isHomeworkLoading = false
+    func loadLearningDashboard(allowOfflineNetwork: Bool = false, force: Bool = true) {
+        beginDeferredLoad(
+            .learning,
+            force: force,
+            allowOfflineNetwork: allowOfflineNetwork,
+            setLoading: { [weak self] isLoading in
+                self?.isLearningLoading = isLoading
+                self?.isHomeworkLoading = isLoading
             }
-            var firstError: Error?
-            do { try await refreshLearningUnits(activeSession: activeSession, workspaceId: workspaceId) }
-            catch { firstError = error }
-            do { try await refreshHomeworks(activeSession: activeSession, workspaceId: workspaceId) }
-            catch { if firstError == nil { firstError = error } }
-            if let firstError { showError(firstError) }
+        ) { [weak self] activeSession, workspaceId, isCurrent in
+            guard let self else { return }
+            try await self.loadLearningDashboardContent(
+                activeSession: activeSession,
+                workspaceId: workspaceId,
+                shouldApply: isCurrent
+            )
         }
     }
 
-    func loadNotesOverview(allowOfflineNetwork: Bool = false) {
-        if isOfflineTestMode && !allowOfflineNetwork { return }
-        guard let activeSession = currentSessionOrError(), let workspaceId = selectedWorkspaceId else { return }
-        isNotesLoading = true
-        errorMessage = nil
-        Task {
-            defer { isNotesLoading = false }
-            do {
-                let client = clientFor(activeSession)
-                let units = try await client.listLearningUnits(workspaceId: workspaceId)
-                learningUnits = units
-                var groups: [StudyNoteGroup] = []
-                for unit in units {
-                    let notes = try await client.listStudyNotes(workspaceId: workspaceId, learningUnitId: unit.id)
-                        .sorted { lhs, rhs in lhs.versionNo > rhs.versionNo }
-                        .map { StudyNoteListItem(learningUnit: unit, note: $0) }
-                    if !notes.isEmpty {
-                        groups.append(StudyNoteGroup(learningUnit: unit, notes: notes))
-                    }
-                }
-                studyNoteGroups = groups
-            } catch {
-                showError(error)
-            }
+    func loadNotesOverview(allowOfflineNetwork: Bool = false, force: Bool = true) {
+        beginDeferredLoad(
+            .notes,
+            force: force,
+            allowOfflineNetwork: allowOfflineNetwork,
+            setLoading: { [weak self] isLoading in self?.isNotesLoading = isLoading }
+        ) { [weak self] activeSession, workspaceId, isCurrent in
+            guard let self else { return }
+            try await self.loadNotesOverviewContent(
+                activeSession: activeSession,
+                workspaceId: workspaceId,
+                shouldApply: isCurrent
+            )
         }
     }
 
     func openStudyNote(_ item: StudyNoteListItem) {
+        cancelStudyNoteEditing()
         selectedStudyNoteItem = item
         studyNoteMarkdown = nil
         studyNoteReaderError = nil
@@ -1038,14 +1099,7 @@ final class NotePatchViewModel: ObservableObject {
         Task {
             defer { isStudyNoteLoading = false }
             do {
-                let filename = "\(item.note.id)-\(sanitizeFileName(item.note.title.isEmpty ? "study-note" : item.note.title)).md"
-                let targetURL = cacheDirectory
-                    .appendingPathComponent("study-notes", isDirectory: true)
-                    .appendingPathComponent(filename)
-                let downloadedURL = try await clientFor(activeSession).download(downloadURL: downloadURL, targetURL: targetURL)
-                guard let markdown = String(data: try Data(contentsOf: downloadedURL), encoding: .utf8) else {
-                    throw LearningBackendError("笔记内容不是 UTF-8 Markdown。")
-                }
+                let markdown = try await loadStudyNoteMarkdown(activeSession: activeSession, note: item.note)
                 guard selectedStudyNoteItem?.id == item.id else { return }
                 studyNoteMarkdown = markdown
                 statusMessage = "笔记已加载。"
@@ -1057,10 +1111,134 @@ final class NotePatchViewModel: ObservableObject {
     }
 
     func closeStudyNoteReader() {
+        cancelStudyNoteEditing()
         selectedStudyNoteItem = nil
         studyNoteMarkdown = nil
         studyNoteReaderError = nil
         isStudyNoteLoading = false
+    }
+
+    var canEditSelectedStudyNote: Bool {
+        guard let item = selectedStudyNoteItem,
+              let group = studyNoteGroups.first(where: { $0.learningUnit.id == item.learningUnit.id }) else {
+            return false
+        }
+        return group.notes.first?.id == item.id && studyNoteMarkdown != nil && !isStudyNoteLoading
+    }
+
+    func beginStudyNoteEditing() {
+        guard canEditSelectedStudyNote, let item = selectedStudyNoteItem, let markdown = studyNoteMarkdown else {
+            studyNoteReaderError = "只有已加载的最新笔记版本可以编辑。"
+            return
+        }
+        studyNoteDraftTitle = item.note.title
+        studyNoteDraftMarkdown = markdown
+        studyNoteDraftSummary = "手动编辑"
+        studyNoteEditorError = nil
+        isStudyNoteConflictPending = false
+        isStudyNoteEditorPresented = true
+    }
+
+    func cancelStudyNoteEditing() {
+        isStudyNoteEditorPresented = false
+        studyNoteDraftTitle = ""
+        studyNoteDraftMarkdown = ""
+        studyNoteDraftSummary = "手动编辑"
+        studyNoteEditorError = nil
+        isStudyNoteConflictPending = false
+        isStudyNoteSaving = false
+    }
+
+    func saveStudyNoteRevision() {
+        guard !isStudyNoteConflictPending else { return }
+        saveStudyNoteRevision(afterConflictConfirmation: false)
+    }
+
+    func confirmStudyNoteConflictAndSave() {
+        isStudyNoteConflictPending = false
+        saveStudyNoteRevision(afterConflictConfirmation: true)
+    }
+
+    private func saveStudyNoteRevision(afterConflictConfirmation: Bool) {
+        guard let activeSession = currentSessionOrError(),
+              let workspaceId = selectedWorkspaceId,
+              let item = selectedStudyNoteItem,
+              canEditSelectedStudyNote,
+              !isStudyNoteSaving else {
+            return
+        }
+
+        let markdown = studyNoteDraftMarkdown.trimmingCharacters(in: .whitespacesAndNewlines)
+        let title = studyNoteDraftTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        let summary = studyNoteDraftSummary.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !markdown.isEmpty else {
+            studyNoteEditorError = "笔记正文不能为空。"
+            return
+        }
+        guard markdown.count <= 2_000_000 else {
+            studyNoteEditorError = "笔记正文不能超过 2,000,000 个字符。"
+            return
+        }
+        guard title.isEmpty || title.count <= 255 else {
+            studyNoteEditorError = "标题不能超过 255 个字符。"
+            return
+        }
+        guard summary.isEmpty || summary.count <= 500 else {
+            studyNoteEditorError = "修订说明不能超过 500 个字符。"
+            return
+        }
+
+        isStudyNoteSaving = true
+        studyNoteEditorError = nil
+        errorMessage = nil
+        Task {
+            defer { isStudyNoteSaving = false }
+            let input = StudyNoteRevisionInput(
+                markdown: markdown,
+                title: title.nilIfBlank,
+                editSummary: summary.nilIfBlank
+            )
+            do {
+                let response = try await clientFor(activeSession).createStudyNoteRevision(
+                    workspaceId: workspaceId,
+                    learningUnitId: item.learningUnit.id,
+                    baseVersionId: item.note.id,
+                    input: input
+                )
+                let optimisticItem = StudyNoteListItem(learningUnit: item.learningUnit, note: response.note)
+                selectedStudyNoteItem = optimisticItem
+                studyNoteMarkdown = markdown
+                isStudyNoteEditorPresented = false
+                statusMessage = "笔记新版本已保存。"
+
+                do {
+                    let refreshedItems = try await refreshStudyNoteGroup(
+                        activeSession: activeSession,
+                        workspaceId: workspaceId,
+                        learningUnit: item.learningUnit
+                    )
+                    if let refreshed = refreshedItems.first(where: { $0.note.id == response.note.id }) {
+                        selectedStudyNoteItem = refreshed
+                    }
+                } catch {
+                    handlePostCommitRefreshFailure(error, completion: "笔记新版本已保存")
+                }
+            } catch let error as LearningBackendError where error.statusCode == 409 {
+                await handleStudyNoteRevisionConflict(
+                    activeSession: activeSession,
+                    workspaceId: workspaceId,
+                    learningUnit: item.learningUnit,
+                    originalError: error,
+                    afterConflictConfirmation: afterConflictConfirmation
+                )
+            } catch {
+                studyNoteEditorError = friendlyError(error)
+                if let backendError = error as? LearningBackendError,
+                   backendError.shouldClearSession || backendError.statusCode == 403 {
+                    showError(error)
+                }
+            }
+        }
     }
 
     func selectLearningUnit(_ learningUnitId: String) {
@@ -1621,7 +1799,10 @@ final class NotePatchViewModel: ObservableObject {
 
     private func showError(_ error: Error) {
         if let backendError = error as? LearningBackendError, backendError.shouldClearSession {
-            clearLocalSession()
+            let currentRefreshToken = (settings.loadSession() ?? session)?.refreshToken
+            if shouldClearPersistedSession(for: backendError, currentRefreshToken: currentRefreshToken) {
+                clearLocalSession()
+            }
         } else if let backendError = error as? LearningBackendError, backendError.statusCode == 403 {
             recoverFromWorkspaceAccessDenied()
         }
@@ -1644,6 +1825,7 @@ final class NotePatchViewModel: ObservableObject {
     }
 
     private func recoverFromWorkspaceAccessDenied() {
+        invalidateDeferredContentLoads()
         selectedWorkspaceId = nil
         settings.saveSelectedWorkspaceId(nil)
         documents = []
@@ -1730,6 +1912,7 @@ final class NotePatchViewModel: ObservableObject {
     private func clearLocalSession() {
         presenceTask?.cancel()
         presenceTask = nil
+        invalidateDeferredContentLoads()
         settings.clearSession()
         isOfflineTestMode = false
         didRestoreSession = false
@@ -1791,6 +1974,9 @@ final class NotePatchViewModel: ObservableObject {
     }
 
     private func saveSelectedWorkspace(_ workspaceId: String?) {
+        if selectedWorkspaceId != workspaceId {
+            invalidateDeferredContentLoads()
+        }
         selectedWorkspaceId = workspaceId
         if !isOfflineTestMode {
             settings.saveSelectedWorkspaceId(workspaceId)
@@ -1820,15 +2006,18 @@ final class NotePatchViewModel: ObservableObject {
             accessToken: activeSession.accessToken,
             refreshToken: activeSession.refreshToken,
             session: backendSession
-        ) { [weak self] token in
+        ) { [weak self] token, attemptedRefreshToken in
             Task { @MainActor in
-                self?.applyRefreshedToken(token, fallback: activeSession)
+                self?.applyRefreshedToken(token, attemptedRefreshToken: attemptedRefreshToken, fallback: activeSession)
             }
         }
     }
 
-    private func applyRefreshedToken(_ token: TokenResponse, fallback: SavedSession) {
+    private func applyRefreshedToken(_ token: TokenResponse, attemptedRefreshToken: String, fallback: SavedSession) {
         let current = settings.loadSession() ?? session ?? fallback
+        guard current.refreshToken == attemptedRefreshToken else {
+            return
+        }
         saveSession(current.withTokenResponse(token))
     }
 
@@ -1892,6 +2081,190 @@ final class NotePatchViewModel: ObservableObject {
     private func presenceDelayMillis(_ intervalSeconds: Int) -> Int {
         let seconds = intervalSeconds > 0 ? intervalSeconds : defaultPresenceHeartbeatIntervalSeconds
         return seconds * 1000
+    }
+
+    private func beginDeferredLoad(
+        _ content: DeferredWorkspaceContent,
+        force: Bool,
+        allowOfflineNetwork: Bool = false,
+        setLoading: @escaping @MainActor (Bool) -> Void,
+        operation: @escaping @MainActor (SavedSession, String, @escaping @MainActor () -> Bool) async throws -> Void
+    ) {
+        if isOfflineTestMode && !allowOfflineNetwork { return }
+        guard let activeSession = currentSessionOrError(), let workspaceId = selectedWorkspaceId else { return }
+        let key = DeferredWorkspaceLoadKey(workspaceId: workspaceId, content: content)
+        if !force, loadedDeferredContent.contains(key) || deferredLoadTasks[key] != nil {
+            return
+        }
+
+        deferredLoadTasks[key]?.cancel()
+        let generation = UUID()
+        deferredLoadGenerations[key] = generation
+        setLoading(true)
+        errorMessage = nil
+
+        deferredLoadTasks[key] = Task { [weak self] in
+            guard let self else { return }
+            var succeeded = false
+            let isCurrent = { @MainActor [weak self] in
+                self?.isCurrentDeferredLoad(key, generation: generation, session: activeSession) ?? false
+            }
+            do {
+                try Task.checkCancellation()
+                try await operation(activeSession, workspaceId, isCurrent)
+                try Task.checkCancellation()
+                succeeded = true
+            } catch is CancellationError {
+                // The workspace or session changed while this request was in flight.
+            } catch {
+                if self.isCurrentDeferredLoad(key, generation: generation, session: activeSession) {
+                    self.showError(error)
+                }
+            }
+            self.finishDeferredLoad(
+                key,
+                generation: generation,
+                activeSession: activeSession,
+                succeeded: succeeded,
+                setLoading: setLoading
+            )
+        }
+    }
+
+    private func isCurrentDeferredLoad(
+        _ key: DeferredWorkspaceLoadKey,
+        generation: UUID,
+        session activeSession: SavedSession
+    ) -> Bool {
+        deferredLoadGenerations[key] == generation
+            && selectedWorkspaceId == key.workspaceId
+            && session?.userId == activeSession.userId
+    }
+
+    private func finishDeferredLoad(
+        _ key: DeferredWorkspaceLoadKey,
+        generation: UUID,
+        activeSession: SavedSession,
+        succeeded: Bool,
+        setLoading: @escaping @MainActor (Bool) -> Void
+    ) {
+        guard isCurrentDeferredLoad(key, generation: generation, session: activeSession) else { return }
+        deferredLoadTasks[key] = nil
+        if succeeded {
+            loadedDeferredContent.insert(key)
+        }
+        setLoading(false)
+    }
+
+    private func invalidateDeferredContentLoads() {
+        deferredLoadTasks.values.forEach { $0.cancel() }
+        deferredLoadTasks = [:]
+        deferredLoadGenerations = [:]
+        loadedDeferredContent = []
+        isNotesLoading = false
+        isChatHistoryLoading = false
+        isLearningLoading = false
+        isHomeworkLoading = false
+    }
+
+    private func loadLearningDashboardContent(
+        activeSession: SavedSession,
+        workspaceId: String,
+        shouldApply: @escaping @MainActor () -> Bool
+    ) async throws {
+        let client = clientFor(activeSession)
+        async let unitsRequest = client.listLearningUnits(workspaceId: workspaceId)
+        async let homeworksRequest = client.listHomeworks(workspaceId: workspaceId)
+        async let documentsRequest = client.listDocuments(workspaceId: workspaceId, pageSize: 100)
+        let (units, loadedHomeworks, loadedDocuments) = try await (unitsRequest, homeworksRequest, documentsRequest)
+        guard shouldApply() else { throw CancellationError() }
+
+        learningUnits = units
+        homeworks = loadedHomeworks
+        gradingDocuments = loadedDocuments
+        guard let selectedHomeworkId else { return }
+        guard let selected = loadedHomeworks.first(where: { $0.id == selectedHomeworkId }) else {
+            self.selectedHomeworkId = nil
+            homeworkReferences = []
+            return
+        }
+        if !isGradingConfigDirty {
+            homeworkRubricText = selected.rubricText ?? ""
+            homeworkMaxScoreText = formatScore(selected.maxScore)
+        }
+        homeworkReferences = try await client.listHomeworkReferences(
+            workspaceId: workspaceId,
+            homeworkId: selectedHomeworkId
+        )
+        guard shouldApply() else { throw CancellationError() }
+    }
+
+    private func loadNotesOverviewContent(
+        activeSession: SavedSession,
+        workspaceId: String,
+        shouldApply: @escaping @MainActor () -> Bool
+    ) async throws {
+        let units = try await clientFor(activeSession).listLearningUnits(workspaceId: workspaceId)
+        guard shouldApply() else { throw CancellationError() }
+        learningUnits = units
+        guard !units.isEmpty else {
+            studyNoteGroups = []
+            return
+        }
+
+        let results = await loadStudyNoteGroupsConcurrently(
+            activeSession: activeSession,
+            workspaceId: workspaceId,
+            units: units
+        )
+        guard shouldApply() else { throw CancellationError() }
+        let groups = results.compactMap(\.group)
+        studyNoteGroups = groups
+        let failedCount = results.filter { $0.error != nil }.count
+        if failedCount > 0 {
+            statusMessage = "已加载 \(groups.count) 个笔记单元，\(failedCount) 个单元加载失败，可点击刷新重试。"
+        }
+    }
+
+    private func loadStudyNoteGroupsConcurrently(
+        activeSession: SavedSession,
+        workspaceId: String,
+        units: [LearningUnit]
+    ) async -> [(group: StudyNoteGroup?, error: Error?)] {
+        let maxConcurrentRequests = 4
+        var results = Array<(group: StudyNoteGroup?, error: Error?)>(
+            repeating: (nil, nil),
+            count: units.count
+        )
+        await withTaskGroup(of: (Int, StudyNoteGroup?, Error?).self) { group in
+            var nextIndex = 0
+            func enqueueNext() {
+                guard nextIndex < units.count else { return }
+                let index = nextIndex
+                let unit = units[index]
+                nextIndex += 1
+                group.addTask { [weak self] in
+                    guard let self else { return (index, nil, CancellationError()) }
+                    do {
+                        let notes = try await self.clientFor(activeSession)
+                            .listStudyNotes(workspaceId: workspaceId, learningUnitId: unit.id)
+                            .sorted { $0.versionNo > $1.versionNo }
+                            .map { StudyNoteListItem(learningUnit: unit, note: $0) }
+                        return (index, notes.isEmpty ? nil : StudyNoteGroup(learningUnit: unit, notes: notes), nil)
+                    } catch {
+                        return (index, nil, error)
+                    }
+                }
+            }
+            for _ in 0..<min(maxConcurrentRequests, units.count) {
+                enqueueNext()
+            }
+            while let (index, loadedGroup, error) = await group.next() {
+                results[index] = (loadedGroup, error)
+                enqueueNext()
+            }
+        }
+        return results
     }
 
     private func refreshWorkspaceContent(activeSession: SavedSession, workspaceId: String) async throws {
@@ -1978,6 +2351,7 @@ final class NotePatchViewModel: ObservableObject {
         if let selected {
             try await refreshWorkspaceContent(activeSession: session ?? activeSession, workspaceId: selected.id)
             statusMessage = "已加载个人空间：\(selected.name)"
+            ensureContentForSelectedTabLoaded()
         } else {
             documents = []
             statusMessage = "当前账号还没有个人空间，请在设置里尝试恢复。"
@@ -1992,10 +2366,16 @@ final class NotePatchViewModel: ObservableObject {
     ) async throws -> TaskItem {
         let client = clientFor(activeSession)
         var pollCount = 0
+        var lastPublishedTask: TaskItem?
+        var lastPublishedEvents: [TaskEventItem]?
         while pollCount < taskMaxPolls {
             let task = try await client.getTask(workspaceId: workspaceId, taskId: taskId)
             let events = (try? await client.getTaskEvents(workspaceId: workspaceId, taskId: taskId)) ?? []
-            onUpdate(task, events)
+            if task != lastPublishedTask || events != lastPublishedEvents {
+                onUpdate(task, events)
+                lastPublishedTask = task
+                lastPublishedEvents = events
+            }
             switch task.status {
             case "succeeded":
                 return task
@@ -2063,8 +2443,13 @@ final class NotePatchViewModel: ObservableObject {
         OpenClawChatMessage(id: "system", role: .system, content: "OpenClaw 可以帮你整理想法、分析文档结果，回复支持 Markdown。", status: .done, taskId: nil, progress: nil, events: [])
     }
 
-    private func refreshConversations(activeSession: SavedSession, workspaceId: String) async throws {
+    private func refreshConversations(
+        activeSession: SavedSession,
+        workspaceId: String,
+        shouldApply: @escaping @MainActor () -> Bool = { true }
+    ) async throws {
         let response = try await clientFor(activeSession).listConversations(workspaceId: workspaceId)
+        guard shouldApply() else { throw CancellationError() }
         conversations = response.items
         if let selectedConversationId, conversations.contains(where: { $0.id == selectedConversationId }) {
             return
@@ -2072,8 +2457,14 @@ final class NotePatchViewModel: ObservableObject {
         selectedConversationId = conversations.first?.id
     }
 
-    private func refreshConversationMessages(activeSession: SavedSession, workspaceId: String, conversationId: String) async throws {
+    private func refreshConversationMessages(
+        activeSession: SavedSession,
+        workspaceId: String,
+        conversationId: String,
+        shouldApply: @escaping @MainActor () -> Bool = { true }
+    ) async throws {
         let response = try await clientFor(activeSession).listChatMessages(workspaceId: workspaceId, conversationId: conversationId)
+        guard shouldApply() else { throw CancellationError() }
         let messages = response.items.map { chatMessage -> OpenClawChatMessage in
             let role: OpenClawChatRole
             switch chatMessage.role {
@@ -2086,7 +2477,17 @@ final class NotePatchViewModel: ObservableObject {
             if status == .sending { content = chatMessage.content.isEmpty ? "思考中..." : chatMessage.content }
             else if status == .error { content = chatMessage.errorMessage ?? chatMessage.content }
             else { content = chatMessage.content }
-            return OpenClawChatMessage(id: chatMessage.id, role: role, content: content, status: status, taskId: chatMessage.taskId, progress: nil, events: [])
+            return OpenClawChatMessage(
+                id: chatMessage.id,
+                role: role,
+                content: content,
+                status: status,
+                taskId: chatMessage.taskId,
+                progress: nil,
+                events: [],
+                citations: chatMessage.citations ?? [],
+                sourceStatus: chatMessage.sourceStatus
+            )
         }
         openClawMessages = messages.isEmpty ? [welcomeChatMessage] : messages
     }
@@ -2099,6 +2500,78 @@ final class NotePatchViewModel: ObservableObject {
             self.selectedLearningUnitId = nil
             studyNotes = []
         }
+    }
+
+    private func refreshStudyNoteGroup(
+        activeSession: SavedSession,
+        workspaceId: String,
+        learningUnit: LearningUnit
+    ) async throws -> [StudyNoteListItem] {
+        let notes = try await clientFor(activeSession)
+            .listStudyNotes(workspaceId: workspaceId, learningUnitId: learningUnit.id)
+            .sorted { $0.versionNo > $1.versionNo }
+        let items = notes.map { StudyNoteListItem(learningUnit: learningUnit, note: $0) }
+        let group = StudyNoteGroup(learningUnit: learningUnit, notes: items)
+        if let index = studyNoteGroups.firstIndex(where: { $0.learningUnit.id == learningUnit.id }) {
+            studyNoteGroups[index] = group
+        } else if !items.isEmpty {
+            studyNoteGroups.append(group)
+        }
+        if selectedLearningUnitId == learningUnit.id {
+            studyNotes = notes
+        }
+        return items
+    }
+
+    private func loadStudyNoteMarkdown(activeSession: SavedSession, note: StudyNoteVersion) async throws -> String {
+        guard let downloadURL = note.preferredMarkdownDownloadURL, !downloadURL.isEmpty else {
+            throw LearningBackendError("当前笔记没有可用的 Markdown 内容。")
+        }
+        let filename = "\(note.id)-\(sanitizeFileName(note.title.isEmpty ? "study-note" : note.title)).md"
+        let targetURL = cacheDirectory
+            .appendingPathComponent("study-notes", isDirectory: true)
+            .appendingPathComponent(filename)
+        let downloadedURL = try await clientFor(activeSession).download(downloadURL: downloadURL, targetURL: targetURL)
+        guard let markdown = String(data: try Data(contentsOf: downloadedURL), encoding: .utf8) else {
+            throw LearningBackendError("笔记内容不是 UTF-8 Markdown。")
+        }
+        return markdown
+    }
+
+    private func handleStudyNoteRevisionConflict(
+        activeSession: SavedSession,
+        workspaceId: String,
+        learningUnit: LearningUnit,
+        originalError: LearningBackendError,
+        afterConflictConfirmation: Bool
+    ) async {
+        do {
+            let refreshedItems = try await refreshStudyNoteGroup(
+                activeSession: activeSession,
+                workspaceId: workspaceId,
+                learningUnit: learningUnit
+            )
+            guard let latest = refreshedItems.first else {
+                throw LearningBackendError("服务端当前没有可用于修订的笔记版本。")
+            }
+            selectedStudyNoteItem = latest
+            do {
+                studyNoteMarkdown = try await loadStudyNoteMarkdown(activeSession: activeSession, note: latest.note)
+            } catch {
+                studyNoteReaderError = friendlyError(error)
+            }
+            studyNoteEditorError = afterConflictConfirmation
+                ? "保存时服务端又生成了新版本。已刷新最新内容，草稿仍保留。"
+                : "笔记已出现新版本。已刷新最新内容，草稿仍保留。"
+            isStudyNoteConflictPending = true
+        } catch {
+            studyNoteEditorError = "版本冲突后刷新失败：\(friendlyError(error))"
+            if let backendError = error as? LearningBackendError,
+               backendError.shouldClearSession || backendError.statusCode == 403 {
+                showError(error)
+            }
+        }
+        _ = originalError
     }
 
     private func refreshHomeworks(
@@ -2124,6 +2597,7 @@ final class NotePatchViewModel: ObservableObject {
     }
 
     private func clearLearningWorkspaceState() {
+        invalidateDeferredContentLoads()
         queuedUploadItems.forEach {
             UploadThumbnailCache.shared.remove(file: $0.file)
             removeCachedUploadFile($0.file)

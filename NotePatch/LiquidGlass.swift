@@ -199,12 +199,22 @@ struct LiquidGlassBannerModifier: ViewModifier {
 }
 
 struct LiquidGlassFieldModifier: ViewModifier {
+    let isCapsule: Bool
+
     @ViewBuilder
     func body(content: Content) -> some View {
-        if #available(iOS 26.0, *) {
-            LiquidGlassField26(content: content)
+        if isCapsule {
+            if #available(iOS 26.0, *) {
+                LiquidGlassField26(content: content, isCapsule: true)
+            } else {
+                content.fallbackGlassSurface(Capsule())
+            }
         } else {
-            content.fallbackGlassSurface(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            if #available(iOS 26.0, *) {
+                LiquidGlassField26(content: content, isCapsule: false)
+            } else {
+                content.fallbackGlassSurface(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            }
         }
     }
 }
@@ -278,12 +288,20 @@ private struct LiquidGlassBanner26<Content: View>: View {
 @available(iOS 26.0, *)
 private struct LiquidGlassField26<Content: View>: View {
     let content: Content
+    let isCapsule: Bool
 
     var body: some View {
-        let shape = RoundedRectangle(cornerRadius: 10, style: .continuous)
-        content
-            .background { shape.fill(.clear).glassEffect(.regular, in: shape) }
-            .overlay { shape.strokeBorder(Color.white.opacity(0.28), lineWidth: 0.5) }
+        if isCapsule {
+            let shape = Capsule()
+            content
+                .background { shape.fill(.clear).glassEffect(.regular, in: shape) }
+                .overlay { shape.strokeBorder(Color.white.opacity(0.28), lineWidth: 0.5) }
+        } else {
+            let shape = RoundedRectangle(cornerRadius: 10, style: .continuous)
+            content
+                .background { shape.fill(.clear).glassEffect(.regular, in: shape) }
+                .overlay { shape.strokeBorder(Color.white.opacity(0.28), lineWidth: 0.5) }
+        }
     }
 }
 
@@ -336,8 +354,8 @@ extension View {
         modifier(LiquidGlassBannerModifier(tint: tint))
     }
 
-    func liquidGlassField() -> some View {
-        modifier(LiquidGlassFieldModifier())
+    func liquidGlassField(isCapsule: Bool = false) -> some View {
+        modifier(LiquidGlassFieldModifier(isCapsule: isCapsule))
     }
 
     func liquidGlassStickyFooter() -> some View {

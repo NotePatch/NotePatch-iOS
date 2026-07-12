@@ -193,9 +193,10 @@ private struct WorkbenchScreen: View {
                 isSettingsPresented = true
             }
             StatusBanner(
-                isBusy: model.isBusy || model.isConversationMutating || model.isAIPreferenceUpdating || model.isHomeworkLoading,
+                isBusy: model.isBusy || model.isConversationMutating || model.isAIPreferenceUpdating || model.isHomeworkLoading || model.isStudyNoteSaving,
                 statusMessage: model.statusMessage,
-                errorMessage: model.errorMessage
+                errorMessage: model.errorMessage,
+                onDismiss: model.dismissStatusBanner
             )
 
             TabView(selection: $model.selectedTab) {
@@ -220,6 +221,7 @@ private struct WorkbenchScreen: View {
                 if selectedTab != .openClaw {
                     dismissActiveKeyboard()
                 }
+                model.ensureContentForSelectedTabLoaded()
             }
             .accessibilityIdentifier("workbenchTabs")
         }
@@ -242,6 +244,9 @@ private struct WorkbenchScreen: View {
             if session == nil {
                 isSettingsPresented = false
             }
+        }
+        .onAppear {
+            model.ensureContentForSelectedTabLoaded()
         }
     }
 }
@@ -308,7 +313,7 @@ private struct NotesTab: View {
     var body: some View {
         NavigationView {
             ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
+                LazyVStack(alignment: .leading, spacing: 14) {
                     if model.isNotesLoading && model.studyNoteGroups.isEmpty {
                         ProgressView("正在加载学习笔记...")
                             .frame(maxWidth: .infinity)
@@ -352,6 +357,15 @@ private struct NotesTab: View {
                                                 Text("版本 \(item.note.versionNo)")
                                                     .font(.caption)
                                                     .foregroundStyle(.secondary)
+                                                Text(item.note.revisionOriginLabel)
+                                                    .font(.caption)
+                                                    .foregroundStyle(.secondary)
+                                                if let summary = item.note.editSummary?.trimmingCharacters(in: .whitespacesAndNewlines), !summary.isEmpty {
+                                                    Text(summary)
+                                                        .font(.caption)
+                                                        .foregroundStyle(.secondary)
+                                                        .lineLimit(1)
+                                                }
                                             }
                                             Spacer(minLength: 8)
                                             Image(systemName: "chevron.right")
@@ -387,7 +401,6 @@ private struct NotesTab: View {
             }
         }
         .navigationViewStyle(StackNavigationViewStyle())
-        .task { model.loadNotesOverview() }
         .sheet(item: $readerItem, onDismiss: model.closeStudyNoteReader) { _ in
             NavigationView {
                 StudyNoteReader(model: model)
@@ -419,6 +432,14 @@ private struct StudyNoteReader: View {
                             Text("\(item.learningUnit.title) · 版本 \(item.note.versionNo)")
                                 .font(.subheadline)
                                 .foregroundStyle(.secondary)
+                            Text(item.note.revisionOriginLabel)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            if let summary = item.note.editSummary?.trimmingCharacters(in: .whitespacesAndNewlines), !summary.isEmpty {
+                                Text(summary)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
                         }
 
                         if model.isStudyNoteLoading {
@@ -448,6 +469,17 @@ private struct StudyNoteReader: View {
                 .accessibilityIdentifier("studyNoteReader")
                 .navigationTitle("阅读笔记")
                 .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .navigationBarTrailing) {
+                        if model.canEditSelectedStudyNote {
+                            Button("编辑") {
+                                model.beginStudyNoteEditing()
+                            }
+                            .disabled(model.isStudyNoteSaving)
+                            .accessibilityIdentifier("editStudyNoteButton")
+                        }
+                    }
+                }
             } else {
                 EmptyState(
                     systemImage: "note.text",
@@ -458,6 +490,99 @@ private struct StudyNoteReader: View {
                 .accessibilityIdentifier("studyNoteReader")
             }
         }
+        .sheet(isPresented: $model.isStudyNoteEditorPresented, onDismiss: model.cancelStudyNoteEditing) {
+            NavigationView {
+                StudyNoteEditor(model: model)
+            }
+            .navigationViewStyle(StackNavigationViewStyle())
+        }
+    }
+}
+
+private struct StudyNoteEditor: View {
+    @ObservedObject var model: NotePatchViewModel
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                LabeledField(title: "标题") {
+                    TextField("笔记标题", text: $model.studyNoteDraftTitle)
+                        .accessibilityIdentifier("studyNoteEditorTitle")
+                }
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Markdown 正文")
+                        .font(.subheadline.weight(.medium))
+                    TextEditor(text: $model.studyNoteDraftMarkdown)
+                        .font(.body)
+                        .frame(minHeight: 300)
+                        .padding(8)
+                        .background(Color.secondary.opacity(0.08))
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 8)
+                                .stroke(Color.secondary.opacity(0.22), lineWidth: 1)
+                        )
+                        .accessibilityIdentifier("studyNoteEditorMarkdown")
+                    Text("\(model.studyNoteDraftMarkdown.count) / 2,000,000")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                }
+
+                LabeledField(title: "修订说明") {
+                    TextField("例如：补充例题", text: $model.studyNoteDraftSummary)
+                        .accessibilityIdentifier("studyNoteEditorSummary")
+                }
+                Text("修订说明可留空。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                if let error = model.studyNoteEditorError {
+                    Text(error)
+                        .font(.subheadline)
+                        .foregroundStyle(.red)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(10)
+                        .liquidGlassBanner(tint: .red)
+                }
+            }
+            .padding(16)
+        }
+        .navigationTitle("编辑笔记")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+                Button("取消") {
+                    model.cancelStudyNoteEditing()
+                }
+                .disabled(model.isStudyNoteSaving)
+            }
+            ToolbarItem(placement: .confirmationAction) {
+                Button {
+                    model.saveStudyNoteRevision()
+                } label: {
+                    if model.isStudyNoteSaving {
+                        ProgressView()
+                    } else {
+                        Text("保存")
+                    }
+                }
+                .disabled(model.isStudyNoteSaving)
+                .accessibilityIdentifier("saveStudyNoteButton")
+            }
+        }
+        .alert("笔记已有新版本", isPresented: $model.isStudyNoteConflictPending) {
+            Button("取消", role: .cancel) {
+                model.isStudyNoteConflictPending = false
+            }
+            Button("继续用草稿保存") {
+                model.confirmStudyNoteConflictAndSave()
+            }
+        } message: {
+            Text("已刷新服务端最新笔记。你的草稿仍保留，确认后会基于最新版本创建下一版本。")
+        }
+        .accessibilityIdentifier("studyNoteEditor")
     }
 }
 
@@ -1220,7 +1345,8 @@ private struct OpenClawChatTab: View {
     @ObservedObject var model: NotePatchViewModel
     @State private var isRenaming = false
     @State private var titleDraft = ""
-    @FocusState private var isComposerFocused: Bool
+    @State private var composerTextHeight: CGFloat = 44
+    @State private var isComposerFocused = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -1291,6 +1417,16 @@ private struct OpenClawChatTab: View {
                     .padding(.horizontal, 16)
                     .padding(.vertical, 14)
                 }
+                .background(
+                    ChatKeyboardDismissPanObserver { value in
+                        dismissKeyboardIfNeeded(
+                            startLocation: value.startLocation,
+                            location: value.location,
+                            translation: value.translation,
+                            scrollBottomY: value.scrollBottomY
+                        )
+                    }
+                )
                 .onChange(of: model.openClawMessages.count) { _ in
                     if let last = model.openClawMessages.last {
                         withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
@@ -1298,61 +1434,19 @@ private struct OpenClawChatTab: View {
                         }
                     }
                 }
+                .accessibilityIdentifier("openClawMessages")
             }
 
             VStack(spacing: 0) {
                 Divider()
-                HStack(alignment: .bottom, spacing: 10) {
-                    ZStack(alignment: .topLeading) {
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .fill(.clear)
-                            .liquidGlassField()
-                        if model.openClawInput.isEmpty {
-                            Text("问 OpenClaw")
-                                .foregroundStyle(.secondary)
-                                .padding(.horizontal, 13)
-                                .padding(.vertical, 11)
-                                .allowsHitTesting(false)
-                        }
-                        TextEditor(text: $model.openClawInput)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 3)
-                            .background(Color.clear)
-                            .focused($isComposerFocused)
-                            .accessibilityLabel("问 OpenClaw")
-                    }
-                    .frame(minHeight: 42, maxHeight: 88)
-                        .disabled(model.isOpenClawSending)
-                    Button {
-                        dismissComposer()
-                    } label: {
-                        Image(systemName: "keyboard.chevron.compact.down")
-                            .font(.system(size: 15, weight: .semibold))
-                            .frame(width: 34, height: 34)
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.secondary)
-                    .accessibilityLabel("收起键盘")
-                    Button {
-                        dismissComposer()
-                        model.startOpenClawChat()
-                    } label: {
-                        Image(systemName: "arrow.up")
-                            .font(.system(size: 15, weight: .bold))
-                            .frame(width: 34, height: 34)
-                    }
-                    .notePatchGlassButtonStyle(prominent: true)
-                    .clipShape(Circle())
-                    .disabled(model.isOpenClawSending || model.openClawInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                    .accessibilityLabel("发送")
-                }
+                composer
                 .padding(.horizontal, 16)
                 .padding(.vertical, 10)
-                .liquidGlassPanel()
+                .animation(.interactiveSpring, value: isComposerExpanded)
+                .accessibilityIdentifier("openClawComposer")
             }
         }
         .accessibilityIdentifier("openClawTab")
-        .task { model.loadChatHistory() }
         .onDisappear { dismissComposer() }
         .alert("重命名对话", isPresented: $isRenaming) {
             TextField("对话标题", text: $titleDraft)
@@ -1369,6 +1463,103 @@ private struct OpenClawChatTab: View {
     private func dismissComposer() {
         isComposerFocused = false
         dismissActiveKeyboard()
+    }
+
+    private func dismissKeyboardIfNeeded(
+        startLocation: CGPoint,
+        location: CGPoint,
+        translation: CGPoint,
+        scrollBottomY: CGFloat
+    ) {
+        guard translation.y > 12,
+              translation.y > abs(translation.x),
+              startLocation.y < scrollBottomY,
+              location.y >= scrollBottomY + composerTextHeight else {
+            return
+        }
+        dismissComposer()
+    }
+
+    private var isComposerExpanded: Bool {
+        isComposerFocused || !model.openClawInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var composer: some View {
+        let expanded = isComposerExpanded
+        let composerHeight = expanded ? max(92, composerTextHeight + 62) : 44
+
+        return ZStack(alignment: .topLeading) {
+            if expanded {
+                RoundedRectangle(cornerRadius: 24, style: .continuous)
+                    .fill(.clear)
+                    .liquidGlassField()
+            }
+
+            Text("问 OpenClaw")
+                .foregroundStyle(.secondary)
+                .padding(.leading, expanded ? 16 : 54)
+                .padding(.trailing, expanded ? 16 : 54)
+                .padding(.top, expanded ? 19 : 11)
+                .opacity(model.openClawInput.isEmpty ? 1 : 0)
+                .allowsHitTesting(false)
+
+            AdaptiveComposerTextView(
+                text: $model.openClawInput,
+                isFocused: Binding(
+                    get: { isComposerFocused },
+                    set: { isComposerFocused = $0 }
+                ),
+                height: $composerTextHeight,
+                maximumLines: expanded ? 7 : 1
+            )
+            .frame(height: expanded ? composerTextHeight : 44)
+            .padding(.leading, expanded ? 8 : 46)
+            .padding(.trailing, expanded ? 8 : 46)
+            .padding(.top, expanded ? 8 : 0)
+            .padding(.bottom, expanded ? 46 : 0)
+            .accessibilityLabel("问 OpenClaw")
+            .disabled(model.isOpenClawSending)
+
+            HStack(spacing: 10) {
+                composerNewConversationButton
+                Spacer(minLength: 0)
+                composerSendButton
+            }
+            .padding(.horizontal, expanded ? 8 : 0)
+            .frame(height: 38)
+            .frame(maxHeight: .infinity, alignment: expanded ? .bottom : .center)
+        }
+        .frame(height: composerHeight)
+    }
+
+    private var composerNewConversationButton: some View {
+        Button {
+            dismissComposer()
+            model.startNewConversation()
+        } label: {
+            Image(systemName: "plus")
+                .font(.system(size: 17, weight: .semibold))
+                .frame(width: 38, height: 38)
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.secondary)
+        .accessibilityLabel("新建对话")
+        .disabled(model.isOpenClawSending)
+    }
+
+    private var composerSendButton: some View {
+        Button {
+            dismissComposer()
+            model.startOpenClawChat()
+        } label: {
+            Image(systemName: "arrow.up")
+                .font(.system(size: 16, weight: .bold))
+                .frame(width: 38, height: 38)
+        }
+        .notePatchGlassButtonStyle(prominent: true)
+        .clipShape(Circle())
+        .disabled(model.isOpenClawSending || model.openClawInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        .accessibilityLabel("发送")
     }
 }
 
@@ -1410,7 +1601,6 @@ private struct LearningTab: View {
                 .padding(.bottom, 24)
             }
         }
-        .task { model.loadLearningDashboard() }
         .accessibilityIdentifier("learningTab")
     }
 }
@@ -1848,6 +2038,19 @@ private struct OpenClawMessageBubble: View {
                         .foregroundStyle(.red)
                         .lineLimit(3)
                 }
+                if message.sourceStatus == "partially_unavailable" {
+                    Label("部分来源资料已删除", systemImage: "exclamationmark.triangle")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                } else if message.sourceStatus == "unavailable" {
+                    Label("来源资料已删除", systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                } else if !message.citations.isEmpty {
+                    Text("引用 \(message.citations.count) 条资料")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
             .padding(12)
             .frame(maxWidth: message.role == .system ? .infinity : 320, alignment: .leading)
@@ -2046,10 +2249,11 @@ private struct WorkspaceManagementSection: View {
 private struct LightweightMarkdownText: View {
     let markdown: String
     let color: Color
+    @StateObject private var renderer = MarkdownRenderState()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
-            ForEach(parseMarkdownBlocks(markdown)) { block in
+            ForEach(renderer.blocks) { block in
                 switch block.type {
                 case .heading:
                     Text(block.text)
@@ -2080,6 +2284,9 @@ private struct LightweightMarkdownText: View {
                 }
             }
         }
+        .task(id: markdown) {
+            renderer.load(markdown)
+        }
     }
 }
 
@@ -2088,7 +2295,7 @@ private struct MarkdownInlineText: View {
     let color: Color
 
     var body: some View {
-        parseMarkdownInline(text).reduce(Text("")) { partial, token in
+        cachedMarkdownInlineTokens(text).reduce(Text("")) { partial, token in
             partial + styledText(token)
         }
         .foregroundStyle(color)
@@ -2298,6 +2505,7 @@ private struct StatusBanner: View {
     let isBusy: Bool
     let statusMessage: String
     let errorMessage: String?
+    let onDismiss: () -> Void
 
     var body: some View {
         if shouldShowStatus || errorMessage != nil {
@@ -2323,12 +2531,22 @@ private struct StatusBanner: View {
                     }
                 }
                 Spacer(minLength: 0)
+                if errorMessage != nil {
+                    Button(action: onDismiss) {
+                        Image(systemName: "xmark")
+                            .font(.caption.weight(.bold))
+                            .frame(width: 28, height: 28)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .accessibilityLabel("关闭提示")
+                }
             }
-            .foregroundStyle(errorMessage == nil ? Color.primary : Color.red)
+            .foregroundStyle(.primary)
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .liquidGlassBanner(tint: bannerColor)
+            .liquidGlassBanner(tint: bannerTint)
             .padding(.horizontal, 16)
             .padding(.top, 8)
         }
@@ -2363,6 +2581,10 @@ private struct StatusBanner: View {
             return .red
         }
         return isWarning ? .orange : .accentColor
+    }
+
+    private var bannerTint: Color {
+        errorMessage == nil ? bannerColor : .red.opacity(0.35)
     }
 }
 
@@ -2507,6 +2729,181 @@ private func taskTypeLabel(_ taskType: String) -> String {
         return "OpenClaw"
     default:
         return taskType.replacingOccurrences(of: "_", with: " ")
+    }
+}
+
+private struct ChatKeyboardPanValue {
+    let startLocation: CGPoint
+    let location: CGPoint
+    let translation: CGPoint
+    let scrollBottomY: CGFloat
+}
+
+private struct ChatKeyboardDismissPanObserver: UIViewRepresentable {
+    let onPan: (ChatKeyboardPanValue) -> Void
+
+    func makeUIView(context: Context) -> ObserverView {
+        ObserverView()
+    }
+
+    func updateUIView(_ view: ObserverView, context: Context) {
+        view.onPan = onPan
+        view.attachToScrollViewIfNeeded()
+    }
+
+    final class ObserverView: UIView {
+        var onPan: ((ChatKeyboardPanValue) -> Void)?
+        private weak var observedScrollView: UIScrollView?
+        private weak var observedPanGesture: UIPanGestureRecognizer?
+        private var startLocation: CGPoint?
+
+        override init(frame: CGRect) {
+            super.init(frame: frame)
+            isUserInteractionEnabled = false
+        }
+
+        required init?(coder: NSCoder) {
+            nil
+        }
+
+        override func didMoveToSuperview() {
+            super.didMoveToSuperview()
+            DispatchQueue.main.async { [weak self] in
+                self?.attachToScrollViewIfNeeded()
+            }
+        }
+
+        deinit {
+            observedPanGesture?.removeTarget(self, action: #selector(handlePan))
+        }
+
+        func attachToScrollViewIfNeeded() {
+            var candidate = superview
+            while let view = candidate, !(view is UIScrollView) {
+                candidate = view.superview
+            }
+            guard let scrollView = candidate as? UIScrollView,
+                  observedScrollView !== scrollView else {
+                return
+            }
+            observedPanGesture?.removeTarget(self, action: #selector(handlePan))
+            observedScrollView = scrollView
+            observedPanGesture = scrollView.panGestureRecognizer
+            scrollView.panGestureRecognizer.addTarget(self, action: #selector(handlePan))
+        }
+
+        @objc private func handlePan(_ recognizer: UIPanGestureRecognizer) {
+            let location = recognizer.location(in: nil)
+            let scrollBottomY = observedScrollView?
+                .convert(observedScrollView?.bounds ?? .zero, to: nil)
+                .maxY ?? 0
+            switch recognizer.state {
+            case .began:
+                startLocation = location
+            case .changed, .ended:
+                guard let startLocation else { return }
+                onPan?(
+                    ChatKeyboardPanValue(
+                        startLocation: startLocation,
+                        location: location,
+                        translation: recognizer.translation(in: nil),
+                        scrollBottomY: scrollBottomY
+                    )
+                )
+                if recognizer.state == .ended {
+                    self.startLocation = nil
+                }
+            case .cancelled, .failed:
+                startLocation = nil
+            default:
+                break
+            }
+        }
+    }
+}
+
+private struct AdaptiveComposerTextView: UIViewRepresentable {
+    @Binding var text: String
+    @Binding var isFocused: Bool
+    @Binding var height: CGFloat
+    let maximumLines: Int
+
+    func makeUIView(context: Context) -> UITextView {
+        let textView = UITextView()
+        textView.delegate = context.coordinator
+        textView.backgroundColor = .clear
+        textView.font = .preferredFont(forTextStyle: .body)
+        textView.adjustsFontForContentSizeCategory = true
+        textView.textColor = .label
+        textView.textContainerInset = UIEdgeInsets(top: 9, left: 8, bottom: 9, right: 8)
+        textView.textContainer.lineFragmentPadding = 0
+        textView.showsVerticalScrollIndicator = true
+        textView.alwaysBounceVertical = false
+        textView.isScrollEnabled = false
+        textView.accessibilityLabel = "问 OpenClaw"
+        return textView
+    }
+
+    func updateUIView(_ textView: UITextView, context: Context) {
+        context.coordinator.update(parent: self)
+        if textView.text != text {
+            textView.text = text
+        }
+        if isFocused, !textView.isFirstResponder {
+            textView.becomeFirstResponder()
+        } else if !isFocused, textView.isFirstResponder {
+            textView.resignFirstResponder()
+        }
+        context.coordinator.updateHeight(for: textView)
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(parent: self)
+    }
+
+    final class Coordinator: NSObject, UITextViewDelegate {
+        private var parent: AdaptiveComposerTextView
+
+        init(parent: AdaptiveComposerTextView) {
+            self.parent = parent
+        }
+
+        func update(parent: AdaptiveComposerTextView) {
+            self.parent = parent
+        }
+
+        func textViewDidChange(_ textView: UITextView) {
+            parent.text = textView.text
+            updateHeight(for: textView)
+        }
+
+        func textViewDidBeginEditing(_ textView: UITextView) {
+            parent.isFocused = true
+        }
+
+        func textViewDidEndEditing(_ textView: UITextView) {}
+
+        func updateHeight(for textView: UITextView) {
+            let lineHeight = textView.font?.lineHeight ?? UIFont.preferredFont(forTextStyle: .body).lineHeight
+            let verticalInsets = textView.textContainerInset.top + textView.textContainerInset.bottom
+            let minimumHeight = max(44, ceil(lineHeight + verticalInsets))
+            let maximumHeight = max(
+                minimumHeight,
+                ceil(lineHeight * CGFloat(max(1, parent.maximumLines)) + verticalInsets)
+            )
+            let width = max(textView.bounds.width, 1)
+            let fittingHeight = textView.sizeThatFits(
+                CGSize(width: width, height: CGFloat.greatestFiniteMagnitude)
+            ).height
+            let targetHeight = min(max(fittingHeight, minimumHeight), maximumHeight)
+            textView.isScrollEnabled = fittingHeight > maximumHeight
+
+            if abs(parent.height - targetHeight) > 0.5 {
+                DispatchQueue.main.async { [weak self] in
+                    self?.parent.height = targetHeight
+                }
+            }
+        }
     }
 }
 

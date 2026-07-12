@@ -1,19 +1,21 @@
+import Combine
 import Foundation
 
-struct MarkdownBlock: Equatable, Identifiable {
-    let id = UUID()
+struct MarkdownBlock: Equatable, Identifiable, Sendable {
+    let id: String
     let type: MarkdownBlockType
     let text: String
     let level: Int
 
-    init(type: MarkdownBlockType, text: String, level: Int = 0) {
+    nonisolated init(id: String, type: MarkdownBlockType, text: String, level: Int = 0) {
+        self.id = id
         self.type = type
         self.text = text
         self.level = level
     }
 }
 
-enum MarkdownBlockType: Equatable {
+enum MarkdownBlockType: Equatable, Sendable {
     case paragraph
     case heading
     case bullet
@@ -22,20 +24,20 @@ enum MarkdownBlockType: Equatable {
     case code
 }
 
-struct MarkdownInlineToken: Equatable, Identifiable {
-    let id = UUID()
+struct MarkdownInlineToken: Equatable, Identifiable, Sendable {
+    let id: String
     let text: String
     let type: MarkdownInlineType
 }
 
-enum MarkdownInlineType: Equatable {
+enum MarkdownInlineType: Equatable, Sendable {
     case text
     case bold
     case code
     case link
 }
 
-func parseMarkdownBlocks(_ markdown: String) -> [MarkdownBlock] {
+nonisolated func parseMarkdownBlocks(_ markdown: String) -> [MarkdownBlock] {
     let normalized = markdown.replacingOccurrences(of: "\r\n", with: "\n")
         .replacingOccurrences(of: "\r", with: "\n")
     var blocks: [MarkdownBlock] = []
@@ -43,9 +45,13 @@ func parseMarkdownBlocks(_ markdown: String) -> [MarkdownBlock] {
     var inCodeBlock = false
     var codeLines: [String] = []
 
+    func appendBlock(_ type: MarkdownBlockType, _ text: String, level: Int = 0) {
+        blocks.append(MarkdownBlock(id: "block-\(blocks.count)", type: type, text: text, level: level))
+    }
+
     func flushParagraph() {
         if !paragraph.isEmpty {
-            blocks.append(MarkdownBlock(type: .paragraph, text: paragraph.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)))
+            appendBlock(.paragraph, paragraph.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines))
             paragraph.removeAll()
         }
     }
@@ -55,7 +61,7 @@ func parseMarkdownBlocks(_ markdown: String) -> [MarkdownBlock] {
         let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.hasPrefix("```") {
             if inCodeBlock {
-                blocks.append(MarkdownBlock(type: .code, text: codeLines.joined(separator: "\n")))
+                appendBlock(.code, codeLines.joined(separator: "\n"))
                 codeLines.removeAll()
                 inCodeBlock = false
             } else {
@@ -75,25 +81,25 @@ func parseMarkdownBlocks(_ markdown: String) -> [MarkdownBlock] {
 
         if let match = trimmed.firstMatch(pattern: "^(#{1,3})\\s+(.+)$") {
             flushParagraph()
-            blocks.append(MarkdownBlock(type: .heading, text: match[2].trimmingCharacters(in: .whitespaces), level: match[1].count))
+            appendBlock(.heading, match[2].trimmingCharacters(in: .whitespaces), level: match[1].count)
             continue
         }
 
         if let match = trimmed.firstMatch(pattern: "^[-*+]\\s+(.+)$") {
             flushParagraph()
-            blocks.append(MarkdownBlock(type: .bullet, text: match[1].trimmingCharacters(in: .whitespaces)))
+            appendBlock(.bullet, match[1].trimmingCharacters(in: .whitespaces))
             continue
         }
 
         if let match = trimmed.firstMatch(pattern: "^\\d+[.)]\\s+(.+)$") {
             flushParagraph()
-            blocks.append(MarkdownBlock(type: .ordered, text: match[1].trimmingCharacters(in: .whitespaces)))
+            appendBlock(.ordered, match[1].trimmingCharacters(in: .whitespaces))
             continue
         }
 
         if trimmed.hasPrefix(">") {
             flushParagraph()
-            blocks.append(MarkdownBlock(type: .quote, text: String(trimmed.dropFirst()).trimmingCharacters(in: .whitespaces)))
+            appendBlock(.quote, String(trimmed.dropFirst()).trimmingCharacters(in: .whitespaces))
             continue
         }
 
@@ -101,19 +107,19 @@ func parseMarkdownBlocks(_ markdown: String) -> [MarkdownBlock] {
     }
 
     if inCodeBlock {
-        blocks.append(MarkdownBlock(type: .code, text: codeLines.joined(separator: "\n")))
+        appendBlock(.code, codeLines.joined(separator: "\n"))
     }
     flushParagraph()
     return blocks
 }
 
-func parseMarkdownInline(_ text: String) -> [MarkdownInlineToken] {
+nonisolated func parseMarkdownInline(_ text: String) -> [MarkdownInlineToken] {
     var tokens: [MarkdownInlineToken] = []
     var index = text.startIndex
 
     func appendPlain(until end: String.Index) {
         if end > index {
-            tokens.append(MarkdownInlineToken(text: String(text[index..<end]), type: .text))
+            tokens.append(MarkdownInlineToken(id: "inline-\(tokens.count)", text: String(text[index..<end]), type: .text))
         }
     }
 
@@ -132,19 +138,19 @@ func parseMarkdownInline(_ text: String) -> [MarkdownInlineToken] {
         if boldStart == next {
             let contentStart = text.index(index, offsetBy: 2)
             if let end = text.range(of: "**", range: contentStart..<text.endIndex)?.lowerBound {
-                tokens.append(MarkdownInlineToken(text: String(text[contentStart..<end]), type: .bold))
+                tokens.append(MarkdownInlineToken(id: "inline-\(tokens.count)", text: String(text[contentStart..<end]), type: .bold))
                 index = text.index(end, offsetBy: 2)
             } else {
-                tokens.append(MarkdownInlineToken(text: String(text[index..<text.endIndex]), type: .text))
+                tokens.append(MarkdownInlineToken(id: "inline-\(tokens.count)", text: String(text[index..<text.endIndex]), type: .text))
                 index = text.endIndex
             }
         } else if codeStart == next {
             let contentStart = text.index(after: index)
             if let end = text[contentStart..<text.endIndex].firstIndex(of: "`") {
-                tokens.append(MarkdownInlineToken(text: String(text[contentStart..<end]), type: .code))
+                tokens.append(MarkdownInlineToken(id: "inline-\(tokens.count)", text: String(text[contentStart..<end]), type: .code))
                 index = text.index(after: end)
             } else {
-                tokens.append(MarkdownInlineToken(text: String(text[index..<text.endIndex]), type: .text))
+                tokens.append(MarkdownInlineToken(id: "inline-\(tokens.count)", text: String(text[index..<text.endIndex]), type: .text))
                 index = text.endIndex
             }
         } else {
@@ -152,13 +158,13 @@ func parseMarkdownInline(_ text: String) -> [MarkdownInlineToken] {
                 let labelEndRange = text.range(of: "](", range: index..<text.endIndex),
                 let urlEnd = text[labelEndRange.upperBound..<text.endIndex].firstIndex(of: ")")
             else {
-                tokens.append(MarkdownInlineToken(text: String(text[index]), type: .text))
+                tokens.append(MarkdownInlineToken(id: "inline-\(tokens.count)", text: String(text[index]), type: .text))
                 index = text.index(after: index)
                 continue
             }
             let label = String(text[text.index(after: index)..<labelEndRange.lowerBound])
             let url = String(text[labelEndRange.upperBound..<urlEnd])
-            tokens.append(MarkdownInlineToken(text: url.isEmpty ? label : "\(label) (\(url))", type: .link))
+            tokens.append(MarkdownInlineToken(id: "inline-\(tokens.count)", text: url.isEmpty ? label : "\(label) (\(url))", type: .link))
             index = text.index(after: urlEnd)
         }
     }
@@ -166,8 +172,111 @@ func parseMarkdownInline(_ text: String) -> [MarkdownInlineToken] {
     return tokens
 }
 
+@MainActor
+private final class MarkdownBlockCacheBox: NSObject {
+    let blocks: [MarkdownBlock]
+
+    init(_ blocks: [MarkdownBlock]) {
+        self.blocks = blocks
+    }
+}
+
+@MainActor
+private final class MarkdownInlineCacheBox: NSObject {
+    let tokens: [MarkdownInlineToken]
+
+    init(_ tokens: [MarkdownInlineToken]) {
+        self.tokens = tokens
+    }
+}
+
+@MainActor
+private enum MarkdownRenderCache {
+    static let blocks: NSCache<NSString, MarkdownBlockCacheBox> = {
+        let cache = NSCache<NSString, MarkdownBlockCacheBox>()
+        cache.countLimit = 24
+        cache.totalCostLimit = 4 * 1024 * 1024
+        return cache
+    }()
+    static let inlineTokens: NSCache<NSString, MarkdownInlineCacheBox> = {
+        let cache = NSCache<NSString, MarkdownInlineCacheBox>()
+        cache.countLimit = 128
+        cache.totalCostLimit = 512 * 1024
+        return cache
+    }()
+}
+
+@MainActor
+func cachedMarkdownInlineTokens(_ text: String) -> [MarkdownInlineToken] {
+    let key = text as NSString
+    if let cached = MarkdownRenderCache.inlineTokens.object(forKey: key) {
+        return cached.tokens
+    }
+    let tokens = parseMarkdownInline(text)
+    MarkdownRenderCache.inlineTokens.setObject(
+        MarkdownInlineCacheBox(tokens),
+        forKey: key,
+        cost: text.utf8.count
+    )
+    return tokens
+}
+
+@MainActor
+func clearMarkdownRenderCache() {
+    MarkdownRenderCache.blocks.removeAllObjects()
+    MarkdownRenderCache.inlineTokens.removeAllObjects()
+}
+
+@MainActor
+final class MarkdownRenderState: ObservableObject {
+    @Published private(set) var blocks: [MarkdownBlock] = []
+    private var markdown = ""
+    private var parseTask: Task<Void, Never>?
+
+    deinit {
+        parseTask?.cancel()
+    }
+
+    func load(_ markdown: String) {
+        guard self.markdown != markdown else { return }
+        self.markdown = markdown
+        parseTask?.cancel()
+        let key = markdown as NSString
+        if let cached = MarkdownRenderCache.blocks.object(forKey: key) {
+            blocks = cached.blocks
+            return
+        }
+
+        if markdown.utf8.count < 4_096 {
+            let parsed = parseMarkdownBlocks(markdown)
+            cache(parsed, for: key, source: markdown)
+            blocks = parsed
+            return
+        }
+
+        blocks = []
+        let expectedMarkdown = markdown
+        parseTask = Task { [weak self] in
+            let parsed = await Task.detached(priority: .userInitiated) {
+                parseMarkdownBlocks(expectedMarkdown)
+            }.value
+            guard !Task.isCancelled, let self, self.markdown == expectedMarkdown else { return }
+            self.cache(parsed, for: key, source: expectedMarkdown)
+            self.blocks = parsed
+        }
+    }
+
+    private func cache(_ blocks: [MarkdownBlock], for key: NSString, source: String) {
+        MarkdownRenderCache.blocks.setObject(
+            MarkdownBlockCacheBox(blocks),
+            forKey: key,
+            cost: source.utf8.count
+        )
+    }
+}
+
 private extension String {
-    func trimmingTrailingSpacesAndTabs() -> String {
+    nonisolated func trimmingTrailingSpacesAndTabs() -> String {
         var result = self
         while let last = result.last, last == " " || last == "\t" {
             result.removeLast()
@@ -177,7 +286,7 @@ private extension String {
 }
 
 private extension String {
-    func firstMatch(pattern: String) -> [String]? {
+    nonisolated func firstMatch(pattern: String) -> [String]? {
         guard let regex = try? NSRegularExpression(pattern: pattern),
               let match = regex.firstMatch(in: self, range: NSRange(startIndex..., in: self)) else {
             return nil

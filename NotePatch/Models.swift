@@ -41,18 +41,39 @@ struct LearningBackendError: Error, LocalizedError {
     let message: String
     let statusCode: Int?
     let shouldClearSession: Bool
+    let refreshTokenAttempt: String?
     let cause: Error?
 
-    init(_ message: String, statusCode: Int? = nil, shouldClearSession: Bool = false, cause: Error? = nil) {
+    init(
+        _ message: String,
+        statusCode: Int? = nil,
+        shouldClearSession: Bool = false,
+        refreshTokenAttempt: String? = nil,
+        cause: Error? = nil
+    ) {
         self.message = message
         self.statusCode = statusCode
         self.shouldClearSession = shouldClearSession
+        self.refreshTokenAttempt = refreshTokenAttempt
         self.cause = cause
     }
 
     var errorDescription: String? {
         message
     }
+}
+
+func shouldClearPersistedSession(
+    for error: LearningBackendError,
+    currentRefreshToken: String?
+) -> Bool {
+    guard error.shouldClearSession else {
+        return false
+    }
+    guard let attemptedRefreshToken = error.refreshTokenAttempt else {
+        return true
+    }
+    return currentRefreshToken == attemptedRefreshToken
 }
 
 struct BackendUser: Decodable, Equatable {
@@ -521,6 +542,8 @@ struct ChatMessage: Decodable, Equatable, Identifiable {
     let taskId: String?
     let status: String
     let errorMessage: String?
+    let citations: [ChatCitation]?
+    let sourceStatus: String?
     let createdAt: String
 
     enum CodingKeys: String, CodingKey {
@@ -531,7 +554,23 @@ struct ChatMessage: Decodable, Equatable, Identifiable {
         case taskId = "task_id"
         case status
         case errorMessage = "error_message"
+        case citations
+        case sourceStatus = "source_status"
         case createdAt = "created_at"
+    }
+}
+
+struct ChatCitation: Decodable, Equatable {
+    let chunkId: String?
+    let documentId: String?
+    let score: Double?
+    let metadata: [String: JSONValue]?
+
+    enum CodingKeys: String, CodingKey {
+        case chunkId = "chunk_id"
+        case documentId = "document_id"
+        case score
+        case metadata
     }
 }
 
@@ -588,6 +627,9 @@ struct StudyNoteVersion: Decodable, Equatable, Identifiable {
     let jsonObjectKey: String
     let highlightedObjectKey: String?
     let highlightMapObjectKey: String?
+    let sourceVersionId: String?
+    let editOrigin: String?
+    let editSummary: String?
     let downloadURLs: [String: String]
 
     enum CodingKeys: String, CodingKey {
@@ -599,7 +641,54 @@ struct StudyNoteVersion: Decodable, Equatable, Identifiable {
         case jsonObjectKey = "json_object_key"
         case highlightedObjectKey = "highlighted_object_key"
         case highlightMapObjectKey = "highlight_map_object_key"
+        case sourceVersionId = "source_version_id"
+        case editOrigin = "edit_origin"
+        case editSummary = "edit_summary"
         case downloadURLs = "download_urls"
+    }
+
+    init(
+        id: String,
+        learningUnitId: String,
+        versionNo: Int,
+        title: String,
+        markdownObjectKey: String,
+        jsonObjectKey: String,
+        highlightedObjectKey: String? = nil,
+        highlightMapObjectKey: String? = nil,
+        sourceVersionId: String? = nil,
+        editOrigin: String? = nil,
+        editSummary: String? = nil,
+        downloadURLs: [String: String] = [:]
+    ) {
+        self.id = id
+        self.learningUnitId = learningUnitId
+        self.versionNo = versionNo
+        self.title = title
+        self.markdownObjectKey = markdownObjectKey
+        self.jsonObjectKey = jsonObjectKey
+        self.highlightedObjectKey = highlightedObjectKey
+        self.highlightMapObjectKey = highlightMapObjectKey
+        self.sourceVersionId = sourceVersionId
+        self.editOrigin = editOrigin
+        self.editSummary = editSummary
+        self.downloadURLs = downloadURLs
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        learningUnitId = try container.decode(String.self, forKey: .learningUnitId)
+        versionNo = try container.decode(Int.self, forKey: .versionNo)
+        title = try container.decode(String.self, forKey: .title)
+        markdownObjectKey = try container.decode(String.self, forKey: .markdownObjectKey)
+        jsonObjectKey = try container.decode(String.self, forKey: .jsonObjectKey)
+        highlightedObjectKey = try container.decodeIfPresent(String.self, forKey: .highlightedObjectKey)
+        highlightMapObjectKey = try container.decodeIfPresent(String.self, forKey: .highlightMapObjectKey)
+        sourceVersionId = try container.decodeIfPresent(String.self, forKey: .sourceVersionId)
+        editOrigin = try container.decodeIfPresent(String.self, forKey: .editOrigin)
+        editSummary = try container.decodeIfPresent(String.self, forKey: .editSummary)
+        downloadURLs = try container.decodeIfPresent([String: String].self, forKey: .downloadURLs) ?? [:]
     }
 
     var preferredDownloadURL: String? {
@@ -612,6 +701,38 @@ struct StudyNoteVersion: Decodable, Equatable, Identifiable {
 
     var jsonDownloadURL: String? {
         downloadURLs["json"]
+    }
+
+    var revisionOriginLabel: String {
+        switch editOrigin {
+        case "user": return "用户修订"
+        case "admin": return "管理员修订"
+        case "skill": return "自动生成"
+        default: return versionNo > 1 ? "修订版本" : "自动生成"
+        }
+    }
+}
+
+struct StudyNoteRevisionInput: Equatable {
+    let markdown: String
+    let title: String?
+    let editSummary: String?
+
+    var payload: [String: Any] {
+        var values: [String: Any] = ["markdown": markdown]
+        if let title { values["title"] = title }
+        if let editSummary { values["edit_summary"] = editSummary }
+        return values
+    }
+}
+
+struct StudyNoteRevisionResponse: Decodable, Equatable {
+    let note: StudyNoteVersion
+    let downstreamTasks: [JSONValue]?
+
+    enum CodingKeys: String, CodingKey {
+        case note
+        case downstreamTasks = "downstream_tasks"
     }
 }
 

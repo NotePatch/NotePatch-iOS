@@ -1,10 +1,37 @@
 import Foundation
 
+private struct RefreshFlightKey: Hashable {
+    let baseURL: String
+    let sessionIdentifier: ObjectIdentifier
+    let refreshToken: String
+}
+
+@MainActor
+private final class RefreshSingleFlight {
+    static let shared = RefreshSingleFlight()
+    private var tasks: [RefreshFlightKey: Task<TokenResponse, Error>] = [:]
+
+    func value(
+        for key: RefreshFlightKey,
+        operation: @escaping @MainActor () async throws -> TokenResponse
+    ) async throws -> TokenResponse {
+        if let task = tasks[key] {
+            return try await task.value
+        }
+        let task = Task { @MainActor in
+            try await operation()
+        }
+        tasks[key] = task
+        defer { tasks[key] = nil }
+        return try await task.value
+    }
+}
+
 final class LearningBackendClient {
     private let normalizedBaseURL: String
     private var accessToken: String?
     private var refreshToken: String?
-    private let onTokenRefreshed: ((TokenResponse) -> Void)?
+    private let onTokenRefreshed: ((TokenResponse, String) -> Void)?
     private let session: URLSession
 
     init(
@@ -12,7 +39,7 @@ final class LearningBackendClient {
         accessToken: String? = nil,
         refreshToken: String? = nil,
         session: URLSession = .shared,
-        onTokenRefreshed: ((TokenResponse) -> Void)? = nil
+        onTokenRefreshed: ((TokenResponse, String) -> Void)? = nil
     ) {
         self.normalizedBaseURL = normalizeLearningBackendBaseURL(baseURL)
         self.accessToken = accessToken
@@ -71,7 +98,11 @@ final class LearningBackendClient {
     }
 
     func refresh(refreshToken: String) async throws -> TokenResponse {
-        try await refreshTokenInternal(refreshToken)
+        let refreshed = try await refreshTokenSingleFlight(refreshToken)
+        accessToken = refreshed.accessToken
+        self.refreshToken = refreshed.refreshToken
+        onTokenRefreshed?(refreshed, refreshToken)
+        return refreshed
     }
 
     func heartbeat(clientId: String?) async throws -> PresenceHeartbeatResponse {
@@ -334,6 +365,20 @@ final class LearningBackendClient {
         )
     }
 
+    func createStudyNoteRevision(
+        workspaceId: String,
+        learningUnitId: String,
+        baseVersionId: String,
+        input: StudyNoteRevisionInput
+    ) async throws -> StudyNoteRevisionResponse {
+        try await authedJSON(
+            "POST",
+            "/workspaces/\(workspaceId.pathSegment)/learning-units/\(learningUnitId.pathSegment)/notes/\(baseVersionId.pathSegment)/revisions",
+            payload: input.payload,
+            as: StudyNoteRevisionResponse.self
+        )
+    }
+
     func searchKnowledge(
         workspaceId: String,
         query: String,
@@ -452,7 +497,7 @@ final class LearningBackendClient {
         request.httpBody = try JSONSerialization.data(withJSONObject: payload)
         let (data, response) = try await data(for: request)
         try validate(response: response, data: data)
-        return try decode(type, from: data)
+        return try await decode(type, from: data)
     }
 
     private func authedJSON<T: Decodable>(
@@ -462,7 +507,7 @@ final class LearningBackendClient {
         as type: T.Type
     ) async throws -> T {
         let data = try await authedData(method, path, payload: payload, allowRefresh: true)
-        return try decode(type, from: data)
+        return try await decode(type, from: data)
     }
 
     private func authedText(_ method: String, _ path: String, payload: [String: Any]?) async throws -> String {
@@ -493,21 +538,33 @@ final class LearningBackendClient {
             guard let refreshToken else {
                 throw LearningBackendError("登录已过期，请重新登录。", statusCode: status, shouldClearSession: true)
             }
+            let attemptedRefreshToken = refreshToken
             let refreshed: TokenResponse
             do {
-                refreshed = try await refreshTokenInternal(refreshToken)
+                refreshed = try await refreshTokenSingleFlight(attemptedRefreshToken)
             } catch let error as LearningBackendError {
                 throw LearningBackendError(
                     error.message,
                     statusCode: error.statusCode ?? status,
                     shouldClearSession: true,
+                    refreshTokenAttempt: attemptedRefreshToken,
                     cause: error
                 )
             }
             self.accessToken = refreshed.accessToken
             self.refreshToken = refreshed.refreshToken
-            onTokenRefreshed?(refreshed)
-            return try await authedData(method, path, payload: payload, allowRefresh: false)
+            onTokenRefreshed?(refreshed, attemptedRefreshToken)
+            do {
+                return try await authedData(method, path, payload: payload, allowRefresh: false)
+            } catch let error as LearningBackendError where error.shouldClearSession {
+                throw LearningBackendError(
+                    error.message,
+                    statusCode: error.statusCode,
+                    shouldClearSession: true,
+                    refreshTokenAttempt: attemptedRefreshToken,
+                    cause: error
+                )
+            }
         }
 
         try validate(response: response, data: data)
@@ -516,6 +573,20 @@ final class LearningBackendClient {
 
     private func refreshTokenInternal(_ token: String) async throws -> TokenResponse {
         try await postJSON("/auth/refresh", payload: ["refresh_token": token], as: TokenResponse.self)
+    }
+
+    private func refreshTokenSingleFlight(_ token: String) async throws -> TokenResponse {
+        let key = RefreshFlightKey(
+            baseURL: normalizedBaseURL,
+            sessionIdentifier: ObjectIdentifier(session),
+            refreshToken: token
+        )
+        return try await RefreshSingleFlight.shared.value(for: key) { [weak self] in
+            guard let self else {
+                throw LearningBackendError("刷新登录状态已取消。")
+            }
+            return try await self.refreshTokenInternal(token)
+        }
     }
 
     private func bearerHeader() throws -> String {
@@ -566,11 +637,14 @@ final class LearningBackendClient {
         }
     }
 
-    private func decode<T: Decodable>(_ type: T.Type, from data: Data) throws -> T {
+    private func decode<T: Decodable>(_ type: T.Type, from data: Data) async throws -> T {
         if T.self == EmptyResponse.self, data.isEmpty {
             return EmptyResponse() as! T
         }
-        return try JSONDecoder.notepatch.decode(type, from: data.isEmpty ? Data("{}".utf8) : data)
+        let payload = data.isEmpty ? Data("{}".utf8) : data
+        return try await Task.detached(priority: .userInitiated) {
+            try JSONDecoder().decode(type, from: payload)
+        }.value
     }
 
     static func parseErrorMessage(_ body: String, status: Int) -> String {
