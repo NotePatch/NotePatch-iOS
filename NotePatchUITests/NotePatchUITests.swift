@@ -124,20 +124,20 @@ final class NotePatchUITests: XCTestCase {
     @MainActor
     func testOpenClawEditorAcceptsMultilineInput() throws {
         let app = XCUIApplication()
-        app.launchArguments.append("-NotePatchUITestWorkbench")
+        app.launchArguments.append(contentsOf: ["-NotePatchUITestWorkbench", "-NotePatchUITestLongChat"])
         app.launch()
 
         XCTAssertTrue(app.otherElements["workbenchTabs"].waitForExistence(timeout: 5))
-        app.tabBars.buttons["AI"].tap()
+        app.tabBars.buttons["AI Co-pilot"].tap()
 
-        let editor = app.textViews["问 OpenClaw"]
+        let editor = app.textViews["Ask AI Co-pilot"]
         XCTAssertTrue(editor.waitForExistence(timeout: 3))
-        let attachmentButton = app.buttons["添加附件"]
+        let attachmentButton = app.buttons["Add attachment"]
         XCTAssertTrue(attachmentButton.exists)
         editor.tap()
         XCTAssertGreaterThan(attachmentButton.frame.minY, editor.frame.minY + 20)
         editor.typeText("第一行\n第二行")
-        let sendButton = app.buttons["发送"]
+        let sendButton = app.buttons["Send"]
         XCTAssertTrue(sendButton.isEnabled)
         XCTAssertLessThanOrEqual(sendButton.frame.maxX, app.frame.maxX - 12)
     }
@@ -149,13 +149,13 @@ final class NotePatchUITests: XCTestCase {
         app.launch()
 
         XCTAssertTrue(app.otherElements["workbenchTabs"].waitForExistence(timeout: 5))
-        app.tabBars.buttons["AI"].tap()
+        app.tabBars.buttons["AI Co-pilot"].tap()
 
-        let attachmentButton = app.buttons["添加附件"]
+        let attachmentButton = app.buttons["Add attachment"]
         XCTAssertTrue(attachmentButton.waitForExistence(timeout: 3))
         attachmentButton.tap()
-        XCTAssertTrue(app.buttons["选择图片"].waitForExistence(timeout: 2))
-        XCTAssertTrue(app.buttons["选择文件"].exists)
+        XCTAssertTrue(app.buttons["Choose photo"].waitForExistence(timeout: 2))
+        XCTAssertTrue(app.buttons["Choose file"].exists)
     }
 
     @MainActor
@@ -165,9 +165,9 @@ final class NotePatchUITests: XCTestCase {
         app.launch()
 
         XCTAssertTrue(app.otherElements["workbenchTabs"].waitForExistence(timeout: 5))
-        app.tabBars.buttons["AI"].tap()
+        app.tabBars.buttons["AI Co-pilot"].tap()
 
-        let editor = app.textViews["问 OpenClaw"]
+        let editor = app.textViews["Ask AI Co-pilot"]
         XCTAssertTrue(editor.waitForExistence(timeout: 3))
         editor.tap()
 

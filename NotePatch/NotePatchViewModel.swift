@@ -153,24 +153,9 @@ final class NotePatchViewModel: ObservableObject {
     @Published var fileTypeFilter = ""
     @Published var uploadProgressPercent: Int?
     @Published var uploadProgressLabel = ""
-    @Published var openClawInput = ""
-    @Published var openClawMessages: [OpenClawChatMessage] = [
-        OpenClawChatMessage(
-            id: "system",
-            role: .system,
-            content: "OpenClaw can help you organize ideas and analyze document results. Supports Markdown for replies.",
-            status: .done,
-            taskId: nil,
-            progress: nil,
-            events: []
-        )
-    ]
-    @Published var isOpenClawSending = false
+    let openClawState: OpenClawViewState
+    let openClawComposerState: OpenClawComposerState
     @Published var aiHistoryEnabled = true
-    @Published var conversations: [ChatConversation] = []
-    @Published var selectedConversationId: String?
-    @Published var isChatHistoryLoading = false
-    @Published private(set) var isConversationMutating = false
     @Published private(set) var isAIPreferenceUpdating = false
     @Published var learningUnits: [LearningUnit] = []
     @Published var selectedLearningUnitId: String?
@@ -227,6 +212,47 @@ final class NotePatchViewModel: ObservableObject {
     private var deferredLoadTasks: [DeferredWorkspaceLoadKey: Task<Void, Never>] = [:]
     private var deferredLoadGenerations: [DeferredWorkspaceLoadKey: UUID] = [:]
 
+    var uploadCacheDirectory: URL { cacheDirectory }
+
+    var openClawInput: String {
+        get { openClawComposerState.text }
+        set { openClawComposerState.text = newValue }
+    }
+
+    var openClawMessages: [OpenClawChatMessage] {
+        get { openClawState.messages }
+        set { openClawState.messages = newValue }
+    }
+
+    var isOpenClawSending: Bool {
+        get { openClawState.isSending }
+        set { openClawState.isSending = newValue }
+    }
+
+    var conversations: [ChatConversation] {
+        get { openClawState.conversations }
+        set { openClawState.conversations = newValue }
+    }
+
+    var selectedConversationId: String? {
+        get { openClawState.selectedConversationId }
+        set { openClawState.selectedConversationId = newValue }
+    }
+
+    var isChatHistoryLoading: Bool {
+        get { openClawState.isHistoryLoading }
+        set { openClawState.isHistoryLoading = newValue }
+    }
+
+    private(set) var isConversationMutating: Bool {
+        get { openClawState.isConversationMutating }
+        set {
+            guard openClawState.isConversationMutating != newValue else { return }
+            objectWillChange.send()
+            openClawState.isConversationMutating = newValue
+        }
+    }
+
     convenience init() {
         self.init(settings: SettingsStore())
     }
@@ -237,6 +263,8 @@ final class NotePatchViewModel: ObservableObject {
         tusSession: URLSession = .shared,
         cacheDirectory: URL = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first ?? FileManager.default.temporaryDirectory
     ) {
+        self.openClawState = OpenClawViewState()
+        self.openClawComposerState = OpenClawComposerState()
         self.settings = settings
         self.backendSession = backendSession
         self.tusSession = tusSession
@@ -252,6 +280,7 @@ final class NotePatchViewModel: ObservableObject {
         self.fullNameText = loadedSession?.fullName ?? ""
         self.selectedWorkspaceId = loadedSession?.selectedWorkspaceId
         self.aiHistoryEnabled = loadedSession?.aiHistoryEnabled ?? true
+        self.openClawState.messages = [welcomeChatMessage]
         if ProcessInfo.processInfo.arguments.contains("-NotePatchUITestWorkbench") {
             activateOfflineTestMode()
         }
@@ -550,22 +579,17 @@ final class NotePatchViewModel: ObservableObject {
             isBusy = true
             errorMessage = nil
             defer { isBusy = false }
-            for sourceURL in sourceURLs {
-                statusMessage = "Reading \(sourceURL.lastPathComponent)..."
-                let didAccess = sourceURL.startAccessingSecurityScopedResource()
-                defer {
-                    if didAccess { sourceURL.stopAccessingSecurityScopedResource() }
-                }
-                do {
-                    let uploadFile = try copyFileToUploadCache(
-                        sourceURL: sourceURL,
-                        fallbackPrefix: "file",
-                        cacheDirectory: cacheDirectory,
-                        suggestedMimeType: contentTypeForFilename(sourceURL.lastPathComponent)
-                    )
+            statusMessage = "Reading selected files..."
+            let outcomes = await FileImportService.shared.importFiles(
+                sourceURLs,
+                fallbackPrefix: "file",
+                cacheDirectory: cacheDirectory
+            )
+            for outcome in outcomes {
+                if let uploadFile = outcome.file {
                     stageUploadFileForPreview(uploadFile, documentKind: documentKind, learningMetadata: learningMetadata)
-                } catch {
-                    showError(error)
+                } else if let message = outcome.errorMessage {
+                    errorMessage = message
                 }
             }
         }
@@ -582,18 +606,13 @@ final class NotePatchViewModel: ObservableObject {
             isBusy = true
             errorMessage = nil
             defer { isBusy = false }
-            for selection in selections {
-                statusMessage = "Reading \(selection.suggestedFilename)..."
-                do {
-                    let uploadFile = try writePhotoDataToUploadCache(
-                        selection.data,
-                        suggestedFilename: selection.suggestedFilename,
-                        mimeType: selection.mimeType,
-                        cacheDirectory: cacheDirectory
-                    )
+            statusMessage = "Reading selected photos..."
+            let outcomes = await FileImportService.shared.writePhotos(selections, cacheDirectory: cacheDirectory)
+            for outcome in outcomes {
+                if let uploadFile = outcome.file {
                     stageUploadFileForPreview(uploadFile, documentKind: documentKind, learningMetadata: learningMetadata)
-                } catch {
-                    showError(error)
+                } else if let message = outcome.errorMessage {
+                    errorMessage = message
                 }
             }
         }
@@ -607,7 +626,7 @@ final class NotePatchViewModel: ObservableObject {
             errorMessage = nil
             statusMessage = "Reading image..."
             do {
-                let uploadFile = try writeImageToUploadCache(image, cacheDirectory: cacheDirectory)
+                let uploadFile = try await FileImportService.shared.writeCameraImage(image, cacheDirectory: cacheDirectory)
                 isBusy = false
                 stageUploadFileForPreview(uploadFile, documentKind: documentKind, learningMetadata: learningMetadata)
             } catch {
@@ -619,6 +638,14 @@ final class NotePatchViewModel: ObservableObject {
 
     func stageUploadFileForPreview(_ uploadFile: LocalUploadFile) {
         stageUploadFileForPreview(uploadFile, documentKind: uploadDocumentKind, learningMetadata: uploadLearningMetadata)
+    }
+
+    func stageImportedUploadFiles(_ files: [LocalUploadFile]) {
+        let documentKind = uploadDocumentKind
+        let learningMetadata = uploadLearningMetadata
+        for file in files {
+            stageUploadFileForPreview(file, documentKind: documentKind, learningMetadata: learningMetadata)
+        }
     }
 
     private func stageUploadFileForPreview(
@@ -700,7 +727,7 @@ final class NotePatchViewModel: ObservableObject {
     }
 
     private func performUpload(_ item: QueuedUploadItem, activeSession: SavedSession, workspaceId: String) async throws {
-        let prepared = try prepareUploadFile(item.file, cacheDirectory: cacheDirectory)
+        let prepared = try await FileImportService.shared.prepareForUpload(item.file, cacheDirectory: cacheDirectory)
         let client = clientFor(activeSession)
         statusMessage = "Creating upload session..."
         let uploadSession = try await client.createUploadSession(
@@ -779,18 +806,20 @@ final class NotePatchViewModel: ObservableObject {
         }
     }
 
-    func startOpenClawChat() {
+    @discardableResult
+    func startOpenClawChat(prompt rawPrompt: String) -> Bool {
         guard let activeSession = currentSessionOrError() else {
-            return
+            return false
         }
         guard let workspaceId = selectedWorkspaceId else {
             errorMessage = "Please select or recover a workspace first."
-            return
+            return false
         }
-        let prompt = openClawInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !isOpenClawSending else { return false }
+        let prompt = rawPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !prompt.isEmpty else {
             errorMessage = "Please enter an AI Co-pilot prompt."
-            return
+            return false
         }
 
         let userMessage = OpenClawChatMessage(
@@ -813,12 +842,11 @@ final class NotePatchViewModel: ObservableObject {
             events: []
         )
         openClawMessages.append(contentsOf: [userMessage, assistantMessage])
-        openClawInput = ""
+        isOpenClawSending = true
+        errorMessage = nil
+        statusMessage = ""
 
         Task {
-            isOpenClawSending = true
-            errorMessage = nil
-            statusMessage = ""
             var latestEvents: [TaskEventItem] = []
             do {
                 let task = try await clientFor(activeSession).openClawChat(
@@ -871,6 +899,7 @@ final class NotePatchViewModel: ObservableObject {
             }
             isOpenClawSending = false
         }
+        return true
     }
 
     var selectedConversation: ChatConversation? {
@@ -930,7 +959,7 @@ final class NotePatchViewModel: ObservableObject {
     func startNewConversation() {
         selectedConversationId = nil
         openClawMessages = [welcomeChatMessage]
-        openClawInput = ""
+        openClawComposerState.clearDraft(removeAttachmentFiles: true)
     }
 
     func renameCurrentConversation(to title: String) {
@@ -1889,6 +1918,27 @@ final class NotePatchViewModel: ObservableObject {
         homeworkRubricText = "10 points per question"
         homeworkMaxScoreText = "100"
         gradingDocuments = sampleDocuments
+        conversations = []
+        selectedConversationId = nil
+        isOpenClawSending = false
+        openClawComposerState.clearDraft(removeAttachmentFiles: true)
+        if ProcessInfo.processInfo.arguments.contains("-NotePatchUITestLongChat") {
+            openClawMessages = (0..<100).map { index in
+                OpenClawChatMessage(
+                    id: "ui-chat-\(index)",
+                    role: index.isMultiple(of: 2) ? .user : .assistant,
+                    content: index.isMultiple(of: 2)
+                        ? "Test prompt \(index)"
+                        : "## Test reply \(index)\n\nA cached **Markdown** response with `inline code`.\n\n- First point\n- Second point",
+                    status: .done,
+                    taskId: nil,
+                    progress: nil,
+                    events: []
+                )
+            }
+        } else {
+            openClawMessages = [welcomeChatMessage]
+        }
         if ProcessInfo.processInfo.arguments.contains("-NotePatchUITestPurgeFailure") {
             activeTask = TaskItem(
                 id: "purge-task",
@@ -1931,6 +1981,9 @@ final class NotePatchViewModel: ObservableObject {
         conversations = []
         selectedConversationId = nil
         openClawMessages = [welcomeChatMessage]
+        openClawComposerState.clearDraft(removeAttachmentFiles: true)
+        isOpenClawSending = false
+        isChatHistoryLoading = false
         isConversationMutating = false
         isAIPreferenceUpdating = false
         learningUnits = []
@@ -2430,13 +2483,7 @@ final class NotePatchViewModel: ObservableObject {
     }
 
     private func updateOpenClawMessage(_ messageId: String, transform: (inout OpenClawChatMessage) -> Void) {
-        openClawMessages = openClawMessages.map { message in
-            var updated = message
-            if updated.id == messageId {
-                transform(&updated)
-            }
-            return updated
-        }
+        openClawState.updateMessage(id: messageId, transform: transform)
     }
 
     private var welcomeChatMessage: OpenClawChatMessage {
@@ -2532,10 +2579,7 @@ final class NotePatchViewModel: ObservableObject {
             .appendingPathComponent("study-notes", isDirectory: true)
             .appendingPathComponent(filename)
         let downloadedURL = try await clientFor(activeSession).download(downloadURL: downloadURL, targetURL: targetURL)
-        guard let markdown = String(data: try Data(contentsOf: downloadedURL), encoding: .utf8) else {
-            throw LearningBackendError("Note content is not UTF-8 Markdown.")
-        }
-        return markdown
+        return try await FileImportService.shared.readUTF8File(at: downloadedURL)
     }
 
     private func handleStudyNoteRevisionConflict(

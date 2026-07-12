@@ -59,7 +59,7 @@ struct LearningBackendError: Error, LocalizedError {
     let refreshTokenAttempt: String?
     let cause: Error?
 
-    init(
+    nonisolated init(
         _ message: String,
         statusCode: Int? = nil,
         shouldClearSession: Bool = false,
@@ -73,7 +73,7 @@ struct LearningBackendError: Error, LocalizedError {
         self.cause = cause
     }
 
-    var errorDescription: String? {
+    nonisolated var errorDescription: String? {
         message
     }
 }

@@ -209,7 +209,11 @@ private struct WorkbenchScreen: View {
                 .tag(WorkbenchTab.documents)
                 .tabItem { Label(WorkbenchTab.documents.title, systemImage: WorkbenchTab.documents.iconName) }
 
-                OpenClawChatTab(model: model)
+                OpenClawChatTab(
+                    model: model,
+                    chatState: model.openClawState,
+                    composerState: model.openClawComposerState
+                )
                     .tag(WorkbenchTab.openClaw)
                     .tabItem { Label(WorkbenchTab.openClaw.title, systemImage: WorkbenchTab.openClaw.iconName) }
 
@@ -756,7 +760,7 @@ private struct UploadDocumentScreen: View {
                                 message: "Selected files, photos, or camera captures will appear here."
                             )
                         } else {
-                            VStack(spacing: 10) {
+                            LazyVStack(spacing: 10) {
                                 ForEach(model.queuedUploadItems) { item in
                                     QueuedUploadRow(
                                         item: item,
@@ -798,14 +802,12 @@ private struct UploadDocumentScreen: View {
             .ignoresSafeArea()
         }
         .sheet(isPresented: $isShowingPhotoLibrary) {
-            PhotoLibraryPicker { result in
+            PhotoLibraryPicker(cacheDirectory: model.uploadCacheDirectory) { result in
                 isShowingPhotoLibrary = false
                 guard let result else { return }
                 switch result {
-                case .success(let selections):
-                    model.uploadPhotoData(selections.map {
-                        (data: $0.data, suggestedFilename: $0.filename, mimeType: $0.mimeType)
-                    })
+                case .success(let files):
+                    model.stageImportedUploadFiles(files)
                 case .failure(let error):
                     model.errorMessage = friendlyError(error)
                 }
@@ -1386,23 +1388,23 @@ private struct TaskTime: View {
 // MARK: - OpenClaw Chat Tab
 
 private struct OpenClawChatTab: View {
-    @ObservedObject var model: NotePatchViewModel
+    let model: NotePatchViewModel
+    @ObservedObject var chatState: OpenClawViewState
+    @ObservedObject var composerState: OpenClawComposerState
     @State private var isRenaming = false
     @State private var titleDraft = ""
-    @State private var composerTextHeight: CGFloat = 44
     @State private var isComposerFocused = false
     @State private var isShowingAIPhotoLibrary = false
     @State private var isShowingAIFileImporter = false
-    @State private var aiDraftAttachments: [LocalUploadFile] = []
 
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 10) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(model.selectedConversation?.title ?? "New conversation")
+                    Text(chatState.selectedConversation?.title ?? "New conversation")
                         .npCardTitle()
                         .lineLimit(1)
-                    Text(model.selectedConversation == nil ? "Auto-saved after first message" : "Saved AI session")
+                    Text(chatState.selectedConversation == nil ? "Auto-saved after first message" : "Saved AI session")
                         .npCaption()
                         .lineLimit(1)
                 }
@@ -1414,7 +1416,7 @@ private struct OpenClawChatTab: View {
                     } label: {
                         Label("New conversation", systemImage: "square.and.pencil")
                     }
-                    if let conversation = model.selectedConversation {
+                    if let conversation = chatState.selectedConversation {
                         Button {
                             dismissComposer()
                             titleDraft = conversation.title
@@ -1429,14 +1431,14 @@ private struct OpenClawChatTab: View {
                             Label("Delete conversation", systemImage: "trash")
                         }
                     }
-                    if !model.conversations.isEmpty {
+                    if !chatState.conversations.isEmpty {
                         Divider()
-                        ForEach(model.conversations) { conversation in
+                        ForEach(chatState.conversations) { conversation in
                             Button {
                                 dismissComposer()
                                 model.selectConversation(conversation.id)
                             } label: {
-                                Label(conversation.title, systemImage: conversation.id == model.selectedConversationId ? "checkmark" : "bubble.left")
+                                Label(conversation.title, systemImage: conversation.id == chatState.selectedConversationId ? "checkmark" : "bubble.left")
                             }
                         }
                     }
@@ -1446,7 +1448,7 @@ private struct OpenClawChatTab: View {
                         .foregroundStyle(NPColors.textSecondary)
                         .frame(width: 36, height: 36)
                 }
-                .disabled(model.isChatHistoryLoading || model.isConversationMutating)
+                .disabled(chatState.isHistoryLoading || chatState.isConversationMutating)
                 .accessibilityLabel("Conversation actions")
             }
             .padding(.horizontal, NPSpacing.outer)
@@ -1467,7 +1469,7 @@ private struct OpenClawChatTab: View {
                     .frame(height: 0)
 
                     LazyVStack(spacing: 12) {
-                        ForEach(model.openClawMessages) { message in
+                        ForEach(chatState.messages) { message in
                             OpenClawMessageBubble(message: message)
                                 .id(message.id)
                         }
@@ -1475,8 +1477,8 @@ private struct OpenClawChatTab: View {
                     .padding(.horizontal, NPSpacing.outer)
                     .padding(.vertical, 14)
                 }
-                .onChange(of: model.openClawMessages.count) { _ in
-                    if let last = model.openClawMessages.last {
+                .onChange(of: chatState.messages.count) { _ in
+                    if let last = chatState.messages.last {
                         withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
                             proxy.scrollTo(last.id, anchor: .bottom)
                         }
@@ -1508,12 +1510,12 @@ private struct OpenClawChatTab: View {
             }
         }
         .sheet(isPresented: $isShowingAIPhotoLibrary) {
-            PhotoLibraryPicker { result in
+            PhotoLibraryPicker(cacheDirectory: aiAttachmentCacheDirectory) { result in
                 isShowingAIPhotoLibrary = false
                 guard let result else { return }
                 switch result {
-                case .success(let selections):
-                    addAIPhotoAttachments(selections)
+                case .success(let files):
+                    composerState.attachments.append(contentsOf: files)
                 case .failure(let error):
                     model.errorMessage = friendlyError(error)
                 }
@@ -1525,7 +1527,7 @@ private struct OpenClawChatTab: View {
             Button("Cancel", role: .cancel) {}
             Button("Save") { model.renameCurrentConversation(to: titleDraft) }
                 .disabled(
-                    model.isConversationMutating ||
+                    chatState.isConversationMutating ||
                     titleDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
                     titleDraft.trimmingCharacters(in: .whitespacesAndNewlines).count > 160
                 )
@@ -1546,22 +1548,22 @@ private struct OpenClawChatTab: View {
         guard translation.height > 12,
               translation.height > abs(translation.width),
               startLocation.y < scrollBottomY,
-              location.y >= scrollBottomY + composerTextHeight else {
+              location.y >= scrollBottomY + composerState.measuredTextHeight else {
             return
         }
         dismissComposer()
     }
 
     private var isComposerExpanded: Bool {
-        isComposerFocused || !model.openClawInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        isComposerFocused || !composerState.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private var composer: some View {
         let expanded = isComposerExpanded
-        let composerHeight = expanded ? max(92, composerTextHeight + 62) : 44
+        let composerHeight = expanded ? max(92, composerState.measuredTextHeight + 62) : 44
 
         return VStack(spacing: NPSpacing.small) {
-            if !aiDraftAttachments.isEmpty {
+            if !composerState.attachments.isEmpty {
                 aiAttachmentStrip
             }
 
@@ -1581,25 +1583,26 @@ private struct OpenClawChatTab: View {
                     .padding(.leading, expanded ? NPSpacing.outer : 54)
                     .padding(.trailing, expanded ? NPSpacing.outer : 54)
                     .padding(.top, expanded ? 19 : 11)
-                    .opacity(model.openClawInput.isEmpty ? 1 : 0)
+                    .opacity(composerState.text.isEmpty ? 1 : 0)
                     .allowsHitTesting(false)
 
                 AdaptiveComposerTextView(
-                    text: $model.openClawInput,
+                    text: $composerState.text,
                     isFocused: Binding(
                         get: { isComposerFocused },
                         set: { isComposerFocused = $0 }
                     ),
-                    height: $composerTextHeight,
+                    height: $composerState.measuredTextHeight,
                     maximumLines: expanded ? 7 : 1
                 )
-                .frame(height: expanded ? composerTextHeight : 44)
+                .frame(height: expanded ? composerState.measuredTextHeight : 44)
                 .padding(.leading, expanded ? NPSpacing.small : 46)
                 .padding(.trailing, expanded ? NPSpacing.small : 46)
                 .padding(.top, expanded ? NPSpacing.small : 0)
                 .padding(.bottom, expanded ? 46 : 0)
                 .accessibilityLabel("Ask AI Co-pilot")
-                .disabled(model.isOpenClawSending)
+                .accessibilityIdentifier("openClawComposerTextView")
+                .disabled(chatState.isSending)
 
                 HStack(spacing: 10) {
                     composerAttachmentButton
@@ -1635,13 +1638,14 @@ private struct OpenClawChatTab: View {
         }
         .foregroundStyle(NPColors.textSecondary)
         .accessibilityLabel("Add attachment")
-        .disabled(model.isOpenClawSending)
+        .accessibilityIdentifier("openClawAttachmentButton")
+        .disabled(chatState.isSending)
     }
 
     private var aiAttachmentStrip: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: NPSpacing.small) {
-                ForEach(aiDraftAttachments) { file in
+                ForEach(composerState.attachments) { file in
                     AIComposerAttachmentChip(file: file) {
                         removeAIDraftAttachment(file)
                     }
@@ -1653,48 +1657,26 @@ private struct OpenClawChatTab: View {
     }
 
     private func addAIFileAttachments(_ urls: [URL]) {
-        var loaded: [LocalUploadFile] = []
-        for url in urls {
-            let didAccess = url.startAccessingSecurityScopedResource()
-            defer {
-                if didAccess { url.stopAccessingSecurityScopedResource() }
-            }
-            do {
-                loaded.append(
-                    try copyFileToUploadCache(
-                        sourceURL: url,
-                        fallbackPrefix: "ai-attachment",
-                        cacheDirectory: aiAttachmentCacheDirectory,
-                        suggestedMimeType: contentTypeForFilename(url.lastPathComponent)
-                    )
-                )
-            } catch {
-                model.errorMessage = friendlyError(error)
-            }
-        }
-        aiDraftAttachments.append(contentsOf: loaded)
-    }
-
-    private func addAIPhotoAttachments(_ selections: [PhotoLibrarySelection]) {
-        for selection in selections {
-            do {
-                aiDraftAttachments.append(
-                    try writePhotoDataToUploadCache(
-                        selection.data,
-                        suggestedFilename: selection.filename,
-                        mimeType: selection.mimeType,
-                        cacheDirectory: aiAttachmentCacheDirectory
-                    )
-                )
-            } catch {
-                model.errorMessage = friendlyError(error)
+        let cacheDirectory = aiAttachmentCacheDirectory
+        Task {
+            let outcomes = await FileImportService.shared.importFiles(
+                urls,
+                fallbackPrefix: "ai-attachment",
+                cacheDirectory: cacheDirectory
+            )
+            composerState.attachments.append(contentsOf: outcomes.compactMap(\.file))
+            if let message = outcomes.compactMap(\.errorMessage).first {
+                model.errorMessage = message
             }
         }
     }
 
     private func removeAIDraftAttachment(_ file: LocalUploadFile) {
-        aiDraftAttachments.removeAll { $0.id == file.id }
-        try? FileManager.default.removeItem(at: file.url)
+        composerState.removeAttachment(file)
+        UploadThumbnailCache.shared.remove(file: file)
+        Task.detached(priority: .utility) {
+            try? FileManager.default.removeItem(at: file.url)
+        }
     }
 
     private var aiAttachmentCacheDirectory: URL {
@@ -1703,11 +1685,13 @@ private struct OpenClawChatTab: View {
     }
 
     private var composerSendButton: some View {
-        let canSend = !model.isOpenClawSending && !model.openClawInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let canSend = !chatState.isSending && !composerState.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
 
         return Button {
             dismissComposer()
-            model.startOpenClawChat()
+            if model.startOpenClawChat(prompt: composerState.text) {
+                composerState.clearDraft(removeAttachmentFiles: true)
+            }
         } label: {
             Image(systemName: "arrow.up")
                 .font(.system(size: 16, weight: .bold))
@@ -1724,6 +1708,7 @@ private struct OpenClawChatTab: View {
         .contentShape(Circle())
         .disabled(!canSend)
         .accessibilityLabel("Send")
+        .accessibilityIdentifier("openClawSendButton")
     }
 }
 
@@ -1761,17 +1746,11 @@ private struct AIComposerAttachmentChip: View {
 
     @ViewBuilder
     private var attachmentIcon: some View {
-        if file.isImage, let image = UIImage(contentsOfFile: file.url.path) {
-            Image(uiImage: image)
-                .resizable()
-                .scaledToFill()
-                .frame(width: 30, height: 30)
-                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-        } else {
-            Image(systemName: "doc.fill")
-                .foregroundStyle(NPColors.brand)
-                .frame(width: 30, height: 30)
-        }
+        UploadThumbnailImage(
+            file: file,
+            size: CGSize(width: 30, height: 30),
+            cornerRadius: 6
+        )
     }
 }
 
@@ -1831,7 +1810,7 @@ private struct LearningUnitsSection: View {
     @ObservedObject var model: NotePatchViewModel
 
     var body: some View {
-        VStack(alignment: .leading, spacing: NPSpacing.item) {
+        LazyVStack(alignment: .leading, spacing: NPSpacing.item) {
             LearningSectionHeader(title: "Learning units", subtitle: "Auto-organized results from your workspace", isLoading: model.isLearningLoading) {
                 model.loadLearningUnits(allowOfflineNetwork: true)
             }
@@ -1916,7 +1895,7 @@ private struct KnowledgeSearchSection: View {
     @ObservedObject var model: NotePatchViewModel
 
     var body: some View {
-        VStack(alignment: .leading, spacing: NPSpacing.item) {
+        LazyVStack(alignment: .leading, spacing: NPSpacing.item) {
             VStack(alignment: .leading, spacing: 2) {
                 Text("Knowledge search").npSectionTitle()
                 Text("Search through your workspace materials").npCaption()
@@ -1996,7 +1975,7 @@ private struct HomeworkGradingSection: View {
     @State private var selectedReferenceDocumentId = ""
 
     var body: some View {
-        VStack(alignment: .leading, spacing: NPSpacing.item) {
+        LazyVStack(alignment: .leading, spacing: NPSpacing.item) {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Homework grading").npSectionTitle()
@@ -2496,16 +2475,22 @@ private struct LightweightMarkdownText: View {
                         .font(block.level == 1 ? .title3.weight(.semibold) : .subheadline.weight(.semibold))
                         .foregroundStyle(color)
                 case .bullet:
-                    MarkdownInlineText(text: "• \(block.text)", color: color)
+                    HStack(alignment: .firstTextBaseline, spacing: 5) {
+                        Text("•")
+                        MarkdownInlineText(tokens: block.inlineTokens, color: color)
+                    }
                 case .ordered:
-                    MarkdownInlineText(text: "1. \(block.text)", color: color)
+                    HStack(alignment: .firstTextBaseline, spacing: 5) {
+                        Text("1.")
+                        MarkdownInlineText(tokens: block.inlineTokens, color: color)
+                    }
                 case .quote:
                     HStack(spacing: NPSpacing.small) {
                         RoundedRectangle(cornerRadius: 2)
                             .fill(NPColors.brand)
                             .frame(width: 4)
                             .frame(height: 38)
-                        MarkdownInlineText(text: block.text, color: NPColors.textPrimary)
+                        MarkdownInlineText(tokens: block.inlineTokens, color: NPColors.textPrimary)
                     }
                     .padding(NPSpacing.small)
                     .background(NPColors.surface)
@@ -2519,7 +2504,7 @@ private struct LightweightMarkdownText: View {
                         .background(Color.black.opacity(0.65))
                         .clipShape(RoundedRectangle(cornerRadius: 6))
                 case .paragraph:
-                    MarkdownInlineText(text: block.text, color: color)
+                    MarkdownInlineText(tokens: block.inlineTokens, color: color)
                 }
             }
         }
@@ -2530,11 +2515,11 @@ private struct LightweightMarkdownText: View {
 }
 
 private struct MarkdownInlineText: View {
-    let text: String
+    let tokens: [MarkdownInlineToken]
     let color: Color
 
     var body: some View {
-        cachedMarkdownInlineTokens(text).reduce(Text("")) { partial, token in
+        tokens.reduce(Text("")) { partial, token in
             partial + styledText(token)
         }
         .foregroundStyle(color)
@@ -3037,11 +3022,13 @@ private struct AdaptiveComposerTextView: UIViewRepresentable {
         textView.alwaysBounceVertical = false
         textView.isScrollEnabled = false
         textView.accessibilityLabel = "Ask AI Co-pilot"
+        textView.accessibilityIdentifier = "openClawComposerTextView"
         return textView
     }
 
     func updateUIView(_ textView: UITextView, context: Context) {
         context.coordinator.update(parent: self)
+        let didReplaceText = textView.text != text
         if textView.text != text {
             textView.text = text
         }
@@ -3050,7 +3037,7 @@ private struct AdaptiveComposerTextView: UIViewRepresentable {
         } else if !isFocused, textView.isFirstResponder {
             textView.resignFirstResponder()
         }
-        context.coordinator.updateHeight(for: textView)
+        context.coordinator.updateHeight(for: textView, force: didReplaceText)
     }
 
     func makeCoordinator() -> Coordinator {
@@ -3059,6 +3046,9 @@ private struct AdaptiveComposerTextView: UIViewRepresentable {
 
     final class Coordinator: NSObject, UITextViewDelegate {
         private var parent: AdaptiveComposerTextView
+        private var lastMeasuredText: String?
+        private var lastMeasuredWidth: CGFloat = 0
+        private var lastMaximumLines = 0
 
         init(parent: AdaptiveComposerTextView) {
             self.parent = parent
@@ -3079,7 +3069,20 @@ private struct AdaptiveComposerTextView: UIViewRepresentable {
 
         func textViewDidEndEditing(_ textView: UITextView) {}
 
-        func updateHeight(for textView: UITextView) {
+        func updateHeight(for textView: UITextView, force: Bool = false) {
+            let width = max(textView.bounds.width, 1)
+            guard force ||
+                    lastMeasuredText != textView.text ||
+                    abs(lastMeasuredWidth - width) > 0.5 ||
+                    lastMaximumLines != parent.maximumLines else {
+                return
+            }
+            let trace = NPPerformanceTrace.begin("ComposerMeasure")
+            defer { NPPerformanceTrace.end("ComposerMeasure", id: trace) }
+            lastMeasuredText = textView.text
+            lastMeasuredWidth = width
+            lastMaximumLines = parent.maximumLines
+
             let lineHeight = textView.font?.lineHeight ?? UIFont.preferredFont(forTextStyle: .body).lineHeight
             let verticalInsets = textView.textContainerInset.top + textView.textContainerInset.bottom
             let minimumHeight = max(44, ceil(lineHeight + verticalInsets))
@@ -3087,7 +3090,6 @@ private struct AdaptiveComposerTextView: UIViewRepresentable {
                 minimumHeight,
                 ceil(lineHeight * CGFloat(max(1, parent.maximumLines)) + verticalInsets)
             )
-            let width = max(textView.bounds.width, 1)
             let fittingHeight = textView.sizeThatFits(
                 CGSize(width: width, height: CGFloat.greatestFiniteMagnitude)
             ).height
@@ -3105,14 +3107,9 @@ private struct AdaptiveComposerTextView: UIViewRepresentable {
 
 // MARK: - Photo Library Picker
 
-private struct PhotoLibrarySelection {
-    let data: Data
-    let filename: String
-    let mimeType: String?
-}
-
 private struct PhotoLibraryPicker: UIViewControllerRepresentable {
-    let onComplete: (Result<[PhotoLibrarySelection], Error>?) -> Void
+    let cacheDirectory: URL
+    let onComplete: (Result<[LocalUploadFile], Error>?) -> Void
 
     func makeUIViewController(context: Context) -> PHPickerViewController {
         var configuration = PHPickerConfiguration(photoLibrary: .shared())
@@ -3126,13 +3123,15 @@ private struct PhotoLibraryPicker: UIViewControllerRepresentable {
     func updateUIViewController(_ uiViewController: PHPickerViewController, context: Context) {}
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(onComplete: onComplete)
+        Coordinator(cacheDirectory: cacheDirectory, onComplete: onComplete)
     }
 
     final class Coordinator: NSObject, PHPickerViewControllerDelegate {
-        let onComplete: (Result<[PhotoLibrarySelection], Error>?) -> Void
+        let cacheDirectory: URL
+        let onComplete: (Result<[LocalUploadFile], Error>?) -> Void
 
-        init(onComplete: @escaping (Result<[PhotoLibrarySelection], Error>?) -> Void) {
+        init(cacheDirectory: URL, onComplete: @escaping (Result<[LocalUploadFile], Error>?) -> Void) {
+            self.cacheDirectory = cacheDirectory
             self.onComplete = onComplete
         }
 
@@ -3142,7 +3141,8 @@ private struct PhotoLibraryPicker: UIViewControllerRepresentable {
                 return
             }
             let group = DispatchGroup()
-            var selections = Array<PhotoLibrarySelection?>(repeating: nil, count: results.count)
+            let lock = NSLock()
+            var selections = Array<LocalUploadFile?>(repeating: nil, count: results.count)
             var firstError: Error?
 
             for (index, result) in results.enumerated() {
@@ -3154,16 +3154,12 @@ private struct PhotoLibraryPicker: UIViewControllerRepresentable {
                     continue
                 }
                 group.enter()
-                provider.loadDataRepresentation(forTypeIdentifier: typeIdentifier) { data, error in
-                    DispatchQueue.main.async {
-                        defer { group.leave() }
-                        if let error {
-                            firstError = firstError ?? error
-                            return
-                        }
-                        guard let data else {
-                            firstError = firstError ?? LearningBackendError("Unable to read the selected image.")
-                            return
+                provider.loadFileRepresentation(forTypeIdentifier: typeIdentifier) { temporaryURL, error in
+                    defer { group.leave() }
+                    do {
+                        if let error { throw error }
+                        guard let temporaryURL else {
+                            throw LearningBackendError("Unable to read the selected image.")
                         }
                         let type = UTType(typeIdentifier)
                         let fileExtension = type?.preferredFilenameExtension ?? "jpg"
@@ -3171,11 +3167,20 @@ private struct PhotoLibraryPicker: UIViewControllerRepresentable {
                         let filename = suggestedName?.isEmpty == false
                             ? ((suggestedName! as NSString).pathExtension.isEmpty ? "\(suggestedName!).\(fileExtension)" : suggestedName!)
                             : "selected-\(Int(Date().timeIntervalSince1970 * 1000))-\(index).\(fileExtension)"
-                        selections[index] = PhotoLibrarySelection(
-                            data: data,
-                            filename: filename,
-                            mimeType: type?.preferredMIMEType ?? contentTypeForFilename(filename)
+                        let file = try copyFileToUploadCache(
+                            sourceURL: temporaryURL,
+                            fallbackPrefix: "selected-photo",
+                            cacheDirectory: self.cacheDirectory,
+                            suggestedMimeType: type?.preferredMIMEType ?? contentTypeForFilename(filename),
+                            suggestedFilename: filename
                         )
+                        lock.lock()
+                        selections[index] = file
+                        lock.unlock()
+                    } catch {
+                        lock.lock()
+                        firstError = firstError ?? error
+                        lock.unlock()
                     }
                 }
             }

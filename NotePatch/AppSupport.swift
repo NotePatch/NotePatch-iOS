@@ -8,24 +8,31 @@ enum UploadPreviewKind: Equatable {
     case unsupported
 }
 
-struct LocalUploadFile: Equatable, Identifiable {
-    let id = UUID()
+struct LocalUploadFile: Equatable, Identifiable, Sendable {
+    let id: UUID
     let url: URL
     let filename: String
     let mimeType: String?
 
-    var fileSize: Int64? {
+    nonisolated init(id: UUID = UUID(), url: URL, filename: String, mimeType: String?) {
+        self.id = id
+        self.url = url
+        self.filename = filename
+        self.mimeType = mimeType
+    }
+
+    nonisolated var fileSize: Int64? {
         (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init)
     }
 
-    var isImage: Bool {
+    nonisolated var isImage: Bool {
         if mimeType?.hasPrefix("image/") == true {
             return true
         }
         return ["jpg", "jpeg", "png", "webp", "heic"].contains(url.pathExtension.lowercased())
     }
 
-    func previewKind(canQuickLookPreview: Bool) -> UploadPreviewKind {
+    nonisolated func previewKind(canQuickLookPreview: Bool) -> UploadPreviewKind {
         if isImage {
             return .image
         }
@@ -73,7 +80,7 @@ struct DownloadedPreview: Identifiable, Equatable {
     }
 }
 
-func prepareUploadFile(_ source: LocalUploadFile, cacheDirectory: URL) throws -> LocalUploadFile {
+nonisolated func prepareUploadFile(_ source: LocalUploadFile, cacheDirectory: URL) throws -> LocalUploadFile {
     guard source.isImage else {
         return source
     }
@@ -88,7 +95,7 @@ func prepareUploadFile(_ source: LocalUploadFile, cacheDirectory: URL) throws ->
     )
 }
 
-func normalizeImageOrientation(_ sourceURL: URL, cacheDirectory: URL) throws -> URL {
+nonisolated func normalizeImageOrientation(_ sourceURL: URL, cacheDirectory: URL) throws -> URL {
     guard let image = UIImage(contentsOfFile: sourceURL.path), image.imageOrientation != .up else {
         return sourceURL
     }
@@ -108,16 +115,19 @@ func normalizeImageOrientation(_ sourceURL: URL, cacheDirectory: URL) throws -> 
     return targetURL
 }
 
-func copyFileToUploadCache(
+nonisolated func copyFileToUploadCache(
     sourceURL: URL,
     fallbackPrefix: String,
     cacheDirectory: URL,
-    suggestedMimeType: String? = nil
+    suggestedMimeType: String? = nil,
+    suggestedFilename: String? = nil
 ) throws -> LocalUploadFile {
-    let safeName = sanitizeFileName(sourceURL.lastPathComponent.isEmpty ? "\(fallbackPrefix)-\(Int(Date().timeIntervalSince1970)).bin" : sourceURL.lastPathComponent)
+    let sourceName = suggestedFilename?.trimmingCharacters(in: .whitespacesAndNewlines)
+    let preferredName = sourceName?.isEmpty == false ? sourceName! : sourceURL.lastPathComponent
+    let safeName = sanitizeFileName(preferredName.isEmpty ? "\(fallbackPrefix)-\(Int(Date().timeIntervalSince1970)).bin" : preferredName)
     let directory = cacheDirectory.appendingPathComponent("uploads", isDirectory: true)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-    let targetURL = directory.appendingPathComponent("\(Int(Date().timeIntervalSince1970 * 1000))_\(safeName)")
+    let targetURL = directory.appendingPathComponent("\(UUID().uuidString)_\(safeName)")
     if FileManager.default.fileExists(atPath: targetURL.path) {
         try FileManager.default.removeItem(at: targetURL)
     }
@@ -129,7 +139,7 @@ func copyFileToUploadCache(
     )
 }
 
-func writeImageToUploadCache(_ image: UIImage, cacheDirectory: URL) throws -> LocalUploadFile {
+nonisolated func writeImageToUploadCache(_ image: UIImage, cacheDirectory: URL) throws -> LocalUploadFile {
     guard let data = image.jpegData(compressionQuality: 0.95) else {
         throw LearningBackendError("Unable to read image; cannot correct photo orientation.")
     }
@@ -141,28 +151,28 @@ func writeImageToUploadCache(_ image: UIImage, cacheDirectory: URL) throws -> Lo
     return LocalUploadFile(url: targetURL, filename: filename, mimeType: "image/jpeg")
 }
 
-func writePhotoDataToUploadCache(_ data: Data, suggestedFilename: String, mimeType: String?, cacheDirectory: URL) throws -> LocalUploadFile {
+nonisolated func writePhotoDataToUploadCache(_ data: Data, suggestedFilename: String, mimeType: String?, cacheDirectory: URL) throws -> LocalUploadFile {
     let safeName = sanitizeFileName(suggestedFilename)
     let directory = cacheDirectory.appendingPathComponent("uploads", isDirectory: true)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-    let targetURL = directory.appendingPathComponent("\(Int(Date().timeIntervalSince1970 * 1000))_\(safeName)")
+    let targetURL = directory.appendingPathComponent("\(UUID().uuidString)_\(safeName)")
     try data.write(to: targetURL, options: .atomic)
     return LocalUploadFile(url: targetURL, filename: safeName, mimeType: mimeType ?? contentTypeForFilename(safeName))
 }
 
-func sanitizeFileName(_ name: String) -> String {
+nonisolated func sanitizeFileName(_ name: String) -> String {
     let invalid = CharacterSet(charactersIn: "\\/:*?\"<>|")
     let sanitized = name.components(separatedBy: invalid).joined(separator: "_")
     return sanitized.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "upload.bin" : sanitized
 }
 
-func replacingFilenameExtension(_ filename: String, with newExtension: String) -> String {
+nonisolated func replacingFilenameExtension(_ filename: String, with newExtension: String) -> String {
     let nsName = filename as NSString
     let base = nsName.deletingPathExtension
     return base.isEmpty ? "\(filename).\(newExtension)" : "\(base).\(newExtension)"
 }
 
-func extensionForContentType(_ contentType: String?) -> String? {
+nonisolated func extensionForContentType(_ contentType: String?) -> String? {
     guard let contentType,
           let type = UTType(mimeType: contentType),
           let ext = type.preferredFilenameExtension,
@@ -172,7 +182,7 @@ func extensionForContentType(_ contentType: String?) -> String? {
     return ext
 }
 
-func contentTypeForFilename(_ filename: String) -> String? {
+nonisolated func contentTypeForFilename(_ filename: String) -> String? {
     switch (filename as NSString).pathExtension.lowercased() {
     case "jpg", "jpeg":
         return "image/jpeg"

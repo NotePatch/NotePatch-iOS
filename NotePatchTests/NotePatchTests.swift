@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 import QuickLookThumbnailing
 import SwiftUI
@@ -154,6 +155,115 @@ struct NotePatchTests {
         renderer.load(longMarkdown)
         try await Self.waitUntil { !renderer.blocks.isEmpty }
         #expect(renderer.blocks.first?.id == "block-0")
+        #expect(renderer.blocks.first?.inlineTokens.isEmpty == false)
+    }
+
+    @Test @MainActor func openClawComposerState_doesNotPublishRootViewModelChanges() throws {
+        let suiteName = "NotePatchTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let model = NotePatchViewModel(
+            settings: SettingsStore(defaults: defaults, keychain: KeychainStore(service: suiteName))
+        )
+        var rootChangeCount = 0
+        let cancellable = model.objectWillChange.sink { rootChangeCount += 1 }
+
+        model.openClawComposerState.text = String(repeating: "a", count: 200)
+        model.openClawComposerState.measuredTextHeight = 120
+
+        #expect(model.openClawInput.count == 200)
+        #expect(rootChangeCount == 0)
+        withExtendedLifetime(cancellable) {}
+    }
+
+    @Test @MainActor func openClawMessageState_onlyPublishesActualChanges() {
+        let message = OpenClawChatMessage(
+            id: "message-1",
+            role: .assistant,
+            content: "Thinking...",
+            status: .sending,
+            taskId: "task-1",
+            progress: 10,
+            events: []
+        )
+        let state = OpenClawViewState(messages: [message])
+        var publishCount = 0
+        let cancellable = state.objectWillChange.sink { publishCount += 1 }
+
+        let unchanged = state.updateMessage(id: message.id) { $0.progress = 10 }
+        #expect(!unchanged)
+        #expect(publishCount == 0)
+
+        let changed = state.updateMessage(id: message.id) { $0.progress = 20 }
+        #expect(changed)
+        #expect(state.messages.first?.progress == 20)
+        #expect(publishCount == 1)
+        withExtendedLifetime(cancellable) {}
+    }
+
+    @Test @MainActor func openClawViewModel_usesExplicitPromptAndLeavesComposerOwnershipToView() async throws {
+        let suiteName = "NotePatchTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        var capturedPrompt: String?
+        let session = Self.mockSession { request in
+            let key = "\(request.httpMethod ?? "") \(request.url?.path ?? "")"
+            switch key {
+            case "POST /api/v1/workspaces/ws-1/ai/chat":
+                if let body = Self.requestBodyData(request),
+                   let object = try JSONSerialization.jsonObject(with: body) as? [String: Any] {
+                    capturedPrompt = object["prompt"] as? String
+                }
+                return Self.response(request, status: 201, body: Self.taskJSON)
+            case "GET /api/v1/workspaces/ws-1/tasks/task-1":
+                return Self.response(
+                    request,
+                    status: 200,
+                    body: #"{"id":"task-1","workspace_id":"ws-1","task_type":"chat","status":"succeeded","resource_type":"conversation","resource_id":null,"payload":{},"result":{"answer":"Explicit reply"},"error_message":null,"progress":100,"created_at":"","updated_at":""}"#
+                )
+            case "GET /api/v1/workspaces/ws-1/tasks/task-1/events":
+                return Self.response(request, status: 200, body: "[]")
+            default:
+                return Self.response(request, status: 500, body: #"{"detail":"unexpected request"}"#)
+            }
+        }
+        let model = NotePatchViewModel(
+            settings: SettingsStore(defaults: defaults, keychain: KeychainStore(service: suiteName)),
+            backendSession: session,
+            tusSession: session
+        )
+        model.session = SavedSession(baseURL: "https://api.test", tusBaseURL: "https://tus.test/", accessToken: "a", refreshToken: "r", expiresAt: "x", userId: "u", email: "u@test", fullName: nil, selectedWorkspaceId: "ws-1", aiHistoryEnabled: true)
+        model.selectedWorkspaceId = "ws-1"
+        model.openClawComposerState.text = "Local draft remains view-owned"
+
+        #expect(model.startOpenClawChat(prompt: "  Explicit prompt  "))
+        #expect(model.openClawComposerState.text == "Local draft remains view-owned")
+        try await Self.waitUntil { !model.isOpenClawSending }
+
+        #expect(capturedPrompt == "Explicit prompt")
+        let sentUserMessages = model.openClawMessages.filter { $0.role == .user }
+        #expect(sentUserMessages.map(\.content).contains("Explicit prompt"))
+        #expect(model.openClawMessages.last?.content == "Explicit reply")
+    }
+
+    @Test @MainActor func fileImportService_copiesLargeFilesOffTheCallingActor() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("notepatch-import-tests-\(UUID().uuidString)", isDirectory: true)
+        let cache = root.appendingPathComponent("cache", isDirectory: true)
+        try FileManager.default.createDirectory(at: cache, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let sourceURL = root.appendingPathComponent("source.txt")
+        let sourceData = Data(repeating: 0x41, count: 2 * 1024 * 1024)
+        try sourceData.write(to: sourceURL)
+
+        let outcomes = await FileImportService.shared.importFiles(
+            [sourceURL],
+            fallbackPrefix: "test",
+            cacheDirectory: cache
+        )
+        let imported = try #require(outcomes.first?.file)
+        #expect(imported.url != sourceURL)
+        #expect(imported.filename == "source.txt")
+        #expect(try Data(contentsOf: imported.url) == sourceData)
     }
 
     @Test @MainActor func uploadThumbnail_classificationCacheKeyAndImageDownsampling() async throws {
