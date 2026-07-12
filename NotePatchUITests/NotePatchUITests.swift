@@ -132,16 +132,34 @@ final class NotePatchUITests: XCTestCase {
 
         let editor = app.textViews["问 OpenClaw"]
         XCTAssertTrue(editor.waitForExistence(timeout: 3))
-        let newConversationButton = app.buttons["新建对话"]
-        let collapsedButtonY = newConversationButton.frame.minY
+        let attachmentButton = app.buttons["添加附件"]
+        XCTAssertTrue(attachmentButton.exists)
         editor.tap()
-        XCTAssertGreaterThan(newConversationButton.frame.minY, collapsedButtonY)
+        XCTAssertGreaterThan(attachmentButton.frame.minY, editor.frame.minY + 20)
         editor.typeText("第一行\n第二行")
-        XCTAssertTrue(app.buttons["发送"].isEnabled)
+        let sendButton = app.buttons["发送"]
+        XCTAssertTrue(sendButton.isEnabled)
+        XCTAssertLessThanOrEqual(sendButton.frame.maxX, app.frame.maxX - 12)
     }
 
     @MainActor
-    func testOpenClawKeyboardStaysVisibleAfterTyping() throws {
+    func testOpenClawAttachmentMenuShowsPhotoAndFileOptions() throws {
+        let app = XCUIApplication()
+        app.launchArguments.append("-NotePatchUITestWorkbench")
+        app.launch()
+
+        XCTAssertTrue(app.otherElements["workbenchTabs"].waitForExistence(timeout: 5))
+        app.tabBars.buttons["AI"].tap()
+
+        let attachmentButton = app.buttons["添加附件"]
+        XCTAssertTrue(attachmentButton.waitForExistence(timeout: 3))
+        attachmentButton.tap()
+        XCTAssertTrue(app.buttons["选择图片"].waitForExistence(timeout: 2))
+        XCTAssertTrue(app.buttons["选择文件"].exists)
+    }
+
+    @MainActor
+    func testOpenClawKeyboardStaysVisibleAndDismissesAfterCrossingComposer() throws {
         let app = XCUIApplication()
         app.launchArguments.append("-NotePatchUITestWorkbench")
         app.launch()
@@ -158,6 +176,28 @@ final class NotePatchUITests: XCTestCase {
         editor.typeText("a")
         XCTAssertTrue(keyboard.exists)
         XCTAssertFalse(app.buttons["收起键盘"].exists)
+
+        let startY = max(0.1, (editor.frame.minY - 80) / app.frame.height)
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: startY))
+            .press(
+                forDuration: 0.05,
+                thenDragTo: app.coordinate(
+                    withNormalizedOffset: CGVector(dx: 0.5, dy: max(0.05, startY - 0.12))
+                )
+            )
+        XCTAssertTrue(keyboard.exists)
+
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: startY))
+            .press(
+                forDuration: 0.05,
+                thenDragTo: app.buttons["发送"].coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.9))
+            )
+
+        let keyboardDismissed = expectation(
+            for: NSPredicate(format: "exists == false"),
+            evaluatedWith: keyboard
+        )
+        wait(for: [keyboardDismissed], timeout: 3)
     }
 
     @MainActor

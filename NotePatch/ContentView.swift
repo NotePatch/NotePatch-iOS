@@ -1347,6 +1347,9 @@ private struct OpenClawChatTab: View {
     @State private var titleDraft = ""
     @State private var composerTextHeight: CGFloat = 44
     @State private var isComposerFocused = false
+    @State private var isShowingAIPhotoLibrary = false
+    @State private var isShowingAIFileImporter = false
+    @State private var aiDraftAttachments: [LocalUploadFile] = []
 
     var body: some View {
         VStack(spacing: 0) {
@@ -1408,6 +1411,16 @@ private struct OpenClawChatTab: View {
 
             ScrollViewReader { proxy in
                 ScrollView {
+                    ChatScrollPanObserver { value in
+                        dismissKeyboardIfNeeded(
+                            startLocation: value.startLocation,
+                            location: value.location,
+                            translation: value.translation,
+                            scrollBottomY: value.scrollBottomY
+                        )
+                    }
+                    .frame(height: 0)
+
                     LazyVStack(spacing: 12) {
                         ForEach(model.openClawMessages) { message in
                             OpenClawMessageBubble(message: message)
@@ -1417,16 +1430,6 @@ private struct OpenClawChatTab: View {
                     .padding(.horizontal, 16)
                     .padding(.vertical, 14)
                 }
-                .background(
-                    ChatKeyboardDismissPanObserver { value in
-                        dismissKeyboardIfNeeded(
-                            startLocation: value.startLocation,
-                            location: value.location,
-                            translation: value.translation,
-                            scrollBottomY: value.scrollBottomY
-                        )
-                    }
-                )
                 .onChange(of: model.openClawMessages.count) { _ in
                     if let last = model.openClawMessages.last {
                         withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
@@ -1448,6 +1451,30 @@ private struct OpenClawChatTab: View {
         }
         .accessibilityIdentifier("openClawTab")
         .onDisappear { dismissComposer() }
+        .fileImporter(
+            isPresented: $isShowingAIFileImporter,
+            allowedContentTypes: [.item],
+            allowsMultipleSelection: true
+        ) { result in
+            if case .success(let urls) = result {
+                addAIFileAttachments(urls)
+            } else if case .failure(let error) = result {
+                model.errorMessage = friendlyError(error)
+            }
+        }
+        .sheet(isPresented: $isShowingAIPhotoLibrary) {
+            PhotoLibraryPicker { result in
+                isShowingAIPhotoLibrary = false
+                guard let result else { return }
+                switch result {
+                case .success(let selections):
+                    addAIPhotoAttachments(selections)
+                case .failure(let error):
+                    model.errorMessage = friendlyError(error)
+                }
+            }
+            .ignoresSafeArea()
+        }
         .alert("重命名对话", isPresented: $isRenaming) {
             TextField("对话标题", text: $titleDraft)
             Button("取消", role: .cancel) {}
@@ -1468,11 +1495,11 @@ private struct OpenClawChatTab: View {
     private func dismissKeyboardIfNeeded(
         startLocation: CGPoint,
         location: CGPoint,
-        translation: CGPoint,
+        translation: CGSize,
         scrollBottomY: CGFloat
     ) {
-        guard translation.y > 12,
-              translation.y > abs(translation.x),
+        guard translation.height > 12,
+              translation.height > abs(translation.width),
               startLocation.y < scrollBottomY,
               location.y >= scrollBottomY + composerTextHeight else {
             return
@@ -1488,67 +1515,148 @@ private struct OpenClawChatTab: View {
         let expanded = isComposerExpanded
         let composerHeight = expanded ? max(92, composerTextHeight + 62) : 44
 
-        return ZStack(alignment: .topLeading) {
-            if expanded {
-                RoundedRectangle(cornerRadius: 24, style: .continuous)
-                    .fill(.clear)
-                    .liquidGlassField()
+        return VStack(spacing: 8) {
+            if !aiDraftAttachments.isEmpty {
+                aiAttachmentStrip
             }
 
-            Text("问 OpenClaw")
-                .foregroundStyle(.secondary)
-                .padding(.leading, expanded ? 16 : 54)
-                .padding(.trailing, expanded ? 16 : 54)
-                .padding(.top, expanded ? 19 : 11)
-                .opacity(model.openClawInput.isEmpty ? 1 : 0)
-                .allowsHitTesting(false)
+            ZStack(alignment: .topLeading) {
+                if expanded {
+                    RoundedRectangle(cornerRadius: 24, style: .continuous)
+                        .fill(.clear)
+                        .liquidGlassField()
+                }
 
-            AdaptiveComposerTextView(
-                text: $model.openClawInput,
-                isFocused: Binding(
-                    get: { isComposerFocused },
-                    set: { isComposerFocused = $0 }
-                ),
-                height: $composerTextHeight,
-                maximumLines: expanded ? 7 : 1
-            )
-            .frame(height: expanded ? composerTextHeight : 44)
-            .padding(.leading, expanded ? 8 : 46)
-            .padding(.trailing, expanded ? 8 : 46)
-            .padding(.top, expanded ? 8 : 0)
-            .padding(.bottom, expanded ? 46 : 0)
-            .accessibilityLabel("问 OpenClaw")
-            .disabled(model.isOpenClawSending)
+                Text("问 OpenClaw")
+                    .foregroundStyle(.secondary)
+                    .padding(.leading, expanded ? 16 : 54)
+                    .padding(.trailing, expanded ? 16 : 54)
+                    .padding(.top, expanded ? 19 : 11)
+                    .opacity(model.openClawInput.isEmpty ? 1 : 0)
+                    .allowsHitTesting(false)
 
-            HStack(spacing: 10) {
-                composerNewConversationButton
-                Spacer(minLength: 0)
-                composerSendButton
+                AdaptiveComposerTextView(
+                    text: $model.openClawInput,
+                    isFocused: Binding(
+                        get: { isComposerFocused },
+                        set: { isComposerFocused = $0 }
+                    ),
+                    height: $composerTextHeight,
+                    maximumLines: expanded ? 7 : 1
+                )
+                .frame(height: expanded ? composerTextHeight : 44)
+                .padding(.leading, expanded ? 8 : 46)
+                .padding(.trailing, expanded ? 8 : 46)
+                .padding(.top, expanded ? 8 : 0)
+                .padding(.bottom, expanded ? 46 : 0)
+                .accessibilityLabel("问 OpenClaw")
+                .disabled(model.isOpenClawSending)
+
+                HStack(spacing: 10) {
+                    composerAttachmentButton
+                    Spacer(minLength: 0)
+                    composerSendButton
+                }
+                .padding(.horizontal, expanded ? 8 : 0)
+                .frame(height: 38)
+                .frame(maxHeight: .infinity, alignment: expanded ? .bottom : .center)
             }
-            .padding(.horizontal, expanded ? 8 : 0)
-            .frame(height: 38)
-            .frame(maxHeight: .infinity, alignment: expanded ? .bottom : .center)
+            .frame(height: composerHeight)
         }
-        .frame(height: composerHeight)
     }
 
-    private var composerNewConversationButton: some View {
-        Button {
-            dismissComposer()
-            model.startNewConversation()
+    private var composerAttachmentButton: some View {
+        Menu {
+            Button {
+                dismissComposer()
+                isShowingAIPhotoLibrary = true
+            } label: {
+                Label("选择图片", systemImage: "photo.on.rectangle")
+            }
+            Button {
+                dismissComposer()
+                isShowingAIFileImporter = true
+            } label: {
+                Label("选择文件", systemImage: "folder")
+            }
         } label: {
             Image(systemName: "plus")
                 .font(.system(size: 17, weight: .semibold))
                 .frame(width: 38, height: 38)
         }
-        .buttonStyle(.plain)
         .foregroundStyle(.secondary)
-        .accessibilityLabel("新建对话")
+        .accessibilityLabel("添加附件")
         .disabled(model.isOpenClawSending)
     }
 
+    private var aiAttachmentStrip: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(aiDraftAttachments) { file in
+                    AIComposerAttachmentChip(file: file) {
+                        removeAIDraftAttachment(file)
+                    }
+                }
+            }
+            .padding(.horizontal, 1)
+        }
+        .frame(height: 46)
+    }
+
+    private func addAIFileAttachments(_ urls: [URL]) {
+        var loaded: [LocalUploadFile] = []
+        for url in urls {
+            let didAccess = url.startAccessingSecurityScopedResource()
+            defer {
+                if didAccess { url.stopAccessingSecurityScopedResource() }
+            }
+            do {
+                loaded.append(
+                    try copyFileToUploadCache(
+                        sourceURL: url,
+                        fallbackPrefix: "ai-attachment",
+                        cacheDirectory: aiAttachmentCacheDirectory,
+                        suggestedMimeType: contentTypeForFilename(url.lastPathComponent)
+                    )
+                )
+            } catch {
+                model.errorMessage = friendlyError(error)
+            }
+        }
+        aiDraftAttachments.append(contentsOf: loaded)
+    }
+
+    private func addAIPhotoAttachments(_ selections: [PhotoLibrarySelection]) {
+        for selection in selections {
+            do {
+                aiDraftAttachments.append(
+                    try writePhotoDataToUploadCache(
+                        selection.data,
+                        suggestedFilename: selection.filename,
+                        mimeType: selection.mimeType,
+                        cacheDirectory: aiAttachmentCacheDirectory
+                    )
+                )
+            } catch {
+                model.errorMessage = friendlyError(error)
+            }
+        }
+    }
+
+    private func removeAIDraftAttachment(_ file: LocalUploadFile) {
+        aiDraftAttachments.removeAll { $0.id == file.id }
+        try? FileManager.default.removeItem(at: file.url)
+    }
+
+    private var aiAttachmentCacheDirectory: URL {
+        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
+            ?? FileManager.default.temporaryDirectory
+    }
+
     private var composerSendButton: some View {
-        Button {
+        let canSend = !model.isOpenClawSending && !model.openClawInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+
+        return Button {
             dismissComposer()
             model.startOpenClawChat()
         } label: {
@@ -1556,10 +1664,64 @@ private struct OpenClawChatTab: View {
                 .font(.system(size: 16, weight: .bold))
                 .frame(width: 38, height: 38)
         }
-        .notePatchGlassButtonStyle(prominent: true)
-        .clipShape(Circle())
-        .disabled(model.isOpenClawSending || model.openClawInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        .buttonStyle(.plain)
+        .foregroundStyle(canSend ? Color.white : Color.secondary)
+        .background {
+            Circle()
+                .fill(canSend ? Color.accentColor : Color.secondary.opacity(0.18))
+        }
+        .overlay {
+            Circle()
+                .strokeBorder(Color.white.opacity(canSend ? 0.3 : 0.12), lineWidth: 0.5)
+        }
+        .frame(width: 38, height: 38)
+        .contentShape(Circle())
+        .disabled(!canSend)
         .accessibilityLabel("发送")
+    }
+}
+
+private struct AIComposerAttachmentChip: View {
+    let file: LocalUploadFile
+    let onRemove: () -> Void
+
+    var body: some View {
+        HStack(spacing: 7) {
+            attachmentIcon
+
+            Text(file.filename)
+                .font(.caption)
+                .lineLimit(1)
+                .frame(maxWidth: 128, alignment: .leading)
+
+            Button(action: onRemove) {
+                Image(systemName: "xmark")
+                    .font(.caption2.weight(.bold))
+                    .frame(width: 24, height: 24)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .accessibilityLabel("移除 \(file.filename)")
+        }
+        .padding(.leading, 7)
+        .padding(.trailing, 4)
+        .frame(height: 40)
+        .liquidGlassPill(tint: .clear)
+    }
+
+    @ViewBuilder
+    private var attachmentIcon: some View {
+        if file.isImage, let image = UIImage(contentsOfFile: file.url.path) {
+            Image(uiImage: image)
+                .resizable()
+                .scaledToFill()
+                .frame(width: 30, height: 30)
+                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        } else {
+            Image(systemName: "doc.fill")
+                .foregroundStyle(Color.accentColor)
+                .frame(width: 30, height: 30)
+        }
     }
 }
 
@@ -2732,44 +2894,37 @@ private func taskTypeLabel(_ taskType: String) -> String {
     }
 }
 
-private struct ChatKeyboardPanValue {
+private struct ChatScrollPanValue {
     let startLocation: CGPoint
     let location: CGPoint
-    let translation: CGPoint
+    let translation: CGSize
     let scrollBottomY: CGFloat
 }
 
-private struct ChatKeyboardDismissPanObserver: UIViewRepresentable {
-    let onPan: (ChatKeyboardPanValue) -> Void
+private struct ChatScrollPanObserver: UIViewRepresentable {
+    let onPan: (ChatScrollPanValue) -> Void
 
     func makeUIView(context: Context) -> ObserverView {
-        ObserverView()
+        let view = ObserverView()
+        view.onPan = onPan
+        return view
     }
 
     func updateUIView(_ view: ObserverView, context: Context) {
         view.onPan = onPan
-        view.attachToScrollViewIfNeeded()
+        view.attachIfNeeded()
     }
 
     final class ObserverView: UIView {
-        var onPan: ((ChatKeyboardPanValue) -> Void)?
+        var onPan: ((ChatScrollPanValue) -> Void)?
         private weak var observedScrollView: UIScrollView?
         private weak var observedPanGesture: UIPanGestureRecognizer?
         private var startLocation: CGPoint?
 
-        override init(frame: CGRect) {
-            super.init(frame: frame)
-            isUserInteractionEnabled = false
-        }
-
-        required init?(coder: NSCoder) {
-            nil
-        }
-
-        override func didMoveToSuperview() {
-            super.didMoveToSuperview()
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
             DispatchQueue.main.async { [weak self] in
-                self?.attachToScrollViewIfNeeded()
+                self?.attachIfNeeded()
             }
         }
 
@@ -2777,7 +2932,7 @@ private struct ChatKeyboardDismissPanObserver: UIViewRepresentable {
             observedPanGesture?.removeTarget(self, action: #selector(handlePan))
         }
 
-        func attachToScrollViewIfNeeded() {
+        func attachIfNeeded() {
             var candidate = superview
             while let view = candidate, !(view is UIScrollView) {
                 candidate = view.superview
@@ -2786,6 +2941,7 @@ private struct ChatKeyboardDismissPanObserver: UIViewRepresentable {
                   observedScrollView !== scrollView else {
                 return
             }
+
             observedPanGesture?.removeTarget(self, action: #selector(handlePan))
             observedScrollView = scrollView
             observedPanGesture = scrollView.panGestureRecognizer
@@ -2793,21 +2949,21 @@ private struct ChatKeyboardDismissPanObserver: UIViewRepresentable {
         }
 
         @objc private func handlePan(_ recognizer: UIPanGestureRecognizer) {
+            guard let scrollView = observedScrollView else { return }
             let location = recognizer.location(in: nil)
-            let scrollBottomY = observedScrollView?
-                .convert(observedScrollView?.bounds ?? .zero, to: nil)
-                .maxY ?? 0
+
             switch recognizer.state {
             case .began:
                 startLocation = location
             case .changed, .ended:
                 guard let startLocation else { return }
+                let translation = recognizer.translation(in: nil)
                 onPan?(
-                    ChatKeyboardPanValue(
+                    ChatScrollPanValue(
                         startLocation: startLocation,
                         location: location,
-                        translation: recognizer.translation(in: nil),
-                        scrollBottomY: scrollBottomY
+                        translation: CGSize(width: translation.x, height: translation.y),
+                        scrollBottomY: scrollView.convert(scrollView.bounds, to: nil).maxY
                     )
                 )
                 if recognizer.state == .ended {
