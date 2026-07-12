@@ -33,28 +33,29 @@ struct ContentView: View {
 
 }
 
+// MARK: - Auth Screen
+
 private struct AuthScreen: View {
     @ObservedObject var model: NotePatchViewModel
     @State private var appear = false
 
     var body: some View {
         ZStack {
-            LiquidGlassBackdrop()
+            NPColors.background.ignoresSafeArea()
 
             ScrollView {
-                VStack(spacing: 32) {
-                    // Hero 区 — staggered 入场
+                VStack(spacing: NPSpacing.section) {
+                    // Hero section
                     VStack(spacing: 16) {
-                        GlassAppIcon(size: 80, symbolSize: 34, bounce: true)
-                        .scaleEffect(appear ? 1 : 0.80)
-                        .opacity(appear ? 1 : 0)
+                        brandLogoIcon(size: 80, symbolSize: 34)
+                            .scaleEffect(appear ? 1 : 0.80)
+                            .opacity(appear ? 1 : 0)
 
-                        VStack(spacing: 8) {
+                        VStack(spacing: NPSpacing.small) {
                             Text("NotePatch")
-                                .heroTitle()
+                                .npScreenTitle()
                             Text("扫描、整理并处理你的学习文档")
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
+                                .npCaption()
                                 .lineSpacing(2)
                         }
                         .opacity(appear ? 1 : 0)
@@ -62,8 +63,8 @@ private struct AuthScreen: View {
                     }
                     .padding(.top, 20)
 
-                    // 表单
-                    VStack(spacing: 16) {
+                    // Form card
+                    VStack(spacing: NPSpacing.item) {
                         VStack(spacing: 10) {
                             AuthField(title: "API 地址", systemImage: "network") {
                                 TextField("http://192.168.100.123:8001/api/v1", text: $model.apiBaseURLText)
@@ -72,7 +73,7 @@ private struct AuthScreen: View {
                                     .accessibilityIdentifier("apiAddressField")
                             }
 
-                            Divider()
+                            Divider().background(NPColors.divider)
 
                             AuthField(title: "邮箱", systemImage: "envelope") {
                                 TextField("name@example.com", text: $model.emailText)
@@ -82,7 +83,7 @@ private struct AuthScreen: View {
                                     .accessibilityIdentifier("emailField")
                             }
 
-                            Divider()
+                            Divider().background(NPColors.divider)
 
                             AuthField(title: "密码", systemImage: "lock") {
                                 SecureField("输入密码", text: $model.passwordText)
@@ -90,72 +91,70 @@ private struct AuthScreen: View {
                                     .accessibilityIdentifier("passwordField")
                             }
 
-                            Divider()
+                            Divider().background(NPColors.divider)
 
                             AuthField(title: "姓名", systemImage: "person") {
                                 TextField("注册时填写", text: $model.fullNameText)
                                     .textContentType(.name)
                             }
                         }
-                        .padding(.horizontal, 18)
-                        .padding(.vertical, 12)
-                        .liquidGlassCard()
+                        .modifier(NPCardModifier())
+                        .accessibilityIdentifier("authFormCard")
+                    }
+
+                    // Login button
+                    Button {
+                        model.authenticate(register: false)
+                    } label: {
+                        HStack {
+                            Spacer()
+                            if model.isBusy {
+                                ProgressView()
+                                    .tint(.white)
+                            } else {
+                                Label("登录", systemImage: "arrow.right")
+                                    .font(.body.weight(.semibold))
+                            }
+                            Spacer()
+                        }
+                    }
+                    .buttonStyle(NPPrimaryButtonStyle())
+                    .disabled(model.isBusy)
+                    .accessibilityIdentifier("loginButton")
+
+                    // Secondary buttons
+                    HStack(spacing: 12) {
+                        Button {
+                            model.authenticate(register: true)
+                        } label: {
+                            Label("创建账号", systemImage: "person.badge.plus")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(NPSecondaryButtonStyle())
+                        .disabled(model.isBusy)
 
                         Button {
-                            model.authenticate(register: false)
+                            model.checkAPIConnection()
                         } label: {
-                            HStack {
-                                Spacer()
-                                if model.isBusy {
-                                    ProgressView()
-                                        .tint(.white)
-                                } else {
-                                    Label("登录", systemImage: "arrow.right")
-                                        .font(.body.weight(.semibold))
-                                }
-                                Spacer()
-                            }
-                            .frame(height: 50)
+                            Label("检测服务", systemImage: "wave.3.right")
+                                .frame(maxWidth: .infinity)
                         }
-                        .notePatchGlassButtonStyle(prominent: true)
+                        .buttonStyle(NPSecondaryButtonStyle())
                         .disabled(model.isBusy)
-                        .accessibilityIdentifier("loginButton")
-
-                        HStack(spacing: 12) {
-                            Button {
-                                model.authenticate(register: true)
-                            } label: {
-                                Label("创建账号", systemImage: "person.badge.plus")
-                                    .frame(maxWidth: .infinity)
-                                    .frame(height: 44)
-                            }
-                            .notePatchGlassButtonStyle()
-                            .disabled(model.isBusy)
-
-                            Button {
-                                model.checkAPIConnection()
-                            } label: {
-                                Label("检测服务", systemImage: "wave.3.right")
-                                    .frame(maxWidth: .infinity)
-                                    .frame(height: 44)
-                            }
-                            .notePatchGlassButtonStyle()
-                            .disabled(model.isBusy)
-                        }
-
-                        StatusPanel(isBusy: model.isBusy, statusMessage: model.statusMessage, errorMessage: model.errorMessage)
                     }
-                    .frame(maxWidth: 520)
-                    .opacity(appear ? 1 : 0)
-                    .offset(y: appear ? 0 : 16)
+
+                    StatusPanel(isBusy: model.isBusy, statusMessage: model.statusMessage, errorMessage: model.errorMessage)
                 }
-                .padding(.horizontal, 20)
+                .frame(maxWidth: 520)
+                .opacity(appear ? 1 : 0)
+                .offset(y: appear ? 0 : 16)
+                .padding(.horizontal, NPSpacing.outer)
                 .padding(.bottom, 40)
             }
         }
         .disabled(model.isBusy)
         .onAppear {
-            withAnimation(.cardEntry) { appear = true }
+            withAnimation(.npCardEntry) { appear = true }
         }
     }
 }
@@ -169,12 +168,12 @@ private struct AuthField<Field: View>: View {
         HStack(spacing: 12) {
             Image(systemName: systemImage)
                 .font(.system(size: 16, weight: .medium))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(NPColors.textSecondary)
                 .frame(width: 22)
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(NPColors.textSecondary)
                 field
                     .font(.body)
             }
@@ -182,6 +181,8 @@ private struct AuthField<Field: View>: View {
         .frame(minHeight: 48)
     }
 }
+
+// MARK: - Workbench Screen
 
 private struct WorkbenchScreen: View {
     @ObservedObject var model: NotePatchViewModel
@@ -216,6 +217,7 @@ private struct WorkbenchScreen: View {
                     .tag(WorkbenchTab.learning)
                     .tabItem { Label(WorkbenchTab.learning.title, systemImage: WorkbenchTab.learning.iconName) }
             }
+            .tint(NPColors.brand)
             .animation(.spring(response: 0.35, dampingFraction: 0.85), value: model.selectedTab)
             .onChange(of: model.selectedTab) { selectedTab in
                 if selectedTab != .openClaw {
@@ -225,7 +227,7 @@ private struct WorkbenchScreen: View {
             }
             .accessibilityIdentifier("workbenchTabs")
         }
-        .background(LiquidGlassBackdrop())
+        .background(NPColors.background)
         .sheet(isPresented: $isSettingsPresented) {
             NavigationView {
                 SettingsTab(model: model)
@@ -251,6 +253,8 @@ private struct WorkbenchScreen: View {
     }
 }
 
+// MARK: - Compact Top Bar
+
 private struct CompactTopBar: View {
     @ObservedObject var model: NotePatchViewModel
     let onSettings: () -> Void
@@ -258,13 +262,12 @@ private struct CompactTopBar: View {
     var body: some View {
         let workspaceName = model.workspaces.first(where: { $0.id == model.selectedWorkspaceId })?.name
         HStack(spacing: 12) {
-            GlassAppIcon(size: 38, symbolSize: 17)
+            brandLogoIcon(size: 38, symbolSize: 17)
             VStack(alignment: .leading, spacing: 2) {
                 Text("NotePatch")
-                    .font(.headline)
+                    .npCardTitle()
                 Text(workspaceName ?? "未选择个人空间")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .npCaption()
                     .lineLimit(1)
                     .accessibilityIdentifier("personalWorkspaceName")
             }
@@ -276,7 +279,7 @@ private struct CompactTopBar: View {
                     .frame(width: 32, height: 32)
             }
             .buttonStyle(.plain)
-            .foregroundStyle(Color.accentColor)
+            .foregroundStyle(NPColors.brand)
             .disabled(model.isBusy || model.selectedWorkspaceId == nil)
             .accessibilityLabel("刷新个人空间")
 
@@ -285,19 +288,21 @@ private struct CompactTopBar: View {
                     .frame(width: 32, height: 32)
             }
             .buttonStyle(.plain)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(NPColors.textSecondary)
             .accessibilityLabel("设置")
             .accessibilityIdentifier("settingsButton")
 
             Text(accountInitial)
                 .font(.subheadline.weight(.semibold))
-                .foregroundStyle(Color.accentColor)
+                .foregroundStyle(NPColors.brandDark)
                 .frame(width: 34, height: 34)
-                .liquidGlassPill(tint: .accentColor)
+                .background(NPColors.brandLight)
+                .clipShape(Circle())
         }
-        .padding(.horizontal, 16)
+        .padding(.horizontal, NPSpacing.outer)
         .padding(.vertical, 10)
-        .liquidGlassPanel()
+        .background(NPColors.surface)
+        .modifier(NPCardShadow())
     }
 
     private var accountInitial: String {
@@ -306,6 +311,8 @@ private struct CompactTopBar: View {
     }
 }
 
+// MARK: - Notes Tab
+
 private struct NotesTab: View {
     @ObservedObject var model: NotePatchViewModel
     @State private var readerItem: StudyNoteListItem?
@@ -313,13 +320,13 @@ private struct NotesTab: View {
     var body: some View {
         NavigationView {
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 14) {
+                LazyVStack(alignment: .leading, spacing: NPSpacing.item) {
                     if model.isNotesLoading && model.studyNoteGroups.isEmpty {
                         ProgressView("正在加载学习笔记...")
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 36)
                     } else if model.studyNoteGroups.isEmpty {
-                        EmptyState(
+                        NPEmptyState(
                             systemImage: "note.text",
                             title: "暂无学习笔记",
                             message: "上传并处理课件、笔记或试卷后，自动生成的学习笔记会显示在这里。"
@@ -327,15 +334,14 @@ private struct NotesTab: View {
                         .padding(.top, 56)
                     } else {
                         ForEach(model.studyNoteGroups) { group in
-                            VStack(alignment: .leading, spacing: 8) {
+                            VStack(alignment: .leading, spacing: NPSpacing.small) {
                                 Text(group.learningUnit.title)
-                                    .cardTitle()
+                                    .npCardTitle()
                                 let details = [group.learningUnit.subject, group.learningUnit.gradeLevel, group.learningUnit.topic]
                                     .compactMap { $0?.isEmpty == false ? $0 : nil }
                                 if !details.isEmpty {
                                     Text(details.joined(separator: " · "))
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
+                                        .npCaption()
                                 }
                                 ForEach(group.notes) { item in
                                     Button {
@@ -347,34 +353,30 @@ private struct NotesTab: View {
                                         HStack(spacing: 12) {
                                             Image(systemName: "note.text")
                                                 .font(.title3)
-                                                .foregroundStyle(Color.accentColor)
+                                                .foregroundStyle(NPColors.brand)
                                                 .frame(width: 28)
                                             VStack(alignment: .leading, spacing: 3) {
                                                 Text(item.note.title.isEmpty ? "电子笔记" : item.note.title)
                                                     .font(.subheadline.weight(.medium))
-                                                    .foregroundStyle(.primary)
+                                                    .foregroundStyle(NPColors.textPrimary)
                                                     .lineLimit(2)
                                                 Text("版本 \(item.note.versionNo)")
-                                                    .font(.caption)
-                                                    .foregroundStyle(.secondary)
+                                                    .npCaption()
                                                 Text(item.note.revisionOriginLabel)
-                                                    .font(.caption)
-                                                    .foregroundStyle(.secondary)
+                                                    .npCaption()
                                                 if let summary = item.note.editSummary?.trimmingCharacters(in: .whitespacesAndNewlines), !summary.isEmpty {
                                                     Text(summary)
-                                                        .font(.caption)
-                                                        .foregroundStyle(.secondary)
+                                                        .npCaption()
                                                         .lineLimit(1)
                                                 }
                                             }
                                             Spacer(minLength: 8)
                                             Image(systemName: "chevron.right")
                                                 .font(.caption.weight(.semibold))
-                                                .foregroundStyle(.tertiary)
+                                                .foregroundStyle(NPColors.textSecondary.opacity(0.5))
                                         }
-                                        .padding(12)
-                                        .frame(maxWidth: .infinity, alignment: .leading)
-                                        .liquidGlassCard()
+                                        .padding(NPSpacing.card)
+                                        .modifier(NPCardModifier())
                                     }
                                     .buttonStyle(.plain)
                                     .accessibilityIdentifier("studyNoteRow-\(item.note.id)")
@@ -383,8 +385,8 @@ private struct NotesTab: View {
                         }
                     }
                 }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 14)
+                .padding(.horizontal, NPSpacing.outer)
+                .padding(.vertical, NPSpacing.item)
             }
             .navigationTitle("笔记")
             .navigationBarTitleDisplayMode(.inline)
@@ -418,6 +420,8 @@ private struct NotesTab: View {
     }
 }
 
+// MARK: - Study Note Reader
+
 private struct StudyNoteReader: View {
     @ObservedObject var model: NotePatchViewModel
 
@@ -425,20 +429,19 @@ private struct StudyNoteReader: View {
         Group {
             if let item = model.selectedStudyNoteItem {
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 16) {
+                    VStack(alignment: .leading, spacing: NPSpacing.item) {
                         VStack(alignment: .leading, spacing: 5) {
                             Text(item.note.title.isEmpty ? "电子笔记" : item.note.title)
                                 .font(.title2.weight(.bold))
+                                .foregroundStyle(NPColors.textPrimary)
                             Text("\(item.learningUnit.title) · 版本 \(item.note.versionNo)")
                                 .font(.subheadline)
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(NPColors.textSecondary)
                             Text(item.note.revisionOriginLabel)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                                .npCaption()
                             if let summary = item.note.editSummary?.trimmingCharacters(in: .whitespacesAndNewlines), !summary.isEmpty {
                                 Text(summary)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
+                                    .npCaption()
                             }
                         }
 
@@ -447,10 +450,10 @@ private struct StudyNoteReader: View {
                                 .frame(maxWidth: .infinity)
                                 .padding(.vertical, 36)
                         } else if let markdown = model.studyNoteMarkdown {
-                            LightweightMarkdownText(markdown: markdown, color: .primary)
+                            LightweightMarkdownText(markdown: markdown, color: NPColors.textPrimary)
                         } else if let error = model.studyNoteReaderError {
                             VStack(spacing: 14) {
-                                EmptyState(
+                                NPEmptyState(
                                     systemImage: "exclamationmark.triangle",
                                     title: "无法打开笔记",
                                     message: error
@@ -458,13 +461,13 @@ private struct StudyNoteReader: View {
                                 Button("重试") {
                                     model.openStudyNote(item)
                                 }
-                                .notePatchGlassButtonStyle()
+                                .buttonStyle(NPSecondaryButtonStyle())
                             }
                             .frame(maxWidth: .infinity)
                             .padding(.top, 48)
                         }
                     }
-                    .padding(16)
+                    .padding(NPSpacing.outer)
                 }
                 .accessibilityIdentifier("studyNoteReader")
                 .navigationTitle("阅读笔记")
@@ -481,12 +484,12 @@ private struct StudyNoteReader: View {
                     }
                 }
             } else {
-                EmptyState(
+                NPEmptyState(
                     systemImage: "note.text",
                     title: "笔记已关闭",
                     message: "请返回笔记列表重新选择。"
                 )
-                .padding(.horizontal, 16)
+                .padding(.horizontal, NPSpacing.outer)
                 .accessibilityIdentifier("studyNoteReader")
             }
         }
@@ -498,6 +501,8 @@ private struct StudyNoteReader: View {
         }
     }
 }
+
+// MARK: - Study Note Editor
 
 private struct StudyNoteEditor: View {
     @ObservedObject var model: NotePatchViewModel
@@ -513,20 +518,20 @@ private struct StudyNoteEditor: View {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Markdown 正文")
                         .font(.subheadline.weight(.medium))
+                        .foregroundStyle(NPColors.textPrimary)
                     TextEditor(text: $model.studyNoteDraftMarkdown)
                         .font(.body)
                         .frame(minHeight: 300)
                         .padding(8)
-                        .background(Color.secondary.opacity(0.08))
-                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                        .background(NPColors.divider.opacity(0.6))
+                        .clipShape(RoundedRectangle(cornerRadius: NPRadius.input, style: .continuous))
                         .overlay(
-                            RoundedRectangle(cornerRadius: 8)
-                                .stroke(Color.secondary.opacity(0.22), lineWidth: 1)
+                            RoundedRectangle(cornerRadius: NPRadius.input, style: .continuous)
+                                .stroke(NPColors.border, lineWidth: 1)
                         )
                         .accessibilityIdentifier("studyNoteEditorMarkdown")
                     Text("\(model.studyNoteDraftMarkdown.count) / 2,000,000")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .npCaption()
                         .frame(maxWidth: .infinity, alignment: .trailing)
                 }
 
@@ -535,19 +540,19 @@ private struct StudyNoteEditor: View {
                         .accessibilityIdentifier("studyNoteEditorSummary")
                 }
                 Text("修订说明可留空。")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .npCaption()
 
                 if let error = model.studyNoteEditorError {
                     Text(error)
                         .font(.subheadline)
-                        .foregroundStyle(.red)
+                        .foregroundStyle(NPColors.destructive)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(10)
-                        .liquidGlassBanner(tint: .red)
+                        .background(NPColors.destructive.opacity(0.12))
+                        .clipShape(RoundedRectangle(cornerRadius: NPRadius.button, style: .continuous))
                 }
             }
-            .padding(16)
+            .padding(NPSpacing.outer)
         }
         .navigationTitle("编辑笔记")
         .navigationBarTitleDisplayMode(.inline)
@@ -586,6 +591,8 @@ private struct StudyNoteEditor: View {
     }
 }
 
+// MARK: - Documents Tab
+
 private struct DocumentsTab: View {
     @ObservedObject var model: NotePatchViewModel
     @State private var isUploadPresented = false
@@ -599,7 +606,7 @@ private struct DocumentsTab: View {
                 }
             }
             .pickerStyle(.segmented)
-            .padding(.horizontal, 16)
+            .padding(.horizontal, NPSpacing.outer)
             .padding(.top, 12)
             .padding(.bottom, 4)
 
@@ -628,14 +635,14 @@ private struct DocumentsTab: View {
 
     private var documentList: some View {
         ScrollView {
-            VStack(spacing: 16) {
+            VStack(spacing: NPSpacing.section) {
                 Button {
                     isUploadPresented = true
                 } label: {
                     Label("上传文件", systemImage: "arrow.up.doc")
                         .frame(maxWidth: .infinity)
                 }
-                .notePatchGlassButtonStyle(prominent: true)
+                .buttonStyle(NPPrimaryButtonStyle())
                 .accessibilityIdentifier("showUploadPageButton")
 
                 CollapsibleSection(
@@ -648,16 +655,15 @@ private struct DocumentsTab: View {
 
                 HStack {
                     Text("文档列表")
-                        .cardTitle()
+                        .npCardTitle()
                     Spacer()
                     Text("\(model.documents.count) 个")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .npCaption()
                 }
                 .padding(.top, 2)
 
                 if model.documents.isEmpty {
-                    EmptyText("暂无文档，先上传图片、PDF 或文件。")
+                    NPEmptyState(systemImage: "doc", title: "暂无文档", message: "暂无文档，先上传图片、PDF 或文件。")
                 } else {
                     LazyVStack(spacing: 12) {
                         ForEach(model.documents) { document in
@@ -678,14 +684,16 @@ private struct DocumentsTab: View {
                     }
                 }
             }
-            .padding(.horizontal, 16)
+            .padding(.horizontal, NPSpacing.outer)
             .padding(.top, 14)
-            .padding(.bottom, 24)
+            .padding(.bottom, NPSpacing.section)
         }
-        .animation(.cardEntry, value: model.documents.count)
+        .animation(.npCardEntry, value: model.documents.count)
     }
 
 }
+
+// MARK: - Upload Document Screen
 
 private struct UploadDocumentScreen: View {
     @ObservedObject var model: NotePatchViewModel
@@ -696,8 +704,8 @@ private struct UploadDocumentScreen: View {
 
     var body: some View {
         ScrollView {
-            VStack(spacing: 16) {
-                SectionContainer {
+            VStack(spacing: NPSpacing.section) {
+                NPSection {
                     UploadPanel(
                         model: model,
                         onCameraUpload: { isShowingCamera = true },
@@ -706,19 +714,18 @@ private struct UploadDocumentScreen: View {
                     )
                 }
 
-                SectionContainer {
+                NPSection {
                     VStack(alignment: .leading, spacing: 12) {
                         HStack {
                             Label("待上传", systemImage: "tray.and.arrow.up")
-                                .cardTitle()
+                                .npCardTitle()
                             Spacer()
                             Text("\(model.queuedUploadItems.count) 项")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                                .npCaption()
                         }
 
                         if model.queuedUploadItems.isEmpty {
-                            EmptyState(
+                            NPEmptyState(
                                 systemImage: "tray",
                                 title: "暂无待上传文件",
                                 message: "选择文件、相册或拍照后，内容会先出现在这里。"
@@ -742,18 +749,18 @@ private struct UploadDocumentScreen: View {
                                 Label("上传已选（\(model.queuedUploadItems.filter(\.isSelected).count)）", systemImage: "arrow.up.circle.fill")
                                     .frame(maxWidth: .infinity)
                             }
-                            .notePatchGlassButtonStyle(prominent: true)
+                            .buttonStyle(NPPrimaryButtonStyle())
                             .disabled(model.isBusy || !model.queuedUploadItems.contains(where: \.isSelected))
                             .accessibilityIdentifier("uploadSelectedQueueButton")
                         }
                     }
                 }
             }
-            .padding(.horizontal, 16)
+            .padding(.horizontal, NPSpacing.outer)
             .padding(.top, 14)
-            .padding(.bottom, 24)
+            .padding(.bottom, NPSpacing.section)
         }
-        .background(LiquidGlassBackdrop())
+        .background(NPColors.background.ignoresSafeArea())
         .fileImporter(isPresented: $isShowingFileImporter, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
             if case .success(let urls) = result {
                 model.uploadPickedFiles(from: urls)
@@ -802,7 +809,7 @@ private struct QueuedUploadRow: View {
             Button(action: onToggle) {
                 Image(systemName: item.isSelected ? "checkmark.circle.fill" : "circle")
                     .font(.title3)
-                    .foregroundStyle(item.isSelected ? Color.accentColor : .secondary)
+                    .foregroundStyle(item.isSelected ? NPColors.brand : NPColors.textSecondary)
             }
             .buttonStyle(.plain)
             .disabled(isBusy)
@@ -814,10 +821,10 @@ private struct QueuedUploadRow: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text(item.file.filename)
                     .font(.subheadline.weight(.medium))
+                    .foregroundStyle(NPColors.textPrimary)
                     .lineLimit(2)
                 Text("\(documentKindLabel(item.documentKind)) · \(formatBytes(item.file.fileSize))")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .npCaption()
                 queueStateView
             }
 
@@ -839,8 +846,13 @@ private struct QueuedUploadRow: View {
             .disabled(isBusy)
             .accessibilityLabel("移除 \(item.file.filename)")
         }
-        .padding(10)
-        .liquidGlassField()
+        .padding(NPSpacing.small)
+        .background(NPColors.surface)
+        .clipShape(RoundedRectangle(cornerRadius: NPRadius.card, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: NPRadius.card, style: .continuous)
+                .stroke(NPColors.border, lineWidth: 1)
+        }
     }
 
     @ViewBuilder
@@ -851,11 +863,11 @@ private struct QueuedUploadRow: View {
         case .uploading:
             Label("正在上传", systemImage: "arrow.up.circle")
                 .font(.caption)
-                .foregroundStyle(Color.accentColor)
+                .foregroundStyle(NPColors.brand)
         case .failed(let message):
             Text(message)
-                .font(.caption)
-                .foregroundStyle(.red)
+                .npCaption()
+                .foregroundStyle(NPColors.destructive)
                 .lineLimit(2)
         }
     }
@@ -880,7 +892,7 @@ private struct UploadPanel: View {
                 }
             }
 
-            HStack(spacing: 8) {
+            HStack(spacing: NPSpacing.small) {
                 UploadSourceButton(title: "拍照", systemImage: "camera.fill", emphasized: true, enabled: !model.isBusy && UIImagePickerController.isSourceTypeAvailable(.camera), action: onCameraUpload)
                 UploadSourceButton(title: "相册", systemImage: "photo.on.rectangle", emphasized: false, enabled: !model.isBusy, action: onGalleryUpload)
                 UploadSourceButton(title: "文件", systemImage: "folder", emphasized: false, enabled: !model.isBusy, action: onFileUpload)
@@ -894,8 +906,7 @@ private struct UploadPanel: View {
                         Text("\(progress)%")
                             .monospacedDigit()
                     }
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .npCaption()
                     ProgressView(value: Double(progress), total: 100)
                 }
                 .padding(.top, 2)
@@ -927,9 +938,10 @@ private struct UploadPanel: View {
                         }
                     }
                 }
-                .padding(.top, 8)
+                .padding(.top, NPSpacing.small)
             }
             .font(.subheadline.weight(.medium))
+            .foregroundStyle(NPColors.textPrimary)
         }
     }
 }
@@ -971,10 +983,13 @@ private struct UploadSourceButtonStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .foregroundStyle(emphasized ? Color.white : Color.accentColor)
-            .liquidGlassPill(tint: emphasized ? .accentColor : .accentColor.opacity(0.15))
+            .foregroundStyle(emphasized ? .white : NPColors.brandDark)
+            .background(
+                RoundedRectangle(cornerRadius: NPRadius.button, style: .continuous)
+                    .fill(emphasized ? NPColors.brand : NPColors.brandLight)
+            )
             .scaleEffect(configuration.isPressed ? 0.96 : 1.0)
-            .animation(.interactiveSpring, value: configuration.isPressed)
+            .animation(.npInteractive, value: configuration.isPressed)
     }
 }
 
@@ -1044,39 +1059,37 @@ private struct DocumentRow: View {
     @State private var detailsExpanded = false
 
     var body: some View {
-        SectionContainer(tint: .clear) {
+        NPSection {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(alignment: .top, spacing: 10) {
                     VStack(alignment: .leading, spacing: 4) {
                         Text(document.title ?? document.originalFilename)
-                            .font(.body.weight(.semibold))
+                            .npCardTitle()
                             .lineLimit(2)
                         Text("\(documentKindLabel(document.documentKind)) · \(fileTypeLabel(document.fileType))")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .npCaption()
                             .lineLimit(1)
                         Text("\(formatBytes(document.fileSize)) · \(compactDateTime(document.createdAt))")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .npCaption()
                             .lineLimit(1)
                     }
                     Spacer(minLength: 0)
-                    StatusPill(text: statusLabel(document.status), color: statusColor(document.status))
+                    NPStatusChip(text: statusLabel(document.status), variant: statusChipVariant(document.status))
                 }
 
-                HStack(spacing: 8) {
+                HStack(spacing: NPSpacing.small) {
                     Button(action: onProcess) {
                         Label(processTitle, systemImage: "wand.and.stars")
                             .frame(maxWidth: .infinity)
                     }
-                    .notePatchGlassButtonStyle(prominent: true)
+                    .buttonStyle(NPPrimaryButtonStyle())
                     .disabled(isBusy || !canProcess)
 
                     Button(action: onDownload) {
                         Image(systemName: "arrow.down.to.line")
                             .frame(width: 22, height: 22)
                     }
-                    .notePatchGlassButtonStyle()
+                    .buttonStyle(NPSecondaryButtonStyle())
                     .disabled(isBusy || document.status == "deleted")
                     .accessibilityLabel("下载")
 
@@ -1101,13 +1114,13 @@ private struct DocumentRow: View {
                         Image(systemName: "ellipsis")
                             .frame(width: 22, height: 22)
                     }
-                    .notePatchGlassButtonStyle()
+                    .buttonStyle(NPSecondaryButtonStyle())
                     .disabled(isBusy)
                     .accessibilityLabel("更多操作")
                 }
 
                 if detailsExpanded {
-                    Divider()
+                    Divider().background(NPColors.divider)
                     DetailText("mime: \(document.mimeType ?? "unknown")")
                     if let sha256 = document.sha256 {
                         DetailText("sha256: \(sha256)")
@@ -1116,10 +1129,10 @@ private struct DocumentRow: View {
                 }
 
                 if !artifacts.isEmpty {
-                    Divider()
+                    Divider().background(NPColors.divider)
                     SectionLabel("处理产物")
                     ForEach(artifacts) { artifact in
-                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        HStack(alignment: .firstTextBaseline, spacing: NPSpacing.small) {
                             DetailText(
                                 [
                                     artifactTypeLabel(artifact.artifactType),
@@ -1140,11 +1153,11 @@ private struct DocumentRow: View {
                 }
 
                 if !ocrArtifacts.isEmpty {
-                    Divider()
-                    VStack(alignment: .leading, spacing: 8) {
+                    Divider().background(NPColors.divider)
+                    VStack(alignment: .leading, spacing: NPSpacing.small) {
                         SectionLabel("OCR 结果")
                         ForEach(ocrArtifacts) { artifact in
-                            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            HStack(alignment: .firstTextBaseline, spacing: NPSpacing.small) {
                                 DetailText(
                                     [
                                         artifactTypeLabel(artifact.artifactType),
@@ -1185,9 +1198,9 @@ private struct TaskTab: View {
                 canRetryDocumentPurge: model.canRetryDocumentPurge,
                 onRetryDocumentPurge: model.retryDocumentPurge
             )
-                .padding(.horizontal, 16)
+                .padding(.horizontal, NPSpacing.outer)
                 .padding(.top, 14)
-                .padding(.bottom, 24)
+                .padding(.bottom, NPSpacing.section)
         }
         .accessibilityIdentifier("tasksTab")
     }
@@ -1202,31 +1215,33 @@ private struct TaskPanel: View {
     @State private var eventsExpanded = false
 
     var body: some View {
-        SectionContainer {
+        NPSection {
             VStack(alignment: .leading, spacing: 14) {
                 HStack {
                     Label("当前任务", systemImage: "clock.arrow.circlepath")
                         .font(.headline)
+                        .foregroundStyle(NPColors.textPrimary)
                     Spacer()
                     if let activeTask {
-                        StatusPill(text: taskStatusLabel(activeTask), color: taskStatusColor(activeTask))
+                        NPStatusChip(text: taskStatusLabel(activeTask), variant: taskStatusChipVariant(activeTask))
                     }
                 }
 
                 if let activeTask {
-                    VStack(alignment: .leading, spacing: 8) {
+                    VStack(alignment: .leading, spacing: NPSpacing.small) {
                         HStack {
                             Text(taskTypeLabel(activeTask.taskType))
                                 .font(.subheadline.weight(.medium))
+                                .foregroundStyle(NPColors.textPrimary)
                                 .lineLimit(1)
                             Spacer()
                             Text("\(activeTask.progress.clamped(to: 0...100))%")
                                 .font(.caption.monospacedDigit())
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(NPColors.textSecondary)
                         }
                         ProgressView(value: Double(activeTask.progress.clamped(to: 0...100)), total: 100)
                     }
-                    HStack(spacing: 16) {
+                    HStack(spacing: NPSpacing.item) {
                         if let startedAt = activeTask.startedAt {
                             TaskTime(label: "开始", value: compactDateTime(startedAt))
                         }
@@ -1238,12 +1253,15 @@ private struct TaskPanel: View {
                         }
                     }
                     if let taskMessage = terminalMessage(for: activeTask) {
+                        let isCancelled = activeTask.status == "cancelled"
+                        let msgColor: Color = isCancelled ? NPColors.warning : NPColors.destructive
                         Label(taskMessage, systemImage: "exclamationmark.triangle.fill")
                             .font(.subheadline)
-                            .foregroundStyle(activeTask.status == "cancelled" ? .orange : .red)
+                            .foregroundStyle(msgColor)
                             .padding(10)
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .liquidGlassBanner(tint: activeTask.status == "cancelled" ? .orange : .red)
+                            .background(msgColor.opacity(0.12))
+                            .clipShape(RoundedRectangle(cornerRadius: NPRadius.button, style: .continuous))
                     }
                     if let resultText = activeTask.resultText {
                         DisclosureGroup("任务结果", isExpanded: $resultExpanded) {
@@ -1257,11 +1275,11 @@ private struct TaskPanel: View {
                             Label("重试清理", systemImage: "arrow.clockwise")
                                 .frame(maxWidth: .infinity)
                         }
-                        .notePatchGlassButtonStyle(prominent: true)
+                        .buttonStyle(NPPrimaryButtonStyle())
                         .accessibilityIdentifier("retryDocumentPurgeButton")
                     }
                 } else {
-                    EmptyState(
+                    NPEmptyState(
                         systemImage: "checkmark.circle",
                         title: "暂无进行中的任务",
                         message: "处理文档或向 OpenClaw 提问后，进度会显示在这里。"
@@ -1269,7 +1287,7 @@ private struct TaskPanel: View {
                 }
 
                 if !events.isEmpty {
-                    Divider()
+                    Divider().background(NPColors.divider)
                     HStack {
                         SectionLabel("事件日志")
                         Spacer()
@@ -1280,15 +1298,15 @@ private struct TaskPanel: View {
                     }
 
                     ForEach(visibleEvents) { event in
-                        HStack(alignment: .top, spacing: 8) {
+                        HStack(alignment: .top, spacing: NPSpacing.small) {
                             Circle()
-                                .fill(event.level == "error" ? Color.red : Color.secondary.opacity(0.5))
+                                .fill(event.level == "error" ? NPColors.destructive : NPColors.textSecondary.opacity(0.5))
                                 .frame(width: 6, height: 6)
                                 .padding(.top, 5)
                             VStack(alignment: .leading, spacing: 3) {
                                 Text("\(event.progress.map { "\($0)% · " } ?? "")\(event.message)")
                                     .font(.caption)
-                                    .foregroundStyle(event.level == "error" ? .red : .primary)
+                                    .foregroundStyle(event.level == "error" ? NPColors.destructive : NPColors.textPrimary)
                                     .lineLimit(eventsExpanded ? 3 : 1)
                                 if eventsExpanded, let dataText = event.dataText {
                                     DetailText(dataText, lineLimit: 2)
@@ -1333,13 +1351,16 @@ private struct TaskTime: View {
         VStack(alignment: .leading, spacing: 2) {
             Text(label)
                 .font(.caption2)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(NPColors.textSecondary)
             Text(value)
                 .font(.caption)
+                .foregroundStyle(NPColors.textPrimary)
                 .lineLimit(1)
         }
     }
 }
+
+// MARK: - OpenClaw Chat Tab
 
 private struct OpenClawChatTab: View {
     @ObservedObject var model: NotePatchViewModel
@@ -1356,11 +1377,10 @@ private struct OpenClawChatTab: View {
             HStack(spacing: 10) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(model.selectedConversation?.title ?? "新对话")
-                        .font(.subheadline.weight(.semibold))
+                        .npCardTitle()
                         .lineLimit(1)
                     Text(model.selectedConversation == nil ? "发送第一条消息后自动保存" : "已保存的 AI 会话")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .npCaption()
                         .lineLimit(1)
                 }
                 Spacer()
@@ -1400,14 +1420,16 @@ private struct OpenClawChatTab: View {
                 } label: {
                     Image(systemName: "ellipsis.circle")
                         .font(.title3)
+                        .foregroundStyle(NPColors.textSecondary)
                         .frame(width: 36, height: 36)
                 }
                 .disabled(model.isChatHistoryLoading || model.isConversationMutating)
                 .accessibilityLabel("会话操作")
             }
-            .padding(.horizontal, 16)
+            .padding(.horizontal, NPSpacing.outer)
             .padding(.vertical, 12)
-            .liquidGlassPanel()
+            .background(NPColors.surface)
+            .modifier(NPCardShadow())
 
             ScrollViewReader { proxy in
                 ScrollView {
@@ -1427,7 +1449,7 @@ private struct OpenClawChatTab: View {
                                 .id(message.id)
                         }
                     }
-                    .padding(.horizontal, 16)
+                    .padding(.horizontal, NPSpacing.outer)
                     .padding(.vertical, 14)
                 }
                 .onChange(of: model.openClawMessages.count) { _ in
@@ -1441,11 +1463,11 @@ private struct OpenClawChatTab: View {
             }
 
             VStack(spacing: 0) {
-                Divider()
+                Divider().background(NPColors.divider)
                 composer
-                .padding(.horizontal, 16)
+                .padding(.horizontal, NPSpacing.outer)
                 .padding(.vertical, 10)
-                .animation(.interactiveSpring, value: isComposerExpanded)
+                .animation(.npInteractive, value: isComposerExpanded)
                 .accessibilityIdentifier("openClawComposer")
             }
         }
@@ -1515,22 +1537,26 @@ private struct OpenClawChatTab: View {
         let expanded = isComposerExpanded
         let composerHeight = expanded ? max(92, composerTextHeight + 62) : 44
 
-        return VStack(spacing: 8) {
+        return VStack(spacing: NPSpacing.small) {
             if !aiDraftAttachments.isEmpty {
                 aiAttachmentStrip
             }
 
             ZStack(alignment: .topLeading) {
                 if expanded {
-                    RoundedRectangle(cornerRadius: 24, style: .continuous)
-                        .fill(.clear)
-                        .liquidGlassField()
+                    RoundedRectangle(cornerRadius: NPRadius.sheet, style: .continuous)
+                        .fill(NPColors.surface)
+                        .overlay {
+                            RoundedRectangle(cornerRadius: NPRadius.sheet, style: .continuous)
+                                .stroke(NPColors.border, lineWidth: 1)
+                        }
+                        .modifier(NPCardShadow())
                 }
 
                 Text("问 OpenClaw")
-                    .foregroundStyle(.secondary)
-                    .padding(.leading, expanded ? 16 : 54)
-                    .padding(.trailing, expanded ? 16 : 54)
+                    .foregroundStyle(NPColors.textSecondary)
+                    .padding(.leading, expanded ? NPSpacing.outer : 54)
+                    .padding(.trailing, expanded ? NPSpacing.outer : 54)
                     .padding(.top, expanded ? 19 : 11)
                     .opacity(model.openClawInput.isEmpty ? 1 : 0)
                     .allowsHitTesting(false)
@@ -1545,9 +1571,9 @@ private struct OpenClawChatTab: View {
                     maximumLines: expanded ? 7 : 1
                 )
                 .frame(height: expanded ? composerTextHeight : 44)
-                .padding(.leading, expanded ? 8 : 46)
-                .padding(.trailing, expanded ? 8 : 46)
-                .padding(.top, expanded ? 8 : 0)
+                .padding(.leading, expanded ? NPSpacing.small : 46)
+                .padding(.trailing, expanded ? NPSpacing.small : 46)
+                .padding(.top, expanded ? NPSpacing.small : 0)
                 .padding(.bottom, expanded ? 46 : 0)
                 .accessibilityLabel("问 OpenClaw")
                 .disabled(model.isOpenClawSending)
@@ -1557,7 +1583,7 @@ private struct OpenClawChatTab: View {
                     Spacer(minLength: 0)
                     composerSendButton
                 }
-                .padding(.horizontal, expanded ? 8 : 0)
+                .padding(.horizontal, expanded ? NPSpacing.small : 0)
                 .frame(height: 38)
                 .frame(maxHeight: .infinity, alignment: expanded ? .bottom : .center)
             }
@@ -1584,14 +1610,14 @@ private struct OpenClawChatTab: View {
                 .font(.system(size: 17, weight: .semibold))
                 .frame(width: 38, height: 38)
         }
-        .foregroundStyle(.secondary)
+        .foregroundStyle(NPColors.textSecondary)
         .accessibilityLabel("添加附件")
         .disabled(model.isOpenClawSending)
     }
 
     private var aiAttachmentStrip: some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
+            HStack(spacing: NPSpacing.small) {
                 ForEach(aiDraftAttachments) { file in
                     AIComposerAttachmentChip(file: file) {
                         removeAIDraftAttachment(file)
@@ -1665,15 +1691,12 @@ private struct OpenClawChatTab: View {
                 .frame(width: 38, height: 38)
         }
         .buttonStyle(.plain)
-        .foregroundStyle(canSend ? Color.white : Color.secondary)
+        .foregroundStyle(canSend ? .white : NPColors.textSecondary)
         .background {
             Circle()
-                .fill(canSend ? Color.accentColor : Color.secondary.opacity(0.18))
+                .fill(canSend ? NPColors.brand : NPColors.textSecondary.opacity(0.18))
         }
-        .overlay {
-            Circle()
-                .strokeBorder(Color.white.opacity(canSend ? 0.3 : 0.12), lineWidth: 0.5)
-        }
+        .clipShape(Circle())
         .frame(width: 38, height: 38)
         .contentShape(Circle())
         .disabled(!canSend)
@@ -1690,7 +1713,7 @@ private struct AIComposerAttachmentChip: View {
             attachmentIcon
 
             Text(file.filename)
-                .font(.caption)
+                .npCaption()
                 .lineLimit(1)
                 .frame(maxWidth: 128, alignment: .leading)
 
@@ -1700,13 +1723,17 @@ private struct AIComposerAttachmentChip: View {
                     .frame(width: 24, height: 24)
             }
             .buttonStyle(.plain)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(NPColors.textSecondary)
             .accessibilityLabel("移除 \(file.filename)")
         }
         .padding(.leading, 7)
         .padding(.trailing, 4)
         .frame(height: 40)
-        .liquidGlassPill(tint: .clear)
+        .background(NPColors.surface)
+        .clipShape(Capsule())
+        .overlay {
+            Capsule().stroke(NPColors.border, lineWidth: 1)
+        }
     }
 
     @ViewBuilder
@@ -1719,7 +1746,7 @@ private struct AIComposerAttachmentChip: View {
                 .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
         } else {
             Image(systemName: "doc.fill")
-                .foregroundStyle(Color.accentColor)
+                .foregroundStyle(NPColors.brand)
                 .frame(width: 30, height: 30)
         }
     }
@@ -1734,6 +1761,8 @@ private func dismissActiveKeyboard() {
     )
 }
 
+// MARK: - Learning Tab
+
 private struct LearningTab: View {
     @ObservedObject var model: NotePatchViewModel
 
@@ -1745,7 +1774,7 @@ private struct LearningTab: View {
                 }
             }
             .pickerStyle(.segmented)
-            .padding(.horizontal, 16)
+            .padding(.horizontal, NPSpacing.outer)
             .padding(.vertical, 10)
 
             ScrollView {
@@ -1759,8 +1788,8 @@ private struct LearningTab: View {
                         HomeworkGradingSection(model: model)
                     }
                 }
-                .padding(.horizontal, 16)
-                .padding(.bottom, 24)
+                .padding(.horizontal, NPSpacing.outer)
+                .padding(.bottom, NPSpacing.section)
             }
         }
         .accessibilityIdentifier("learningTab")
@@ -1771,7 +1800,7 @@ private struct LearningUnitsSection: View {
     @ObservedObject var model: NotePatchViewModel
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: NPSpacing.item) {
             LearningSectionHeader(title: "学习单元", subtitle: "个人空间中的自动整理结果", isLoading: model.isLearningLoading) {
                 model.loadLearningUnits(allowOfflineNetwork: true)
             }
@@ -1786,44 +1815,44 @@ private struct LearningUnitsSection: View {
                     Button { model.selectLearningUnit(unit.id) } label: {
                         VStack(alignment: .leading, spacing: 6) {
                             HStack {
-                                Text(unit.title).font(.headline).foregroundStyle(.primary).lineLimit(2)
+                                Text(unit.title).npCardTitle().lineLimit(2)
                                 Spacer()
                                 if unit.id == model.selectedLearningUnitId {
-                                    Image(systemName: "checkmark.circle.fill").foregroundStyle(Color.accentColor)
+                                    Image(systemName: "checkmark.circle.fill").foregroundStyle(NPColors.brand)
                                 }
                             }
                             let details = [unit.subject, unit.gradeLevel, unit.topic].compactMap { $0?.isEmpty == false ? $0 : nil }
                             if !details.isEmpty {
-                                Text(details.joined(separator: " · ")).font(.caption).foregroundStyle(.secondary)
+                                Text(details.joined(separator: " · ")).npCaption()
                             }
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(12)
-                        .liquidGlassCard()
+                        .modifier(NPCardModifier())
                     }
                     .buttonStyle(.plain)
                 }
             }
             if model.selectedLearningUnitId != nil {
-                Text("电子笔记").cardTitle().padding(.top, 6)
+                Text("电子笔记").npCardTitle().padding(.top, 6)
                 if model.studyNotes.isEmpty {
-                    Text("该学习单元暂无笔记版本。").font(.subheadline).foregroundStyle(.secondary)
+                    Text("该学习单元暂无笔记版本。")
+                        .font(.subheadline)
+                        .foregroundStyle(NPColors.textSecondary)
                 } else {
                     ForEach(model.studyNotes) { note in
                         HStack(spacing: 12) {
-                            Image(systemName: "note.text").foregroundStyle(Color.accentColor)
+                            Image(systemName: "note.text").foregroundStyle(NPColors.brand)
                             VStack(alignment: .leading, spacing: 3) {
                                 Text(note.title.isEmpty ? "电子笔记" : note.title).font(.subheadline.weight(.medium)).lineLimit(2)
-                                Text("版本 \(note.versionNo)").font(.caption).foregroundStyle(.secondary)
+                                Text("版本 \(note.versionNo)").npCaption()
                             }
                             Spacer()
                             Button { model.downloadAndPreview(note) } label: { Image(systemName: "eye") }
-                                .notePatchGlassButtonStyle()
+                                .buttonStyle(NPSecondaryButtonStyle())
                                 .disabled(note.preferredDownloadURL == nil)
                                 .accessibilityLabel("预览笔记")
                         }
-                        .padding(12)
-                        .liquidGlassCard()
+                        .modifier(NPCardModifier())
                     }
                 }
             }
@@ -1840,12 +1869,12 @@ private struct LearningSectionHeader: View {
     var body: some View {
         HStack {
             VStack(alignment: .leading, spacing: 2) {
-                Text(title).font(.title3.weight(.semibold))
-                Text(subtitle).font(.caption).foregroundStyle(.secondary)
+                Text(title).npSectionTitle()
+                Text(subtitle).npCaption()
             }
             Spacer()
             Button(action: onRefresh) { Image(systemName: "arrow.clockwise") }
-                .notePatchGlassButtonStyle()
+                .buttonStyle(NPSecondaryButtonStyle())
                 .disabled(isLoading)
                 .accessibilityLabel("刷新\(title)")
         }
@@ -1856,13 +1885,13 @@ private struct KnowledgeSearchSection: View {
     @ObservedObject var model: NotePatchViewModel
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: NPSpacing.item) {
             VStack(alignment: .leading, spacing: 2) {
-                Text("知识检索").font(.title3.weight(.semibold))
-                Text("在个人空间的学习资料中查找相关内容").font(.caption).foregroundStyle(.secondary)
+                Text("知识检索").npSectionTitle()
+                Text("在个人空间的学习资料中查找相关内容").npCaption()
             }
 
-            SectionContainer {
+            NPSection {
                 VStack(alignment: .leading, spacing: 12) {
                     LabeledField(title: "查询内容") {
                         TextField("例如：一次函数斜率是什么意思？", text: $model.knowledgeQuery)
@@ -1881,7 +1910,7 @@ private struct KnowledgeSearchSection: View {
                         Label("检索", systemImage: "magnifyingglass")
                             .frame(maxWidth: .infinity)
                     }
-                    .notePatchGlassButtonStyle(prominent: true)
+                    .buttonStyle(NPPrimaryButtonStyle())
                     .disabled(model.isKnowledgeSearching || model.knowledgeQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     .accessibilityIdentifier("knowledgeSearchButton")
                 }
@@ -1890,35 +1919,36 @@ private struct KnowledgeSearchSection: View {
             if model.isKnowledgeSearching {
                 ProgressView("正在检索知识库...").frame(maxWidth: .infinity).padding(.vertical, 20)
             } else if model.hasSearchedKnowledge && model.knowledgeResults.isEmpty {
-                EmptyState(systemImage: "magnifyingglass", title: "没有匹配内容", message: "尝试更换关键词、学习单元或学科。")
+                NPEmptyState(systemImage: "magnifyingglass", title: "没有匹配内容", message: "尝试更换关键词、学习单元或学科。")
             } else if !model.knowledgeResults.isEmpty {
                 HStack {
-                    Text("检索结果").font(.headline)
+                    Text("检索结果").npCardTitle()
                     Spacer()
-                    Text("\(model.knowledgeResults.count) 条").font(.caption).foregroundStyle(.secondary)
+                    Text("\(model.knowledgeResults.count) 条").npCaption()
                 }
                 ForEach(model.knowledgeResults) { item in
-                    SectionContainer(tint: .clear) {
-                        VStack(alignment: .leading, spacing: 8) {
+                    NPSection {
+                        VStack(alignment: .leading, spacing: NPSpacing.small) {
                             HStack(alignment: .firstTextBaseline) {
                                 Text(item.metadataTitle ?? item.sourceType ?? "知识片段")
                                     .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(NPColors.textPrimary)
                                     .lineLimit(2)
                                 Spacer()
                                 Text(String(format: "%.4f", item.score))
                                     .font(.caption.monospacedDigit())
-                                    .foregroundStyle(.secondary)
+                                    .foregroundStyle(NPColors.textSecondary)
                             }
-                            Text(item.content).font(.subheadline).textSelection(.enabled)
+                            Text(item.content).font(.subheadline).textSelection(.enabled).foregroundStyle(NPColors.textPrimary)
                             let details = [item.subject, item.gradeLevel, item.sourceType, item.pageReferences.map { "页码 \($0)" }].compactMap { $0 }
                             if !details.isEmpty {
-                                Text(details.joined(separator: " · ")).font(.caption).foregroundStyle(.secondary)
+                                Text(details.joined(separator: " · ")).npCaption()
                             }
                             if item.documentId != nil {
                                 Button { model.previewKnowledgeSource(item) } label: {
                                     Label("预览来源", systemImage: "doc.text.magnifyingglass")
                                 }
-                                .notePatchGlassButtonStyle()
+                                .buttonStyle(NPSecondaryButtonStyle())
                                 .disabled(model.isBusy)
                             }
                         }
@@ -1935,19 +1965,19 @@ private struct HomeworkGradingSection: View {
     @State private var selectedReferenceDocumentId = ""
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: NPSpacing.item) {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("作业评分").font(.title3.weight(.semibold))
-                    Text("配置评分规则、依据并启动评分").font(.caption).foregroundStyle(.secondary)
+                    Text("作业评分").npSectionTitle()
+                    Text("配置评分规则、依据并启动评分").npCaption()
                 }
                 Spacer()
                 Button { isCreatingHomework = true } label: { Image(systemName: "plus") }
-                    .notePatchGlassButtonStyle(prominent: true)
+                    .buttonStyle(NPPrimaryButtonStyle())
                     .disabled(model.homeworkDocumentCandidates.isEmpty)
                     .accessibilityLabel("创建作业")
                 Button { model.loadLearningDashboard(allowOfflineNetwork: true) } label: { Image(systemName: "arrow.clockwise") }
-                    .notePatchGlassButtonStyle()
+                    .buttonStyle(NPSecondaryButtonStyle())
                     .disabled(model.isHomeworkLoading)
                     .accessibilityLabel("刷新作业")
             }
@@ -1955,7 +1985,7 @@ private struct HomeworkGradingSection: View {
             if model.isHomeworkLoading && model.homeworks.isEmpty {
                 ProgressView("正在加载作业...").frame(maxWidth: .infinity).padding(.vertical, 24)
             } else if model.homeworks.isEmpty {
-                EmptyState(systemImage: "checklist", title: "暂无作业", message: model.homeworkDocumentCandidates.isEmpty ? "先上传并处理一个作业文档。" : "点击加号创建关联作业。")
+                NPEmptyState(systemImage: "checklist", title: "暂无作业", message: model.homeworkDocumentCandidates.isEmpty ? "先上传并处理一个作业文档。" : "点击加号创建关联作业。")
             } else {
                 Picker("当前作业", selection: Binding(
                     get: { model.selectedHomeworkId ?? "" },
@@ -1978,67 +2008,71 @@ private struct HomeworkGradingSection: View {
     }
 
     private func homeworkEditor(_ homework: HomeworkItem) -> some View {
-        VStack(alignment: .leading, spacing: 14) {
-            SectionContainer {
+        VStack(alignment: .leading, spacing: NPSpacing.item) {
+            NPSection {
                 VStack(alignment: .leading, spacing: 10) {
                     HStack {
                         VStack(alignment: .leading, spacing: 3) {
-                            Text(homework.title).font(.headline)
+                            Text(homework.title).npCardTitle()
                             Text([statusLabel(homework.status), homework.dueAt.map(compactDateTime)].compactMap { $0 }.joined(separator: " · "))
-                                .font(.caption).foregroundStyle(.secondary)
+                                .npCaption()
                         }
                         Spacer()
-                        StatusPill(text: statusLabel(homework.status), color: statusColor(homework.status))
+                        NPStatusChip(text: statusLabel(homework.status), variant: statusChipVariant(homework.status))
                     }
                     SectionLabel("评分标准")
                     TextEditor(text: $model.homeworkRubricText)
                         .frame(height: 92)
                         .padding(6)
-                        .liquidGlassField()
+                        .background(NPColors.divider.opacity(0.6))
+                        .clipShape(RoundedRectangle(cornerRadius: NPRadius.input, style: .continuous))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: NPRadius.input, style: .continuous)
+                                .stroke(NPColors.border, lineWidth: 1)
+                        }
                     LabeledField(title: "满分") {
                         TextField("100", text: $model.homeworkMaxScoreText)
                             .keyboardType(.decimalPad)
                     }
                     if model.isGradingConfigDirty {
                         Label("有未保存的更改", systemImage: "exclamationmark.circle")
-                            .font(.caption)
-                            .foregroundStyle(.orange)
+                            .npCaption()
+                            .foregroundStyle(NPColors.warning)
                             .accessibilityIdentifier("gradingConfigUnsavedLabel")
                     }
                     Button { model.saveGradingConfig() } label: {
                         Label("保存评分配置", systemImage: "checkmark")
                             .frame(maxWidth: .infinity)
                     }
-                    .notePatchGlassButtonStyle(prominent: true)
+                    .buttonStyle(NPPrimaryButtonStyle())
                     .disabled(model.isHomeworkLoading || !model.isGradingConfigDirty)
                 }
             }
 
             VStack(alignment: .leading, spacing: 10) {
-                Text("评分依据").font(.headline)
+                Text("评分依据").npCardTitle()
                 if model.homeworkReferences.isEmpty {
-                    Text("暂无答案或评分标准。").font(.subheadline).foregroundStyle(.secondary)
+                    Text("暂无答案或评分标准。").font(.subheadline).foregroundStyle(NPColors.textSecondary)
                 } else {
                     ForEach(model.homeworkReferences) { reference in
                         HStack(spacing: 10) {
                             Image(systemName: reference.referenceType == "answer_key" ? "checkmark.square" : "list.clipboard")
-                                .foregroundStyle(Color.accentColor)
+                                .foregroundStyle(NPColors.brand)
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(referenceDocumentName(reference.documentId)).font(.subheadline.weight(.medium)).lineLimit(2)
-                                Text(documentKindLabel(reference.referenceType)).font(.caption).foregroundStyle(.secondary)
+                                Text(documentKindLabel(reference.referenceType)).npCaption()
                             }
                             Spacer()
                             Button(role: .destructive) { model.deleteHomeworkReference(reference) } label: { Image(systemName: "trash") }
                                 .disabled(model.isHomeworkLoading)
                                 .accessibilityLabel("删除评分依据")
                         }
-                        .padding(10)
-                        .liquidGlassCard()
+                        .modifier(NPCardModifier())
                     }
                 }
                 if model.referenceDocumentCandidates.isEmpty {
-                    Text("没有可添加的依据文档。请先上传并处理“答案参考”或“评分标准”。")
-                        .font(.caption).foregroundStyle(.secondary)
+                    Text("没有可添加的依据文档。请先上传并处理\("答案参考")或\("评分标准")。")
+                        .npCaption()
                 } else {
                     Picker("添加依据", selection: $selectedReferenceDocumentId) {
                         Text("选择依据文档").tag("")
@@ -2053,16 +2087,16 @@ private struct HomeworkGradingSection: View {
                     } label: {
                         Label("添加评分依据", systemImage: "plus")
                     }
-                    .notePatchGlassButtonStyle()
+                    .buttonStyle(NPSecondaryButtonStyle())
                     .disabled(selectedReferenceDocumentId.isEmpty || model.isHomeworkLoading)
                 }
             }
 
             if let mode = model.gradingModeLabel {
                 HStack {
-                    Text(mode).font(.subheadline.weight(.semibold))
+                    Text(mode).font(.subheadline.weight(.semibold)).foregroundStyle(NPColors.textPrimary)
                     if let confidence = model.gradingConfidence {
-                        Text("confidence \(String(format: "%.4f", confidence))").font(.caption).foregroundStyle(.secondary)
+                        Text("confidence \(String(format: "%.4f", confidence))").npCaption()
                     }
                 }
             }
@@ -2070,7 +2104,7 @@ private struct HomeworkGradingSection: View {
                 Label("开始评分", systemImage: "checkmark.seal")
                     .frame(maxWidth: .infinity)
             }
-            .notePatchGlassButtonStyle(prominent: true)
+            .buttonStyle(NPPrimaryButtonStyle())
             .disabled(model.isHomeworkLoading)
             .accessibilityIdentifier("gradeHomeworkButton")
         }
@@ -2156,12 +2190,13 @@ private struct HomeworkCreateSheet: View {
 private struct LearningEmptyState: View {
     var body: some View {
         VStack(spacing: 14) {
-            AnimatedEmptyIcon("book.closed", size: 42, tint: .accentColor)
+            Image(systemName: "book.closed")
+                .font(.system(size: 42, weight: .light))
+                .foregroundStyle(NPColors.textSecondary.opacity(0.5))
             Text("暂无学习单元")
-                .font(.headline)
+                .npCardTitle()
             Text("上传并处理文档后，学习结果会显示在这里。")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+                .npCaption()
                 .multilineTextAlignment(.center)
                 .lineSpacing(3)
         }
@@ -2169,6 +2204,8 @@ private struct LearningEmptyState: View {
         .frame(maxWidth: .infinity)
     }
 }
+
+// MARK: - OpenClaw Message Bubble
 
 private struct OpenClawMessageBubble: View {
     let message: OpenClawChatMessage
@@ -2178,15 +2215,16 @@ private struct OpenClawMessageBubble: View {
             if message.role == .user {
                 Spacer(minLength: 28)
             }
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: NPSpacing.small) {
                 if message.role == .assistant {
                     Label("OpenClaw", systemImage: "sparkles")
                         .font(.caption.weight(.medium))
-                        .foregroundStyle(Color.accentColor)
+                        .foregroundStyle(NPColors.brand)
                 }
                 if message.status == .sending {
                     Text("思考中...")
                         .font(.body.weight(.medium))
+                        .foregroundStyle(NPColors.textPrimary)
                     ProgressView(value: Double(message.progress ?? 0), total: 100)
                 } else if message.role == .assistant {
                     LightweightMarkdownText(markdown: message.content, color: foregroundColor)
@@ -2196,63 +2234,71 @@ private struct OpenClawMessageBubble: View {
                 }
                 if let errorEvent = message.events.last(where: { $0.level == "error" }) {
                     Text("错误事件：\(errorEvent.message)")
-                        .font(.caption)
-                        .foregroundStyle(.red)
+                        .npCaption()
+                        .foregroundStyle(NPColors.destructive)
                         .lineLimit(3)
                 }
                 if message.sourceStatus == "partially_unavailable" {
                     Label("部分来源资料已删除", systemImage: "exclamationmark.triangle")
-                        .font(.caption)
-                        .foregroundStyle(.orange)
+                        .npCaption()
+                        .foregroundStyle(NPColors.warning)
                 } else if message.sourceStatus == "unavailable" {
                     Label("来源资料已删除", systemImage: "exclamationmark.triangle.fill")
-                        .font(.caption)
-                        .foregroundStyle(.orange)
+                        .npCaption()
+                        .foregroundStyle(NPColors.warning)
                 } else if !message.citations.isEmpty {
                     Text("引用 \(message.citations.count) 条资料")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .npCaption()
                 }
             }
-            .padding(12)
+            .padding(NPSpacing.card)
             .frame(maxWidth: message.role == .system ? .infinity : 320, alignment: .leading)
-            .liquidGlassCard(tint: bubbleTint)
-            .foregroundStyle(foregroundColor)
+            .background(bubbleBackground)
+            .clipShape(RoundedRectangle(cornerRadius: NPRadius.card, style: .continuous))
+            .overlay {
+                if message.role != .user {
+                    RoundedRectangle(cornerRadius: NPRadius.card, style: .continuous)
+                        .stroke(NPColors.border, lineWidth: 1)
+                }
+            }
             if message.role != .user {
                 Spacer(minLength: 28)
             }
         }
     }
 
-    private var bubbleTint: Color {
-        if message.status == .error { return .red }
+    private var bubbleBackground: Color {
+        if message.status == .error {
+            return NPColors.destructive.opacity(0.1)
+        }
         switch message.role {
-        case .user:    return .accentColor
-        case .system:  return .clear
-        case .assistant: return .clear
+        case .user:
+            return NPColors.aiUserBubble
+        case .system, .assistant:
+            return NPColors.surface
         }
     }
-
-    private var backgroundColor: Color { bubbleTint }
 
     private var foregroundColor: Color {
         if message.role == .user {
-            return .white
+            return NPColors.textPrimary
         }
-        return .primary
+        return NPColors.textPrimary
     }
 }
+
+// MARK: - Settings Tab
 
 private struct SettingsTab: View {
     @ObservedObject var model: NotePatchViewModel
 
     var body: some View {
         ScrollView {
-            VStack(spacing: 16) {
-                SectionContainer {
+            VStack(spacing: NPSpacing.section) {
+                NPSection {
                     VStack(alignment: .leading, spacing: 14) {
                         Label("服务器", systemImage: "server.rack")
-                            .cardTitle()
+                            .npCardTitle()
 
                         LabeledField(title: "API 地址") {
                             TextField("API 地址", text: $model.apiBaseURLText)
@@ -2271,17 +2317,17 @@ private struct SettingsTab: View {
                             Label("保存服务器设置", systemImage: "checkmark")
                                 .frame(maxWidth: .infinity)
                         }
-                        .notePatchGlassButtonStyle(prominent: true)
+                        .buttonStyle(NPPrimaryButtonStyle())
                         .disabled(model.isBusy)
 
-                        HStack(spacing: 8) {
+                        HStack(spacing: NPSpacing.small) {
                             Button {
                                 model.checkAPIConnection()
                             } label: {
                                 Label("检测 API", systemImage: "network")
                                     .frame(maxWidth: .infinity)
                             }
-                            .notePatchGlassButtonStyle()
+                            .buttonStyle(NPSecondaryButtonStyle())
                             .disabled(model.isBusy)
 
                             Button {
@@ -2290,7 +2336,7 @@ private struct SettingsTab: View {
                                 Label("检测 tusd", systemImage: "arrow.up.circle")
                                     .frame(maxWidth: .infinity)
                             }
-                            .notePatchGlassButtonStyle()
+                            .buttonStyle(NPSecondaryButtonStyle())
                             .disabled(model.isBusy)
                         }
                     }
@@ -2298,43 +2344,42 @@ private struct SettingsTab: View {
 
                 WorkspaceManagementSection(model: model)
 
-                SectionContainer {
-                    VStack(alignment: .leading, spacing: 8) {
+                NPSection {
+                    VStack(alignment: .leading, spacing: NPSpacing.small) {
                         Label("AI", systemImage: "sparkles")
-                            .cardTitle()
+                            .npCardTitle()
                         Toggle("AI 使用历史", isOn: Binding(
                             get: { model.aiHistoryEnabled },
                             set: { model.updateAIHistoryEnabled($0) }
                         ))
                         .disabled(model.isBusy || model.isAIPreferenceUpdating)
                         Text("关闭后仍保留会话记录，但后续请求不注入历史上下文。")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .npCaption()
                     }
                 }
 
-                SectionContainer {
+                NPSection {
                     VStack(alignment: .leading, spacing: 14) {
                         Label("账号", systemImage: "person.crop.circle")
-                            .cardTitle()
+                            .npCardTitle()
                         HStack(spacing: 12) {
                             Image(systemName: "person.fill")
-                                .foregroundStyle(Color.accentColor)
+                                .foregroundStyle(NPColors.brandDark)
                                 .frame(width: 42, height: 42)
-                                .liquidGlassPill(tint: .accentColor)
+                                .background(NPColors.brandLight)
+                                .clipShape(Circle())
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(model.session?.fullName?.isEmpty == false ? model.session?.fullName ?? "" : "NotePatch 用户")
                                     .font(.subheadline.weight(.medium))
+                                    .foregroundStyle(NPColors.textPrimary)
                                     .lineLimit(1)
                                 Text(model.session?.email ?? "")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
+                                    .npCaption()
                                     .lineLimit(1)
                             }
                         }
                         Text("登录有效期至 \(compactDateTime(model.session?.expiresAt ?? ""))")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .npCaption()
                             .lineLimit(1)
                         Button(role: .destructive) {
                             model.logout()
@@ -2342,15 +2387,15 @@ private struct SettingsTab: View {
                             Label("退出登录", systemImage: "rectangle.portrait.and.arrow.right")
                                 .frame(maxWidth: .infinity)
                         }
-                        .notePatchGlassButtonStyle()
-                        .tint(.red)
+                        .buttonStyle(NPSecondaryButtonStyle())
+                        .foregroundStyle(NPColors.destructive)
                         .disabled(model.isBusy)
                     }
                 }
             }
-            .padding(.horizontal, 16)
+            .padding(.horizontal, NPSpacing.outer)
             .padding(.top, 14)
-            .padding(.bottom, 24)
+            .padding(.bottom, NPSpacing.section)
         }
         .accessibilityIdentifier("settingsTab")
     }
@@ -2361,11 +2406,11 @@ private struct WorkspaceManagementSection: View {
 
     var body: some View {
         let selected = model.workspaces.first(where: { $0.id == model.selectedWorkspaceId })
-        SectionContainer {
+        NPSection {
             VStack(alignment: .leading, spacing: 14) {
                 HStack {
                     Label("个人空间", systemImage: "person.crop.square")
-                        .cardTitle()
+                        .npCardTitle()
                     Spacer()
                     Button {
                         model.refreshCurrentWorkspace()
@@ -2379,21 +2424,22 @@ private struct WorkspaceManagementSection: View {
                 if let selected {
                     HStack(spacing: 10) {
                         Image(systemName: "folder.fill")
-                            .foregroundStyle(.orange)
+                            .foregroundStyle(NPColors.warning)
                             .frame(width: 34, height: 34)
-                            .liquidGlassPanel(tint: .orange)
+                            .background(NPColors.warning.opacity(0.15))
+                            .clipShape(RoundedRectangle(cornerRadius: NPRadius.button, style: .continuous))
                         VStack(alignment: .leading, spacing: 2) {
                             Text(selected.name)
                                 .font(.subheadline.weight(.medium))
+                                .foregroundStyle(NPColors.textPrimary)
                                 .lineLimit(1)
                             Text("当前使用的个人空间")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                                .npCaption()
                         }
                     }
                 } else {
                     Text("暂无个人空间，可尝试恢复。")
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(NPColors.textSecondary)
                 }
                 Button {
                     model.recoverPersonalWorkspace()
@@ -2401,12 +2447,14 @@ private struct WorkspaceManagementSection: View {
                     Label("恢复个人空间", systemImage: "arrow.triangle.2.circlepath")
                         .frame(maxWidth: .infinity)
                 }
-                .notePatchGlassButtonStyle()
+                .buttonStyle(NPSecondaryButtonStyle())
                 .disabled(model.isBusy)
             }
         }
     }
 }
+
+// MARK: - Markdown Rendering
 
 private struct LightweightMarkdownText: View {
     let markdown: String
@@ -2426,13 +2474,16 @@ private struct LightweightMarkdownText: View {
                 case .ordered:
                     MarkdownInlineText(text: "1. \(block.text)", color: color)
                 case .quote:
-                    HStack(spacing: 8) {
-                        StatusStripe(color: .accentColor)
+                    HStack(spacing: NPSpacing.small) {
+                        RoundedRectangle(cornerRadius: 2)
+                            .fill(NPColors.brand)
+                            .frame(width: 4)
                             .frame(height: 38)
-                        MarkdownInlineText(text: block.text, color: .primary)
+                        MarkdownInlineText(text: block.text, color: NPColors.textPrimary)
                     }
-                    .padding(8)
-                    .liquidGlassPanel()
+                    .padding(NPSpacing.small)
+                    .background(NPColors.surface)
+                    .clipShape(RoundedRectangle(cornerRadius: NPRadius.input, style: .continuous))
                 case .code:
                     Text(block.text)
                         .font(.system(.caption, design: .monospaced))
@@ -2472,10 +2523,12 @@ private struct MarkdownInlineText: View {
         case .code:
             return Text(token.text).font(.system(.body, design: .monospaced))
         case .link:
-            return Text(token.text).underline().foregroundColor(.accentColor)
+            return Text(token.text).underline().foregroundColor(NPColors.brand)
         }
     }
 }
+
+// MARK: - Reusable Building Blocks
 
 private struct CollapsibleSection<Content: View>: View {
     let title: String
@@ -2484,20 +2537,19 @@ private struct CollapsibleSection<Content: View>: View {
     @ViewBuilder let content: Content
 
     var body: some View {
-        SectionContainer {
+        NPSection {
             VStack(alignment: .leading, spacing: 10) {
                 HStack {
                     VStack(alignment: .leading, spacing: 3) {
                         Text(title)
-                            .cardTitle()
+                            .npCardTitle()
                         Text(summary.isEmpty ? "全部" : summary)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .npCaption()
                             .lineLimit(1)
                     }
                     Spacer()
                     Button {
-                        withAnimation(.statusSpring) { expanded.toggle() }
+                        withAnimation(.npInteractive) { expanded.toggle() }
                     } label: {
                         Label(expanded ? "收起" : "展开", systemImage: expanded ? "chevron.up" : "chevron.down")
                     }
@@ -2508,18 +2560,6 @@ private struct CollapsibleSection<Content: View>: View {
                 }
             }
         }
-    }
-}
-
-private struct SectionContainer<Content: View>: View {
-    var tint: Color = .clear
-    @ViewBuilder let content: Content
-
-    var body: some View {
-        content
-            .padding(14)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .liquidGlassCard(tint: tint)
     }
 }
 
@@ -2544,6 +2584,7 @@ private struct SectionLabel: View {
     var body: some View {
         Text(text)
             .font(.subheadline.weight(.semibold))
+            .foregroundStyle(NPColors.textPrimary)
     }
 }
 
@@ -2554,28 +2595,17 @@ private struct LabeledField<Field: View>: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(title)
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .npCaption()
             field
                 .padding(.horizontal, 11)
                 .frame(height: 42)
-                .liquidGlassField()
+                .background(NPColors.divider)
+                .clipShape(RoundedRectangle(cornerRadius: NPRadius.input, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: NPRadius.input, style: .continuous)
+                        .stroke(NPColors.border, lineWidth: 1)
+                }
         }
-    }
-}
-
-private struct StatusPill: View {
-    let text: String
-    let color: Color
-
-    var body: some View {
-        Text(text)
-            .font(.caption2.weight(.semibold))
-            .foregroundStyle(color)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .liquidGlassPill(tint: color)
-            .fixedSize()
     }
 }
 
@@ -2592,7 +2622,7 @@ private struct IconButton: View {
                 .frame(width: 28, height: 28)
         }
         .buttonStyle(.plain)
-        .foregroundStyle(Color.accentColor)
+        .foregroundStyle(NPColors.brand)
         .disabled(!enabled)
         .accessibilityLabel(accessibilityLabel)
     }
@@ -2609,13 +2639,13 @@ private struct ChoiceButton: View {
             Button(action: action) {
                 label
             }
-            .notePatchGlassButtonStyle(prominent: true)
+            .buttonStyle(NPPrimaryButtonStyle())
             .disabled(!enabled)
         } else {
             Button(action: action) {
                 label
             }
-            .notePatchGlassButtonStyle()
+            .buttonStyle(NPSecondaryButtonStyle())
             .disabled(!enabled)
         }
     }
@@ -2653,15 +2683,23 @@ private struct TextButton: View {
     }
 }
 
-private struct StatusStripe: View {
-    let color: Color
+private struct DetailText: View {
+    let text: String
+    let lineLimit: Int?
+
+    init(_ text: String, lineLimit: Int? = 2) {
+        self.text = text
+        self.lineLimit = lineLimit
+    }
 
     var body: some View {
-        RoundedRectangle(cornerRadius: 2)
-            .fill(color)
-            .frame(width: 4)
+        Text(text)
+            .npCaption()
+            .lineLimit(lineLimit)
     }
 }
+
+// MARK: - Status Banner
 
 private struct StatusBanner: View {
     let isBusy: Bool
@@ -2683,12 +2721,12 @@ private struct StatusBanner: View {
                 VStack(alignment: .leading, spacing: 3) {
                     if shouldShowStatus {
                         Text(statusMessage)
-                            .font(.caption)
+                            .npCaption()
                             .lineLimit(2)
                     }
                     if let errorMessage {
                         Text(errorMessage)
-                            .font(.caption)
+                            .npCaption()
                             .lineLimit(3)
                     }
                 }
@@ -2700,17 +2738,18 @@ private struct StatusBanner: View {
                             .frame(width: 28, height: 28)
                     }
                     .buttonStyle(.plain)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(NPColors.textSecondary)
                     .accessibilityLabel("关闭提示")
                 }
             }
-            .foregroundStyle(.primary)
+            .foregroundStyle(NPColors.textPrimary)
             .padding(.horizontal, 12)
-            .padding(.vertical, 8)
+            .padding(.vertical, NPSpacing.small)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .liquidGlassBanner(tint: bannerTint)
-            .padding(.horizontal, 16)
-            .padding(.top, 8)
+            .background(bannerBg)
+            .clipShape(RoundedRectangle(cornerRadius: NPRadius.button, style: .continuous))
+            .padding(.horizontal, NPSpacing.outer)
+            .padding(.top, NPSpacing.small)
         }
     }
 
@@ -2740,28 +2779,16 @@ private struct StatusBanner: View {
 
     private var bannerColor: Color {
         if errorMessage != nil {
-            return .red
+            return NPColors.destructive
         }
-        return isWarning ? .orange : .accentColor
+        return isWarning ? NPColors.warning : NPColors.brand
     }
 
-    private var bannerTint: Color {
-        errorMessage == nil ? bannerColor : .red.opacity(0.35)
-    }
-}
-
-private struct AppHeader: View {
-    let title: String
-    let subtitle: String
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title)
-                .font(.title2.weight(.semibold))
-            Text(subtitle)
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+    private var bannerBg: Color {
+        if errorMessage != nil {
+            return NPColors.destructive.opacity(0.12)
         }
+        return isWarning ? NPColors.warning.opacity(0.15) : NPColors.brandLight.opacity(0.6)
     }
 }
 
@@ -2774,27 +2801,27 @@ private struct StatusPanel: View {
         if hasContent {
             VStack(alignment: .leading, spacing: 7) {
                 if isBusy {
-                    HStack(spacing: 8) {
+                    HStack(spacing: NPSpacing.small) {
                         ProgressView()
                         Text("处理中…")
                             .font(.subheadline)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(NPColors.textSecondary)
                     }
                 }
                 if !statusMessage.isEmpty && !isBusy {
                     Text(statusMessage)
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                        .npCaption()
                 }
                 if let errorMessage {
                     Text(errorMessage)
-                        .font(.subheadline)
-                        .foregroundStyle(.red)
+                        .npCaption()
+                        .foregroundStyle(NPColors.destructive)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(12)
-            .liquidGlassCard(tint: errorMessage != nil ? .red : .accentColor.opacity(0.3))
+            .background(errorMessage != nil ? NPColors.destructive.opacity(0.1) : NPColors.brandLight.opacity(0.5))
+            .clipShape(RoundedRectangle(cornerRadius: NPRadius.card, style: .continuous))
         }
     }
 
@@ -2803,68 +2830,56 @@ private struct StatusPanel: View {
     }
 }
 
-private struct EmptyText: View {
-    let text: String
+// MARK: - Helper: Brand Logo Icon
 
-    init(_ text: String) {
-        self.text = text
-    }
-
-    var body: some View {
-        EmptyState(systemImage: "doc", title: "暂无文档", message: text)
-    }
-}
-
-private struct EmptyState: View {
-    let systemImage: String
-    let title: String
-    let message: String
-
-    var body: some View {
-        VStack(spacing: 12) {
-            AnimatedEmptyIcon(systemImage, size: 38, tint: .secondary)
-            Text(title)
-                .font(.subheadline.weight(.semibold))
-            Text(message)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .lineSpacing(3)
-                .frame(maxWidth: 280)
-        }
-        .padding(.vertical, 36)
-        .frame(maxWidth: .infinity)
+private func brandLogoIcon(size: CGFloat, symbolSize: CGFloat) -> some View {
+    ZStack {
+        RoundedRectangle(cornerRadius: NPRadius.card)
+            .fill(NPColors.brand)
+            .frame(width: size, height: size)
+        Image(systemName: "doc.text.viewfinder")
+            .font(.system(size: symbolSize, weight: .semibold))
+            .foregroundStyle(.white)
     }
 }
 
-private struct DetailText: View {
-    let text: String
-    let lineLimit: Int?
+// MARK: - Helper: Status Color / Variant Mapping
 
-    init(_ text: String, lineLimit: Int? = 2) {
-        self.text = text
-        self.lineLimit = lineLimit
+private func colorForStatus(_ status: String) -> Color {
+    switch status {
+    case "failed", "cancelled", "deleted":
+        return NPColors.destructive
+    case "created", "uploading", "uploaded", "processing", "queued", "running":
+        return NPColors.warning
+    case "ready", "succeeded", "completed":
+        return NPColors.brand
+    default:
+        return NPColors.textSecondary
     }
+}
 
-    var body: some View {
-        Text(text)
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .lineLimit(lineLimit)
+private func statusChipVariant(_ status: String) -> NPStatusChip.NPStatusChipVariant {
+    switch status {
+    case "failed", "cancelled", "deleted":
+        return .destructive
+    case "created", "uploading", "uploaded", "processing", "queued", "running":
+        return .warning
+    case "ready", "succeeded", "completed":
+        return .brand
+    default:
+        return .neutral
     }
+}
+
+private func taskStatusChipVariant(_ task: TaskItem) -> NPStatusChip.NPStatusChipVariant {
+    if task.cancelRequestedAt != nil && !["succeeded", "failed", "cancelled"].contains(task.status) {
+        return .warning
+    }
+    return statusChipVariant(task.status)
 }
 
 private func statusColor(_ status: String) -> Color {
-    switch status {
-    case "failed", "cancelled", "deleted":
-        return .red
-    case "created", "uploading", "uploaded", "processing", "queued", "running":
-        return .orange
-    case "ready", "succeeded", "completed":
-        return .accentColor
-    default:
-        return .gray
-    }
+    return colorForStatus(status)
 }
 
 private func taskStatusLabel(_ task: TaskItem) -> String {
@@ -2876,9 +2891,9 @@ private func taskStatusLabel(_ task: TaskItem) -> String {
 
 private func taskStatusColor(_ task: TaskItem) -> Color {
     if task.cancelRequestedAt != nil && !["succeeded", "failed", "cancelled"].contains(task.status) {
-        return .orange
+        return NPColors.warning
     }
-    return statusColor(task.status)
+    return colorForStatus(task.status)
 }
 
 private func taskTypeLabel(_ taskType: String) -> String {
@@ -2893,6 +2908,8 @@ private func taskTypeLabel(_ taskType: String) -> String {
         return taskType.replacingOccurrences(of: "_", with: " ")
     }
 }
+
+// MARK: - Chat Scroll Pan Observer
 
 private struct ChatScrollPanValue {
     let startLocation: CGPoint
@@ -2978,6 +2995,8 @@ private struct ChatScrollPanObserver: UIViewRepresentable {
     }
 }
 
+// MARK: - Adaptive Composer Text View
+
 private struct AdaptiveComposerTextView: UIViewRepresentable {
     @Binding var text: String
     @Binding var isFocused: Bool
@@ -3062,6 +3081,8 @@ private struct AdaptiveComposerTextView: UIViewRepresentable {
         }
     }
 }
+
+// MARK: - Photo Library Picker
 
 private struct PhotoLibrarySelection {
     let data: Data
@@ -3149,6 +3170,8 @@ private struct PhotoLibraryPicker: UIViewControllerRepresentable {
     }
 }
 
+// MARK: - Camera Picker
+
 private struct CameraPicker: UIViewControllerRepresentable {
     let onImage: (UIImage) -> Void
     @Environment(\.dismiss) private var dismiss
@@ -3188,6 +3211,8 @@ private struct CameraPicker: UIViewControllerRepresentable {
     }
 }
 
+// MARK: - Quick Look Preview
+
 private struct QuickLookPreview: UIViewControllerRepresentable {
     let url: URL
 
@@ -3221,6 +3246,8 @@ private struct QuickLookPreview: UIViewControllerRepresentable {
         }
     }
 }
+
+// MARK: - Zoomable Image Preview
 
 private struct ZoomableImagePreview: UIViewRepresentable {
     let url: URL
@@ -3315,6 +3342,8 @@ private struct ZoomableImagePreview: UIViewRepresentable {
     }
 }
 
+// MARK: - Image Preview
+
 private struct ImagePreview: View {
     let url: URL
     @Environment(\.dismiss) private var dismiss
@@ -3342,12 +3371,20 @@ private struct ImagePreview: View {
     }
 }
 
+// MARK: - Utility
+
 private extension Comparable {
     func clamped(to limits: ClosedRange<Self>) -> Self {
         min(max(self, limits.lowerBound), limits.upperBound)
     }
 }
 
-#Preview {
-    ContentView()
+// MARK: - Preview
+
+#if DEBUG
+struct ContentView_Previews: PreviewProvider {
+    static var previews: some View {
+        ContentView()
+    }
 }
+#endif
