@@ -9,12 +9,32 @@ struct NotePatchTests {
     @Test func normalizeBaseURLs_defaultAndAddScheme() {
         #expect(normalizeLearningBackendBaseURL("") == defaultLearningBackendBaseURL)
         #expect(normalizeLearningBackendBaseURL("192.168.100.123:8001/") == "http://192.168.100.123:8001/api/v1")
+        #expect(normalizeLearningBackendBaseURL("https://5mbps.me:8443/notepatch/1/") == defaultLearningBackendBaseURL)
         #expect(normalizeLearningBackendBaseURL("https://example.test/api/v1/") == "https://example.test/api/v1")
         #expect(normalizeLearningBackendBaseURL("https://example.test/api/") == "https://example.test/api")
 
         #expect(normalizeTUSBaseURL("") == defaultTUSDBaseURL)
         #expect(normalizeTUSBaseURL("192.168.100.123:1080/files") == "http://192.168.100.123:1080/files/")
+        #expect(normalizeTUSBaseURL("https://5mbps.me:8443/notepatch/1/") == defaultTUSDBaseURL)
         #expect(normalizeTUSBaseURL("https://example.test/files/") == "https://example.test/files/")
+    }
+
+    @Test func settingsStore_migratesLegacyDefaultServerURLs() throws {
+        let suiteName = "NotePatchURLMigrationTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defaults.set("http://192.168.100.123:8001/api/v1", forKey: "learning_base_url")
+        defaults.set("http://192.168.100.123:1080/files/", forKey: "tusd_base_url")
+
+        let store = SettingsStore(
+            defaults: defaults,
+            keychain: KeychainStore(service: "\(suiteName).keychain")
+        )
+
+        #expect(store.loadBaseURL() == defaultLearningBackendBaseURL)
+        #expect(store.loadTUSBaseURL() == defaultTUSDBaseURL)
+        #expect(defaults.string(forKey: "learning_base_url") == defaultLearningBackendBaseURL)
+        #expect(defaults.string(forKey: "tusd_base_url") == defaultTUSDBaseURL)
     }
 
     @Test func fileHelpers_sanitizeMimeAndByteFormatting() {

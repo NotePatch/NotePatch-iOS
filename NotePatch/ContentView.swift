@@ -67,7 +67,7 @@ private struct AuthScreen: View {
                     VStack(spacing: NPSpacing.item) {
                         VStack(spacing: 10) {
                             AuthField(title: "API Address", systemImage: "network") {
-                                TextField("http://192.168.100.123:8001/api/v1", text: $model.apiBaseURLText)
+                                TextField("https://5mbps.me:8443/notepatch/1/api/v1", text: $model.apiBaseURLText)
                                     .textInputAutocapitalization(.never)
                                     .keyboardType(.URL)
                                     .accessibilityIdentifier("apiAddressField")

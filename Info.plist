@@ -13,15 +13,9 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-<<<<<<< HEAD
 	<string>2.08</string>
 	<key>CFBundleVersion</key>
 	<string>202</string>
-=======
-	<string>1.79</string>
-	<key>CFBundleVersion</key>
-	<string>173</string>
->>>>>>> 9c45fca5b9dda1b2d2957f5e4cb0d9ccb8a2a35d
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>NSAppTransportSecurity</key>

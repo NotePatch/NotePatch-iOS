@@ -4,6 +4,10 @@ set -euo pipefail
 project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${project_root}"
 
+if [[ "${CONFIGURATION:-Debug}" != "Release" && "${NOTE_PATCH_INCREMENT_BUILD_NUMBER:-0}" != "1" ]]; then
+    exit 0
+fi
+
 marketing_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Info.plist)"
 if [[ ! "${marketing_version}" =~ ^([0-9]+)\.([0-9]{2})$ ]]; then
     echo "Expected a two-decimal marketing version, found: ${marketing_version}" >&2

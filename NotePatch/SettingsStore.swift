@@ -1,6 +1,9 @@
 import Foundation
 
 final class SettingsStore {
+    private static let legacyLearningBaseURL = "http://192.168.100.123:8001/api/v1"
+    private static let legacyTUSBaseURL = "http://192.168.100.123:1080/files/"
+
     private enum Keys {
         static let learningBaseURL = "learning_base_url"
         static let tusBaseURL = "tusd_base_url"
@@ -24,11 +27,21 @@ final class SettingsStore {
     }
 
     func loadBaseURL() -> String {
-        normalizeLearningBackendBaseURL(defaults.string(forKey: Keys.learningBaseURL) ?? defaultLearningBackendBaseURL)
+        let stored = defaults.string(forKey: Keys.learningBaseURL)
+        if stored == Self.legacyLearningBaseURL {
+            saveBaseURL(defaultLearningBackendBaseURL)
+            return defaultLearningBackendBaseURL
+        }
+        return normalizeLearningBackendBaseURL(stored ?? defaultLearningBackendBaseURL)
     }
 
     func loadTUSBaseURL() -> String {
-        normalizeTUSBaseURL(defaults.string(forKey: Keys.tusBaseURL) ?? defaultTUSDBaseURL)
+        let stored = defaults.string(forKey: Keys.tusBaseURL)
+        if stored == Self.legacyTUSBaseURL {
+            saveTUSBaseURL(defaultTUSDBaseURL)
+            return defaultTUSDBaseURL
+        }
+        return normalizeTUSBaseURL(stored ?? defaultTUSDBaseURL)
     }
 
     func saveBaseURL(_ baseURL: String) {
