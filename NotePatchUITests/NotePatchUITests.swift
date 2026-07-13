@@ -140,7 +140,15 @@ final class NotePatchUITests: XCTestCase {
         XCTAssertTrue(attachmentButton.exists)
         editor.tap()
         XCTAssertGreaterThan(attachmentButton.frame.minY, editor.frame.minY + 20)
-        editor.typeText("第一行\n第二行")
+        editor.typeText("第一行")
+        let singleLineHeight = editor.frame.height
+        editor.typeText("\n第二行")
+        let secondLineExpectation = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in editor.frame.height > singleLineHeight + 1 },
+            object: nil
+        )
+        wait(for: [secondLineExpectation], timeout: 2)
+        XCTAssertEqual(editor.value as? String, "第一行\n第二行")
         let sendButton = app.buttons["openClawSendButton"]
         XCTAssertTrue(sendButton.isEnabled)
         XCTAssertLessThanOrEqual(sendButton.frame.maxX, app.frame.maxX - 12)

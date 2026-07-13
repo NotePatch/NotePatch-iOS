@@ -67,7 +67,7 @@ private struct AuthScreen: View {
                     VStack(spacing: NPSpacing.item) {
                         VStack(spacing: 10) {
                             AuthField(title: "API Address", systemImage: "network") {
-                                TextField("https://5mbps.me:8443/notepatch/1/api/v1", text: $model.apiBaseURLText)
+                                TextField("https://5mbps.me:8443/notepatch/1", text: $model.apiBaseURLText)
                                     .textInputAutocapitalization(.never)
                                     .keyboardType(.URL)
                                     .accessibilityIdentifier("apiAddressField")
@@ -1451,7 +1451,6 @@ private struct OpenClawChatTab: View {
                 .padding(.horizontal, NPSpacing.outer)
                 .padding(.vertical, 10)
                 .animation(.npInteractive, value: isComposerExpanded)
-                .accessibilityIdentifier("openClawComposer")
             }
         }
         .onDisappear { dismissComposer() }
@@ -1524,52 +1523,57 @@ private struct OpenClawChatTab: View {
                 aiAttachmentStrip
             }
 
-            ZStack(alignment: .topLeading) {
-                if expanded {
-                    RoundedRectangle(cornerRadius: NPRadius.sheet, style: .continuous)
-                        .fill(NPColors.surface)
-                        .overlay {
-                            RoundedRectangle(cornerRadius: NPRadius.sheet, style: .continuous)
-                                .stroke(NPColors.border, lineWidth: 1)
-                        }
-                        .modifier(NPCardShadow())
+            GeometryReader { geometry in
+                let textHorizontalPadding = expanded ? NPSpacing.small : 46
+                let textViewWidth = max(0, geometry.size.width - textHorizontalPadding * 2)
+
+                ZStack(alignment: .topLeading) {
+                    if expanded {
+                        RoundedRectangle(cornerRadius: NPRadius.sheet, style: .continuous)
+                            .fill(NPColors.surface)
+                            .overlay {
+                                RoundedRectangle(cornerRadius: NPRadius.sheet, style: .continuous)
+                                    .stroke(NPColors.border, lineWidth: 1)
+                            }
+                            .modifier(NPCardShadow())
+                    }
+
+                    Text("Ask AI Co-pilot")
+                        .foregroundStyle(NPColors.textSecondary)
+                        .padding(.leading, expanded ? NPSpacing.outer : 54)
+                        .padding(.trailing, expanded ? NPSpacing.outer : 54)
+                        .padding(.top, expanded ? 19 : 11)
+                        .opacity(composerState.text.isEmpty ? 1 : 0)
+                        .allowsHitTesting(false)
+
+                    AdaptiveComposerTextView(
+                        text: $composerState.text,
+                        isFocused: Binding(
+                            get: { isComposerFocused },
+                            set: { isComposerFocused = $0 }
+                        ),
+                        height: $composerState.measuredTextHeight,
+                        availableWidth: textViewWidth,
+                        maximumLines: expanded ? 7 : 1
+                    )
+                    .frame(height: expanded ? composerState.measuredTextHeight : 44)
+                    .padding(.horizontal, textHorizontalPadding)
+                    .padding(.top, expanded ? NPSpacing.small : 0)
+                    .padding(.bottom, expanded ? 46 : 0)
+                    .accessibilityLabel("Ask AI Co-pilot")
+                    .accessibilityIdentifier("openClawComposerTextView")
+                    .disabled(chatState.isSending)
+
+                    HStack(spacing: 10) {
+                        composerAttachmentButton
+                        Spacer(minLength: 0)
+                        composerSendButton
+                    }
+                    .padding(.horizontal, expanded ? NPSpacing.small : 0)
+                    .frame(height: 38)
+                    .padding(.bottom, expanded ? NPSpacing.small : 0)
+                    .frame(maxHeight: .infinity, alignment: expanded ? .bottom : .center)
                 }
-
-                Text("Ask AI Co-pilot")
-                    .foregroundStyle(NPColors.textSecondary)
-                    .padding(.leading, expanded ? NPSpacing.outer : 54)
-                    .padding(.trailing, expanded ? NPSpacing.outer : 54)
-                    .padding(.top, expanded ? 19 : 11)
-                    .opacity(composerState.text.isEmpty ? 1 : 0)
-                    .allowsHitTesting(false)
-
-                AdaptiveComposerTextView(
-                    text: $composerState.text,
-                    isFocused: Binding(
-                        get: { isComposerFocused },
-                        set: { isComposerFocused = $0 }
-                    ),
-                    height: $composerState.measuredTextHeight,
-                    maximumLines: expanded ? 7 : 1
-                )
-                .frame(height: expanded ? composerState.measuredTextHeight : 44)
-                .padding(.leading, expanded ? NPSpacing.small : 46)
-                .padding(.trailing, expanded ? NPSpacing.small : 46)
-                .padding(.top, expanded ? NPSpacing.small : 0)
-                .padding(.bottom, expanded ? 46 : 0)
-                .accessibilityLabel("Ask AI Co-pilot")
-                .accessibilityIdentifier("openClawComposerTextView")
-                .disabled(chatState.isSending)
-
-                HStack(spacing: 10) {
-                    composerAttachmentButton
-                    Spacer(minLength: 0)
-                    composerSendButton
-                }
-                .padding(.horizontal, expanded ? NPSpacing.small : 0)
-                .frame(height: 38)
-                .padding(.bottom, expanded ? NPSpacing.small : 0)
-                .frame(maxHeight: .infinity, alignment: expanded ? .bottom : .center)
             }
             .frame(height: composerHeight)
         }
@@ -2979,9 +2983,11 @@ private struct ChatScrollPanObserver: UIViewRepresentable {
 // MARK: - Adaptive Composer Text View
 
 private struct AdaptiveComposerTextView: UIViewRepresentable {
+    @Environment(\.sizeCategory) private var sizeCategory
     @Binding var text: String
     @Binding var isFocused: Bool
     @Binding var height: CGFloat
+    let availableWidth: CGFloat
     let maximumLines: Int
 
     func makeUIView(context: Context) -> UITextView {
@@ -2993,8 +2999,13 @@ private struct AdaptiveComposerTextView: UIViewRepresentable {
         textView.textColor = .label
         textView.textContainerInset = UIEdgeInsets(top: 9, left: 8, bottom: 9, right: 8)
         textView.textContainer.lineFragmentPadding = 0
+        textView.textContainer.widthTracksTextView = true
+        textView.textContainer.heightTracksTextView = false
+        textView.textContainer.lineBreakMode = .byWordWrapping
         textView.showsVerticalScrollIndicator = true
+        textView.showsHorizontalScrollIndicator = false
         textView.alwaysBounceVertical = false
+        textView.alwaysBounceHorizontal = false
         textView.isScrollEnabled = false
         textView.accessibilityLabel = localized("Ask AI Co-pilot")
         textView.accessibilityIdentifier = "openClawComposerTextView"
@@ -3025,6 +3036,7 @@ private struct AdaptiveComposerTextView: UIViewRepresentable {
         private var lastMeasuredText: String?
         private var lastMeasuredWidth: CGFloat = 0
         private var lastMaximumLines = 0
+        private var lastSizeCategory: ContentSizeCategory?
 
         init(parent: AdaptiveComposerTextView) {
             self.parent = parent
@@ -3046,11 +3058,15 @@ private struct AdaptiveComposerTextView: UIViewRepresentable {
         func textViewDidEndEditing(_ textView: UITextView) {}
 
         func updateHeight(for textView: UITextView, force: Bool = false) {
-            let width = max(textView.bounds.width, 1)
+            let width = parent.availableWidth
+            guard width.isFinite, width >= ComposerTextLayout.minimumMeasurementWidth else {
+                return
+            }
             guard force ||
                     lastMeasuredText != textView.text ||
                     abs(lastMeasuredWidth - width) > 0.5 ||
-                    lastMaximumLines != parent.maximumLines else {
+                    lastMaximumLines != parent.maximumLines ||
+                    lastSizeCategory != parent.sizeCategory else {
                 return
             }
             let trace = NPPerformanceTrace.begin("ComposerMeasure")
@@ -3058,26 +3074,75 @@ private struct AdaptiveComposerTextView: UIViewRepresentable {
             lastMeasuredText = textView.text
             lastMeasuredWidth = width
             lastMaximumLines = parent.maximumLines
+            lastSizeCategory = parent.sizeCategory
 
-            let lineHeight = textView.font?.lineHeight ?? UIFont.preferredFont(forTextStyle: .body).lineHeight
-            let verticalInsets = textView.textContainerInset.top + textView.textContainerInset.bottom
-            let minimumHeight = max(44, ceil(lineHeight + verticalInsets))
-            let maximumHeight = max(
-                minimumHeight,
-                ceil(lineHeight * CGFloat(max(1, parent.maximumLines)) + verticalInsets)
-            )
-            let fittingHeight = textView.sizeThatFits(
-                CGSize(width: width, height: CGFloat.greatestFiniteMagnitude)
-            ).height
-            let targetHeight = min(max(fittingHeight, minimumHeight), maximumHeight)
-            textView.isScrollEnabled = fittingHeight > maximumHeight
+            guard let measurement = ComposerTextLayout.measure(
+                textView: textView,
+                availableWidth: width,
+                maximumLines: parent.maximumLines
+            ) else {
+                return
+            }
+            textView.isScrollEnabled = measurement.requiresScrolling
 
-            if abs(parent.height - targetHeight) > 0.5 {
+            if measurement.requiresScrolling {
+                textView.scrollRangeToVisible(textView.selectedRange)
+            } else if textView.contentOffset.y != 0 {
+                textView.setContentOffset(.zero, animated: false)
+            }
+
+            if abs(parent.height - measurement.height) > 0.5 {
+                let measuredText = textView.text
+                let measuredWidth = width
+                let measuredMaximumLines = parent.maximumLines
+                let measuredHeight = measurement.height
                 DispatchQueue.main.async { [weak self] in
-                    self?.parent.height = targetHeight
+                    guard let self,
+                          self.lastMeasuredText == measuredText,
+                          abs(self.lastMeasuredWidth - measuredWidth) <= 0.5,
+                          self.lastMaximumLines == measuredMaximumLines else {
+                        return
+                    }
+                    self.parent.height = measuredHeight
                 }
             }
         }
+    }
+}
+
+struct ComposerTextMeasurement: Equatable {
+    let height: CGFloat
+    let requiresScrolling: Bool
+}
+
+enum ComposerTextLayout {
+    static let minimumMeasurementWidth: CGFloat = 44
+
+    static func measure(
+        textView: UITextView,
+        availableWidth: CGFloat,
+        maximumLines: Int
+    ) -> ComposerTextMeasurement? {
+        guard availableWidth.isFinite, availableWidth >= minimumMeasurementWidth else {
+            return nil
+        }
+
+        let lineHeight = textView.font?.lineHeight
+            ?? UIFont.preferredFont(forTextStyle: .body).lineHeight
+        let verticalInsets = textView.textContainerInset.top + textView.textContainerInset.bottom
+        let minimumHeight = max(44, ceil(lineHeight + verticalInsets))
+        let maximumHeight = max(
+            minimumHeight,
+            ceil(lineHeight * CGFloat(max(1, maximumLines)) + verticalInsets)
+        )
+        let fittingHeight = textView.sizeThatFits(
+            CGSize(width: availableWidth, height: CGFloat.greatestFiniteMagnitude)
+        ).height
+
+        return ComposerTextMeasurement(
+            height: min(max(fittingHeight, minimumHeight), maximumHeight),
+            requiresScrolling: fittingHeight > maximumHeight + 0.5
+        )
     }
 }
 

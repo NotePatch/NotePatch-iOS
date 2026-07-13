@@ -3,9 +3,12 @@ import Foundation
 final class SettingsStore {
     private static let legacyLearningBaseURL = "http://192.168.100.123:8001/api/v1"
     private static let legacyTUSBaseURL = "http://192.168.100.123:1080/files/"
+    private static let previousDefaultTUSBaseURL = "https://5mbps.me:8443/notepatch/1/files/"
+    private static let apiBaseURLContractVersion = 2
 
     private enum Keys {
         static let learningBaseURL = "learning_base_url"
+        static let apiBaseURLContractVersion = "api_base_url_contract_version"
         static let tusBaseURL = "tusd_base_url"
         static let expiresAt = "learning_expires_at"
         static let userId = "learning_user_id"
@@ -29,16 +32,19 @@ final class SettingsStore {
 
     func loadBaseURL() -> String {
         let stored = defaults.string(forKey: Keys.learningBaseURL)
-        if stored == Self.legacyLearningBaseURL {
-            saveBaseURL(defaultLearningBackendBaseURL)
-            return defaultLearningBackendBaseURL
+        if defaults.integer(forKey: Keys.apiBaseURLContractVersion) < Self.apiBaseURLContractVersion {
+            let migrated = stored == Self.legacyLearningBaseURL
+                ? defaultLearningBackendBaseURL
+                : migrateLegacyLearningBackendBaseURL(stored ?? defaultLearningBackendBaseURL)
+            saveBaseURL(migrated)
+            return migrated
         }
         return normalizeLearningBackendBaseURL(stored ?? defaultLearningBackendBaseURL)
     }
 
     func loadTUSBaseURL() -> String {
         let stored = defaults.string(forKey: Keys.tusBaseURL)
-        if stored == Self.legacyTUSBaseURL {
+        if stored == Self.legacyTUSBaseURL || stored == Self.previousDefaultTUSBaseURL {
             saveTUSBaseURL(defaultTUSDBaseURL)
             return defaultTUSDBaseURL
         }
@@ -47,6 +53,7 @@ final class SettingsStore {
 
     func saveBaseURL(_ baseURL: String) {
         defaults.set(normalizeLearningBackendBaseURL(baseURL), forKey: Keys.learningBaseURL)
+        defaults.set(Self.apiBaseURLContractVersion, forKey: Keys.apiBaseURLContractVersion)
     }
 
     func saveTUSBaseURL(_ baseURL: String) {

@@ -3,21 +3,67 @@ import Foundation
 import QuickLookThumbnailing
 import SwiftUI
 import Testing
+import UIKit
 @testable import NotePatch
 
 @Suite(.serialized)
 struct NotePatchTests {
+    @MainActor
+    private static func makeComposerTextView() -> UITextView {
+        let textView = UITextView()
+        textView.font = .preferredFont(forTextStyle: .body)
+        textView.textContainerInset = UIEdgeInsets(top: 9, left: 8, bottom: 9, right: 8)
+        textView.textContainer.lineFragmentPadding = 0
+        textView.textContainer.widthTracksTextView = true
+        textView.textContainer.heightTracksTextView = false
+        textView.textContainer.lineBreakMode = .byWordWrapping
+        return textView
+    }
+
     @Test func normalizeBaseURLs_defaultAndAddScheme() {
         #expect(normalizeLearningBackendBaseURL("") == defaultLearningBackendBaseURL)
-        #expect(normalizeLearningBackendBaseURL("192.168.100.123:8001/") == "http://192.168.100.123:8001/api/v1")
+        #expect(normalizeLearningBackendBaseURL("192.168.100.123:8001/") == "http://192.168.100.123:8001")
         #expect(normalizeLearningBackendBaseURL("https://5mbps.me:8443/notepatch/1/") == defaultLearningBackendBaseURL)
         #expect(normalizeLearningBackendBaseURL("https://example.test/api/v1/") == "https://example.test/api/v1")
         #expect(normalizeLearningBackendBaseURL("https://example.test/api/") == "https://example.test/api")
 
         #expect(normalizeTUSBaseURL("") == defaultTUSDBaseURL)
         #expect(normalizeTUSBaseURL("192.168.100.123:1080/files") == "http://192.168.100.123:1080/files/")
-        #expect(normalizeTUSBaseURL("https://5mbps.me:8443/notepatch/1/") == defaultTUSDBaseURL)
+        #expect(normalizeTUSBaseURL("https://5mbps.me:8443/notepatch/2/") == defaultTUSDBaseURL)
         #expect(normalizeTUSBaseURL("https://example.test/files/") == "https://example.test/files/")
+    }
+
+    @Test @MainActor func backendClient_appendsHealthAndAPIPrefixToServiceBaseURL() async throws {
+        var requestedURLs: [String] = []
+        let session = Self.mockSession { request in
+            requestedURLs.append(request.url?.absoluteString ?? "")
+            switch request.url?.path {
+            case "/notepatch/1/health":
+                return Self.response(request, status: 200, body: #"{"status":"ok"}"#)
+            case "/notepatch/1/api/v1/auth/me":
+                return Self.response(
+                    request,
+                    status: 200,
+                    body: #"{"id":"u-1","email":"user@example.test","is_active":true,"created_at":""}"#
+                )
+            default:
+                return Self.response(request, status: 500, body: #"{"detail":"unexpected path"}"#)
+            }
+        }
+        let client = LearningBackendClient(
+            baseURL: "https://example.test/notepatch/1/",
+            accessToken: "access",
+            refreshToken: "refresh",
+            session: session
+        )
+
+        _ = try await client.healthCheck()
+        _ = try await client.me()
+
+        #expect(requestedURLs == [
+            "https://example.test/notepatch/1/health",
+            "https://example.test/notepatch/1/api/v1/auth/me"
+        ])
     }
 
     @Test func settingsStore_migratesLegacyDefaultServerURLs() throws {
@@ -36,6 +82,17 @@ struct NotePatchTests {
         #expect(store.loadTUSBaseURL() == defaultTUSDBaseURL)
         #expect(defaults.string(forKey: "learning_base_url") == defaultLearningBackendBaseURL)
         #expect(defaults.string(forKey: "tusd_base_url") == defaultTUSDBaseURL)
+
+        defaults.set("https://5mbps.me:8443/notepatch/1/files/", forKey: "tusd_base_url")
+        #expect(store.loadTUSBaseURL() == defaultTUSDBaseURL)
+        #expect(defaults.string(forKey: "tusd_base_url") == defaultTUSDBaseURL)
+
+        defaults.set("https://api.example.test/notepatch/api/v1", forKey: "learning_base_url")
+        defaults.removeObject(forKey: "api_base_url_contract_version")
+        #expect(store.loadBaseURL() == "https://api.example.test/notepatch")
+
+        store.saveBaseURL("https://api.example.test/notepatch/api/v1")
+        #expect(store.loadBaseURL() == "https://api.example.test/notepatch/api/v1")
     }
 
     @Test func appLanguage_resolvesSupportedSystemLanguagesAndPersistsChoice() throws {
@@ -67,7 +124,7 @@ struct NotePatchTests {
         #expect(localization.locale.identifier.lowercased().contains("zh-hans"))
         #expect(localization.string("Notes") == "笔记")
         #expect(store.loadAppLanguage() == .simplifiedChinese)
-        #expect(store.loadBaseURL() == "https://api.example.test/api/v1")
+        #expect(store.loadBaseURL() == "https://api.example.test")
     }
 
     @Test @MainActor func semanticLocalizationKeysExistInEverySupportedLanguage() throws {
@@ -90,6 +147,43 @@ struct NotePatchTests {
         localization.select(.english)
         #expect(status.resolved(using: localization) == "Task 42: 75%")
         #expect(AppDisplayText.raw("backend detail").resolved(using: localization) == "backend detail")
+    }
+
+    @Test @MainActor func composerTextLayout_usesProvidedWidthAndWrapsText() throws {
+        let textView = Self.makeComposerTextView()
+        textView.text = String(repeating: "automatic wrapping ", count: 3)
+
+        let wide = try #require(
+            ComposerTextLayout.measure(textView: textView, availableWidth: 320, maximumLines: 7)
+        )
+        let narrow = try #require(
+            ComposerTextLayout.measure(textView: textView, availableWidth: 140, maximumLines: 7)
+        )
+
+        #expect(narrow.height > wide.height)
+        #expect(!wide.requiresScrolling)
+        #expect(!narrow.requiresScrolling)
+        #expect(ComposerTextLayout.measure(textView: textView, availableWidth: 1, maximumLines: 7) == nil)
+    }
+
+    @Test @MainActor func composerTextLayout_preservesNewlinesAndCapsAtSevenLines() throws {
+        let textView = Self.makeComposerTextView()
+        textView.text = "first line\nsecond line"
+        let twoLines = try #require(
+            ComposerTextLayout.measure(textView: textView, availableWidth: 300, maximumLines: 7)
+        )
+        #expect(twoLines.height > 44)
+        #expect(!twoLines.requiresScrolling)
+
+        textView.text = (1...9).map { "line \($0)" }.joined(separator: "\n")
+        let overflow = try #require(
+            ComposerTextLayout.measure(textView: textView, availableWidth: 300, maximumLines: 7)
+        )
+        let lineHeight = try #require(textView.font?.lineHeight)
+        let insets = textView.textContainerInset.top + textView.textContainerInset.bottom
+
+        #expect(overflow.height == ceil(lineHeight * 7 + insets))
+        #expect(overflow.requiresScrolling)
     }
 
     @Test @MainActor func workbenchTabsHaveExpectedOrderAndDefault() throws {
@@ -492,10 +586,21 @@ struct NotePatchTests {
     @Test func tusHelpers_resolveURLAndUploadId() throws {
         let relative = try TusUploader.resolveUploadURL(endpoint: "http://192.168.100.123:1080/files/", location: "abc")
         let absolutePath = try TusUploader.resolveUploadURL(endpoint: "http://192.168.100.123:1080/files/", location: "/files/abc")
+        let proxiedPath = try TusUploader.resolveUploadURL(
+            endpoint: "https://5mbps.me:8443/notepatch/2/files/",
+            location: "/files/abc"
+        )
         let otherHost = try TusUploader.resolveUploadURL(endpoint: "http://192.168.100.123:1080/files/", location: "http://other.test/upload/xyz")
         #expect(relative == "http://192.168.100.123:1080/files/abc")
         #expect(absolutePath == "http://192.168.100.123:1080/files/abc")
+        #expect(proxiedPath == "https://5mbps.me:8443/notepatch/2/files/abc")
         #expect(otherHost == "http://other.test/upload/xyz")
+        #expect(
+            TusUploader.preferredEndpoint(
+                configuredEndpoint: "https://5mbps.me:8443/notepatch/2/files/",
+                serverEndpoint: "http://192.168.100.123:1080/files/"
+            ) == defaultTUSDBaseURL
+        )
         #expect(TusUploader.extractTusUploadId("http://192.168.100.123:1080/files/abc") == "abc")
     }
 
@@ -1797,7 +1902,7 @@ struct NotePatchTests {
         model.saveServerURLs()
 
         let restored = NotePatchViewModel(settings: SettingsStore(defaults: defaults, keychain: KeychainStore(service: suiteName)))
-        #expect(restored.apiBaseURLText == "https://api.example.test/api/v1")
+        #expect(restored.apiBaseURLText == "https://api.example.test")
         #expect(restored.tusBaseURLText == "https://tus.example.test/files/")
     }
 

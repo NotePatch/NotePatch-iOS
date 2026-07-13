@@ -787,7 +787,10 @@ final class NotePatchViewModel: ObservableObject {
             learningMetadata: item.learningMetadata
         )
         statusMessage = "Uploading via tus..."
-        let endpoint = uploadSession.tusEndpoint.isEmpty ? activeSession.tusBaseURL : uploadSession.tusEndpoint
+        let endpoint = TusUploader.preferredEndpoint(
+            configuredEndpoint: activeSession.tusBaseURL,
+            serverEndpoint: uploadSession.tusEndpoint
+        )
         let tusResult = try await TusUploader(session: tusSession).upload(
             fileURL: prepared.url,
             endpoint: endpoint,

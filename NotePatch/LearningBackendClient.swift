@@ -6,6 +6,11 @@ private struct RefreshFlightKey: Hashable {
     let refreshToken: String
 }
 
+private enum RelativeRequestScope {
+    case service
+    case api
+}
+
 @MainActor
 private final class RefreshSingleFlight {
     static let shared = RefreshSingleFlight()
@@ -49,7 +54,9 @@ final class LearningBackendClient {
     }
 
     func healthCheck() async throws -> String {
-        let (data, response) = try await data(for: request(method: "GET", pathOrURL: "/health"))
+        let (data, response) = try await data(
+            for: request(method: "GET", pathOrURL: "/health", scope: .service)
+        )
         try validate(response: response, data: data)
         return String(data: data, encoding: .utf8) ?? ""
     }
@@ -596,7 +603,11 @@ final class LearningBackendClient {
         return "Bearer \(accessToken)"
     }
 
-    private func request(method: String, pathOrURL: String) throws -> URLRequest {
+    private func request(
+        method: String,
+        pathOrURL: String,
+        scope: RelativeRequestScope = .api
+    ) throws -> URLRequest {
         let url: URL
         if pathOrURL.hasPrefix("http://") || pathOrURL.hasPrefix("https://") {
             guard let absoluteURL = URL(string: pathOrURL) else {
@@ -605,7 +616,12 @@ final class LearningBackendClient {
             url = absoluteURL
         } else {
             let path = pathOrURL.hasPrefix("/") ? pathOrURL : "/\(pathOrURL)"
-            guard let absoluteURL = URL(string: "\(normalizedBaseURL)\(path)") else {
+            let prefix: String
+            switch scope {
+            case .service: prefix = ""
+            case .api: prefix = "/api/v1"
+            }
+            guard let absoluteURL = URL(string: "\(normalizedBaseURL)\(prefix)\(path)") else {
                 throw LearningBackendError("Server address format is invalid. Please check the API or TUS address.")
             }
             url = absoluteURL

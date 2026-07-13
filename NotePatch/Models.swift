@@ -1,12 +1,12 @@
 import Foundation
 
 let defaultServiceRootURL = "https://5mbps.me:8443/notepatch/1"
-let defaultLearningBackendBaseURL = "\(defaultServiceRootURL)/api/v1"
-let defaultTUSDBaseURL = "\(defaultServiceRootURL)/files/"
+let defaultTUSDServiceRootURL = "https://5mbps.me:8443/notepatch/2"
+let defaultLearningBackendBaseURL = defaultServiceRootURL
+let defaultTUSDBaseURL = "\(defaultTUSDServiceRootURL)/files/"
 
 func normalizeLearningBackendBaseURL(_ rawBaseURL: String) -> String {
     let trimmed = rawBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)
-        .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
     let withScheme: String
     if trimmed.isEmpty {
         withScheme = defaultLearningBackendBaseURL
@@ -20,10 +20,19 @@ func normalizeLearningBackendBaseURL(_ rawBaseURL: String) -> String {
         return normalized
     }
     let path = components.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-    let defaultRootPath = URLComponents(string: defaultServiceRootURL)?.path
-        .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-    if path.isEmpty || path == defaultRootPath {
-        components.path = path.isEmpty ? "/api/v1" : "/\(path)/api/v1"
+    components.path = path.isEmpty ? "" : "/\(path)"
+    components.query = nil
+    components.fragment = nil
+    return components.string?.trimmingCharacters(in: CharacterSet(charactersIn: "/")) ?? normalized
+}
+
+func migrateLegacyLearningBackendBaseURL(_ rawBaseURL: String) -> String {
+    let normalized = normalizeLearningBackendBaseURL(rawBaseURL)
+    guard var components = URLComponents(string: normalized) else { return normalized }
+    var segments = components.path.split(separator: "/").map(String.init)
+    if segments.count >= 2, Array(segments.suffix(2)) == ["api", "v1"] {
+        segments.removeLast(2)
+        components.path = segments.isEmpty ? "" : "/\(segments.joined(separator: "/"))"
     }
     return components.string?.trimmingCharacters(in: CharacterSet(charactersIn: "/")) ?? normalized
 }
@@ -43,7 +52,7 @@ func normalizeTUSBaseURL(_ rawBaseURL: String) -> String {
         return "\(normalized)/"
     }
     let path = components.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-    let defaultRootPath = URLComponents(string: defaultServiceRootURL)?.path
+    let defaultRootPath = URLComponents(string: defaultTUSDServiceRootURL)?.path
         .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
     if path.isEmpty || path == defaultRootPath {
         components.path = path.isEmpty ? "/files" : "/\(path)/files"
