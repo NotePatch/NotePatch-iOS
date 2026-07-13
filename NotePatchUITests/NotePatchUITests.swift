@@ -67,7 +67,9 @@ final class NotePatchUITests: XCTestCase {
         let notesSections = app.segmentedControls["notesSectionPicker"]
         XCTAssertTrue(notesSections.waitForExistence(timeout: 3))
         notesSections.buttons["复习"].tap()
-        XCTAssertTrue(app.segmentedControls["reviewSectionPicker"].waitForExistence(timeout: 3))
+        let reviewSections = app.segmentedControls["reviewSectionPicker"]
+        XCTAssertTrue(reviewSections.waitForExistence(timeout: 3))
+        XCTAssertTrue(reviewSections.buttons["闪卡"].exists)
         app.tabBars.buttons["我的"].tap()
         XCTAssertTrue(app.descendants(matching: .any)["profileTab"].waitForExistence(timeout: 3))
         XCTAssertTrue(app.staticTexts["My Workspace"].exists)
@@ -90,9 +92,30 @@ final class NotePatchUITests: XCTestCase {
         XCTAssertTrue(app.buttons["editStudyNoteButton"].exists)
         app.buttons["editStudyNoteButton"].tap()
         XCTAssertTrue(app.textFields["studyNoteEditorTitle"].waitForExistence(timeout: 3))
-        XCTAssertTrue(app.textViews["studyNoteEditorMarkdown"].exists)
+        XCTAssertTrue(app.descendants(matching: .any)["studyNoteEditorHTML"].exists)
         XCTAssertTrue(app.textFields["studyNoteEditorSummary"].exists)
         app.buttons["取消"].tap()
+    }
+
+    @MainActor
+    func testOfflineFlashcardCanSwitchAndFlip() throws {
+        let app = makeApp(["-NotePatchUITestWorkbench"])
+        app.launch()
+
+        XCTAssertTrue(app.otherElements["workbenchTabs"].waitForExistence(timeout: 5))
+        app.tabBars.buttons["笔记"].tap()
+        app.segmentedControls["notesSectionPicker"].buttons["复习"].tap()
+        let reviewSections = app.segmentedControls["reviewSectionPicker"]
+        XCTAssertTrue(reviewSections.waitForExistence(timeout: 3))
+        reviewSections.buttons["闪卡"].tap()
+
+        let card = app.buttons["flashcardCard"]
+        XCTAssertTrue(card.waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["What does a ratio compare?"].exists)
+        card.tap()
+        XCTAssertTrue(app.staticTexts["The relationship between two quantities."].waitForExistence(timeout: 2))
+        app.buttons["下一张"].tap()
+        XCTAssertTrue(app.staticTexts["How do you solve a proportion?"].waitForExistence(timeout: 2))
     }
 
     @MainActor

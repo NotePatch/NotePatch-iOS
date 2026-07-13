@@ -300,7 +300,10 @@ private struct NotesTab: View {
                 if model.selectedNotesSection == .notes {
                     notesOverview
                 } else {
-                    LearningTab(model: model)
+                    LearningTab(model: model) { item in
+                        model.openStudyNote(item)
+                        readerItem = item
+                    }
                 }
             }
         }
@@ -309,7 +312,7 @@ private struct NotesTab: View {
                 StudyNoteReader(model: model)
                     .toolbar {
                         ToolbarItem(placement: .cancellationAction) {
-                            Button("Done") {
+                            Button(localized("common.done")) {
                                 readerItem = nil
                             }
                         }
@@ -326,14 +329,14 @@ private struct NotesTab: View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: NPSpacing.item) {
                 if model.isNotesLoading && model.studyNoteGroups.isEmpty {
-                    ProgressView("Loading study notes...")
+                    ProgressView(localized("notes.loading"))
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 36)
                 } else if model.studyNoteGroups.isEmpty {
                     NPEmptyState(
                         systemImage: "note.text",
-                        title: "No study notes yet",
-                        message: "Study notes will appear here after uploading and processing courseware, notes, or exam papers."
+                        title: localized("notes.empty.title"),
+                        message: localized("notes.empty.message")
                     )
                     .padding(.top, 56)
                 } else {
@@ -341,18 +344,27 @@ private struct NotesTab: View {
                         VStack(alignment: .leading, spacing: NPSpacing.small) {
                             Text(group.learningUnit.title)
                                 .npCardTitle()
+                            HStack(spacing: 6) {
+                                Image(systemName: noteStateIcon(group.generationState))
+                                Text(noteStateTitle(group.generationState))
+                            }
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(group.generationState == .generating ? NPColors.brand : NPColors.textSecondary)
                             let details = [group.learningUnit.subject, group.learningUnit.gradeLevel, group.learningUnit.topic]
                                 .compactMap { $0?.isEmpty == false ? $0 : nil }
                             if !details.isEmpty {
                                 Text(details.joined(separator: " · "))
                                     .npCaption()
                             }
+                            if group.notes.isEmpty {
+                                Text(noteStateMessage(group.generationState))
+                                    .npCaption()
+                                    .padding(.vertical, 8)
+                            }
                             ForEach(group.notes) { item in
                                 Button {
                                     model.openStudyNote(item)
-                                    if model.isOfflineTestMode || item.note.preferredMarkdownDownloadURL != nil {
-                                        readerItem = item
-                                    }
+                                    readerItem = item
                                 } label: {
                                     HStack(spacing: 12) {
                                         Image(systemName: "note.text")
@@ -393,6 +405,23 @@ private struct NotesTab: View {
             .padding(.vertical, NPSpacing.item)
         }
     }
+
+    private func noteStateIcon(_ state: StudyNoteGenerationState) -> String {
+        switch state {
+        case .noKnowledge: return "tray"
+        case .generating: return "hourglass"
+        case .ready: return "checkmark.circle"
+        case .unavailable: return "exclamationmark.circle"
+        }
+    }
+
+    private func noteStateTitle(_ state: StudyNoteGenerationState) -> String {
+        localized("note.generation.\(state.rawValue).title")
+    }
+
+    private func noteStateMessage(_ state: StudyNoteGenerationState) -> String {
+        localized("note.generation.\(state.rawValue).message")
+    }
 }
 
 // MARK: - Study Note Reader
@@ -403,54 +432,56 @@ private struct StudyNoteReader: View {
     var body: some View {
         Group {
             if let item = model.selectedStudyNoteItem {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: NPSpacing.item) {
-                        VStack(alignment: .leading, spacing: 5) {
-                            Text(item.note.title.isEmpty ? localized("Digital Notes") : item.note.title)
-                                .font(.title2.weight(.bold))
-                                .foregroundStyle(NPColors.textPrimary)
-                            Text("\(item.learningUnit.title) · \(localizedFormat("note.version", String(item.note.versionNo)))")
-                                .font(.subheadline)
-                                .foregroundStyle(NPColors.textSecondary)
-                            Text(item.note.revisionOriginLabel)
+                VStack(alignment: .leading, spacing: 0) {
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text(item.note.title.isEmpty ? localized("Digital Notes") : item.note.title)
+                            .font(.title2.weight(.bold))
+                            .foregroundStyle(NPColors.textPrimary)
+                        Text("\(item.learningUnit.title) · \(localizedFormat("note.version", String(item.note.versionNo)))")
+                            .font(.subheadline)
+                            .foregroundStyle(NPColors.textSecondary)
+                        Text(item.note.revisionOriginLabel)
+                            .npCaption()
+                        if let summary = item.note.editSummary?.trimmingCharacters(in: .whitespacesAndNewlines), !summary.isEmpty {
+                            Text(summary)
                                 .npCaption()
-                            if let summary = item.note.editSummary?.trimmingCharacters(in: .whitespacesAndNewlines), !summary.isEmpty {
-                                Text(summary)
-                                    .npCaption()
-                            }
-                        }
-
-                        if model.isStudyNoteLoading {
-                            ProgressView("Loading note content...")
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 36)
-                        } else if let markdown = model.studyNoteMarkdown {
-                            LightweightMarkdownText(markdown: markdown, color: NPColors.textPrimary)
-                        } else if let error = model.studyNoteReaderError {
-                            VStack(spacing: 14) {
-                                NPEmptyState(
-                                    systemImage: "exclamationmark.triangle",
-                                    title: "Can't open note",
-                                    message: error
-                                )
-                                Button("Retry") {
-                                    model.openStudyNote(item)
-                                }
-                                .buttonStyle(NPSecondaryButtonStyle())
-                            }
-                            .frame(maxWidth: .infinity)
-                            .padding(.top, 48)
                         }
                     }
-                    .padding(NPSpacing.outer)
+                    .padding(.horizontal, NPSpacing.outer)
+                    .padding(.top, NPSpacing.item)
+                    .padding(.bottom, NPSpacing.small)
+
+                    Divider().overlay(NPColors.divider)
+
+                    if model.isStudyNoteLoading {
+                        ProgressView(localized("note.reader.loading"))
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    } else if let html = model.studyNoteHTML {
+                        SafeHTMLNoteView(html: html)
+                            .accessibilityIdentifier("studyNoteHTMLReader")
+                    } else if let error = model.studyNoteReaderError {
+                        VStack(spacing: 14) {
+                            NPEmptyState(
+                                systemImage: "exclamationmark.triangle",
+                                title: localized("note.reader.open_failed"),
+                                message: error
+                            )
+                            Button(localized("common.retry")) {
+                                model.openStudyNote(item)
+                            }
+                            .buttonStyle(NPSecondaryButtonStyle())
+                        }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .padding(NPSpacing.outer)
+                    }
                 }
                 .accessibilityIdentifier("studyNoteReader")
-                .navigationTitle("Read Note")
+                .navigationTitle(localized("note.reader.title"))
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .navigationBarTrailing) {
                         if model.canEditSelectedStudyNote {
-                            Button("Edit") {
+                            Button(localized("common.edit")) {
                                 model.beginStudyNoteEditing()
                             }
                             .disabled(model.isStudyNoteSaving)
@@ -461,8 +492,8 @@ private struct StudyNoteReader: View {
             } else {
                 NPEmptyState(
                     systemImage: "note.text",
-                    title: "Note closed",
-                    message: "Go back to the notes list and select again."
+                    title: localized("note.reader.closed.title"),
+                    message: localized("note.reader.closed.message")
                 )
                 .padding(.horizontal, NPSpacing.outer)
                 .accessibilityIdentifier("studyNoteReader")
@@ -481,41 +512,53 @@ private struct StudyNoteReader: View {
 
 private struct StudyNoteEditor: View {
     @ObservedObject var model: NotePatchViewModel
+    @State private var editorCommand: HTMLNoteCommand?
+    @State private var editorCommandToken = 0
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
-                LabeledField(title: "Title") {
-                    TextField("Note title", text: $model.studyNoteDraftTitle)
+        VStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 12) {
+                LabeledField(title: localized("note.editor.title_field")) {
+                    TextField(localized("note.editor.title_placeholder"), text: $model.studyNoteDraftTitle)
                         .accessibilityIdentifier("studyNoteEditorTitle")
                 }
 
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Markdown body")
-                        .font(.subheadline.weight(.medium))
-                        .foregroundStyle(NPColors.textPrimary)
-                    TextEditor(text: $model.studyNoteDraftMarkdown)
-                        .font(.body)
-                        .frame(minHeight: 300)
-                        .padding(8)
-                        .background(NPColors.divider.opacity(0.6))
-                        .clipShape(RoundedRectangle(cornerRadius: NPRadius.input, style: .continuous))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: NPRadius.input, style: .continuous)
-                                .stroke(NPColors.border, lineWidth: 1)
-                        )
-                        .accessibilityIdentifier("studyNoteEditorMarkdown")
-                    Text("\(model.studyNoteDraftMarkdown.count) / 2,000,000")
-                        .npCaption()
-                        .frame(maxWidth: .infinity, alignment: .trailing)
-                }
+                richTextToolbar
+            }
+            .padding(.horizontal, NPSpacing.outer)
+            .padding(.top, NPSpacing.small)
 
-                LabeledField(title: "Revision note") {
-                    TextField("e.g. Added example problem", text: $model.studyNoteDraftSummary)
+            if model.isStudyNoteEditorLoading {
+                ProgressView(localized("note.editor.loading"))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                RichHTMLNoteEditor(
+                    html: $model.studyNoteDraftHTML,
+                    command: editorCommand,
+                    commandToken: editorCommandToken
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(NPColors.divider.opacity(0.35))
+                .clipShape(RoundedRectangle(cornerRadius: NPRadius.input, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: NPRadius.input, style: .continuous)
+                        .stroke(NPColors.border, lineWidth: 1)
+                )
+                .padding(.horizontal, NPSpacing.outer)
+                .padding(.vertical, NPSpacing.small)
+                .accessibilityIdentifier("studyNoteEditorHTML")
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                LabeledField(title: localized("note.editor.summary_field")) {
+                    TextField(localized("note.editor.summary_placeholder"), text: $model.studyNoteDraftSummary)
                         .accessibilityIdentifier("studyNoteEditorSummary")
                 }
-                Text("Revision note can be left blank.")
+                Text(localized("note.editor.summary_optional"))
                     .npCaption()
+                Text("\(model.studyNoteDraftHTML.count) / 2,000,000")
+                    .npCaption()
+                    .frame(maxWidth: .infinity, alignment: .trailing)
 
                 if let error = model.studyNoteEditorError {
                     Text(error)
@@ -527,13 +570,14 @@ private struct StudyNoteEditor: View {
                         .clipShape(RoundedRectangle(cornerRadius: NPRadius.button, style: .continuous))
                 }
             }
-            .padding(NPSpacing.outer)
+            .padding(.horizontal, NPSpacing.outer)
+            .padding(.bottom, NPSpacing.small)
         }
-        .navigationTitle("Edit Note")
+        .navigationTitle(localized("note.editor.title"))
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
-                Button("Cancel") {
+                Button(localized("common.cancel")) {
                     model.cancelStudyNoteEditing()
                 }
                 .disabled(model.isStudyNoteSaving)
@@ -545,24 +589,53 @@ private struct StudyNoteEditor: View {
                     if model.isStudyNoteSaving {
                         ProgressView()
                     } else {
-                        Text("Save")
+                        Text(localized("common.save"))
                     }
                 }
-                .disabled(model.isStudyNoteSaving)
+                .disabled(model.isStudyNoteSaving || model.isStudyNoteEditorLoading)
                 .accessibilityIdentifier("saveStudyNoteButton")
             }
         }
-        .alert("Note has a newer version", isPresented: $model.isStudyNoteConflictPending) {
-            Button("Cancel", role: .cancel) {
+        .alert(localized("note.editor.conflict.title"), isPresented: $model.isStudyNoteConflictPending) {
+            Button(localized("common.cancel"), role: .cancel) {
                 model.isStudyNoteConflictPending = false
             }
-            Button("Save with draft anyway") {
+            Button(localized("note.editor.conflict.continue")) {
                 model.confirmStudyNoteConflictAndSave()
             }
         } message: {
-            Text("The latest server version has been loaded. Your draft is preserved and will create the next version upon confirmation.")
+            Text(localized("note.editor.conflict.message"))
         }
-        .accessibilityIdentifier("studyNoteEditor")
+    }
+
+    private var richTextToolbar: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                editorButton(.undo, systemImage: "arrow.uturn.backward", label: "note.editor.undo")
+                editorButton(.redo, systemImage: "arrow.uturn.forward", label: "note.editor.redo")
+                Divider().frame(height: 24)
+                editorButton(.bold, systemImage: "bold", label: "note.editor.bold")
+                editorButton(.italic, systemImage: "italic", label: "note.editor.italic")
+                editorButton(.heading2, systemImage: "textformat.size", label: "note.editor.heading")
+                editorButton(.unorderedList, systemImage: "list.bullet", label: "note.editor.bullet_list")
+                editorButton(.orderedList, systemImage: "list.number", label: "note.editor.numbered_list")
+            }
+        }
+        .frame(height: 40)
+    }
+
+    private func editorButton(_ command: HTMLNoteCommand, systemImage: String, label: String) -> some View {
+        Button {
+            editorCommand = command
+            editorCommandToken += 1
+        } label: {
+            Image(systemName: systemImage)
+                .frame(width: 34, height: 34)
+        }
+        .buttonStyle(.plain)
+        .background(NPColors.surface)
+        .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+        .accessibilityLabel(localized(label))
     }
 }
 
@@ -1735,6 +1808,7 @@ private func dismissActiveKeyboard() {
 
 private struct LearningTab: View {
     @ObservedObject var model: NotePatchViewModel
+    let onOpenNote: (StudyNoteListItem) -> Void
 
     var body: some View {
         VStack(spacing: 0) {
@@ -1752,15 +1826,22 @@ private struct LearningTab: View {
                 Group {
                     switch model.selectedLearningSection {
                     case .units:
-                        LearningUnitsSection(model: model)
+                        LearningUnitsSection(model: model, onOpenNote: onOpenNote)
                     case .search:
                         KnowledgeSearchSection(model: model)
                     case .grading:
                         HomeworkGradingSection(model: model)
+                    case .flashcards:
+                        FlashcardsSection(model: model)
                     }
                 }
                 .padding(.horizontal, NPSpacing.outer)
                 .padding(.bottom, NPSpacing.section)
+            }
+        }
+        .onChange(of: model.selectedLearningSection) { section in
+            if section == .flashcards {
+                model.ensureFlashcardsLoaded()
             }
         }
     }
@@ -1768,6 +1849,7 @@ private struct LearningTab: View {
 
 private struct LearningUnitsSection: View {
     @ObservedObject var model: NotePatchViewModel
+    let onOpenNote: (StudyNoteListItem) -> Void
 
     var body: some View {
         LazyVStack(alignment: .leading, spacing: NPSpacing.item) {
@@ -1803,9 +1885,9 @@ private struct LearningUnitsSection: View {
                 }
             }
             if model.selectedLearningUnitId != nil {
-                Text("Digital Notes").npCardTitle().padding(.top, 6)
+                Text(localized("Digital Notes")).npCardTitle().padding(.top, 6)
                 if model.studyNotes.isEmpty {
-                    Text("This unit has no note versions yet.")
+                    Text(localized("notes.unit.empty"))
                         .font(.subheadline)
                         .foregroundStyle(NPColors.textSecondary)
                 } else {
@@ -1817,15 +1899,209 @@ private struct LearningUnitsSection: View {
                                 Text(localizedFormat("note.version", String(note.versionNo))).npCaption()
                             }
                             Spacer()
-                            Button { model.downloadAndPreview(note) } label: { Image(systemName: "eye") }
+                            Button {
+                                guard let unit = model.learningUnits.first(where: { $0.id == model.selectedLearningUnitId }) else {
+                                    return
+                                }
+                                onOpenNote(StudyNoteListItem(learningUnit: unit, note: note))
+                            } label: {
+                                Image(systemName: "eye")
+                            }
                                 .buttonStyle(NPSecondaryButtonStyle())
-                                .disabled(note.preferredDownloadURL == nil)
-                                .accessibilityLabel("Preview note")
+                                .accessibilityLabel(localized("note.preview"))
                         }
                         .modifier(NPCardModifier())
                     }
                 }
             }
+        }
+    }
+}
+
+private struct FlashcardsSection: View {
+    @ObservedObject var model: NotePatchViewModel
+
+    var body: some View {
+        LazyVStack(alignment: .leading, spacing: NPSpacing.item) {
+            LearningSectionHeader(
+                title: localized("flashcards.title"),
+                subtitle: localized("flashcards.subtitle"),
+                isLoading: model.isFlashcardsLoading
+            ) {
+                model.ensureFlashcardsLoaded(force: true)
+            }
+
+            if model.learningUnits.isEmpty {
+                NPEmptyState(
+                    systemImage: "rectangle.stack",
+                    title: localized("flashcards.no_units.title"),
+                    message: localized("flashcards.no_units.message")
+                )
+            } else {
+                LabeledField(title: localized("flashcards.learning_unit")) {
+                    Picker(
+                        localized("flashcards.learning_unit"),
+                        selection: Binding(
+                            get: { model.selectedFlashcardLearningUnitId },
+                            set: { model.selectFlashcardLearningUnit($0) }
+                        )
+                    ) {
+                        ForEach(model.learningUnits) { unit in
+                            Text(unit.title).tag(unit.id)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .accessibilityIdentifier("flashcardLearningUnitPicker")
+                }
+
+                if !model.flashcardDecks.isEmpty {
+                    LabeledField(title: localized("flashcards.deck")) {
+                        Picker(
+                            localized("flashcards.deck"),
+                            selection: Binding(
+                                get: { model.selectedFlashcardDeckId ?? "" },
+                                set: { model.selectFlashcardDeck($0) }
+                            )
+                        ) {
+                            ForEach(model.flashcardDecks) { deck in
+                                Text(localizedFormat("flashcards.deck_version", String(deck.versionNo)))
+                                    .tag(deck.id)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                        .accessibilityIdentifier("flashcardDeckPicker")
+                    }
+                }
+
+                if model.isFlashcardsLoading && model.flashcardDeckDetail == nil {
+                    ProgressView(localized("flashcards.loading"))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 36)
+                } else if let error = model.flashcardError {
+                    VStack(spacing: NPSpacing.small) {
+                        NPEmptyState(
+                            systemImage: "exclamationmark.triangle",
+                            title: localized("flashcards.load_failed"),
+                            message: error
+                        )
+                        Button(localized("common.retry")) {
+                            model.ensureFlashcardsLoaded(force: true)
+                        }
+                        .buttonStyle(NPSecondaryButtonStyle())
+                    }
+                    .frame(maxWidth: .infinity)
+                } else if let card = model.currentFlashcard,
+                          let detail = model.flashcardDeckDetail {
+                    flashcard(card, detail: detail)
+                    priorityDetails(card)
+                } else {
+                    NPEmptyState(
+                        systemImage: "rectangle.stack",
+                        title: localized("flashcards.empty.title"),
+                        message: localized("flashcards.empty.message")
+                    )
+                }
+            }
+        }
+        .accessibilityIdentifier("flashcardsSection")
+    }
+
+    private func flashcard(_ card: Flashcard, detail: FlashcardDeckDetail) -> some View {
+        VStack(spacing: NPSpacing.item) {
+            Button {
+                withAnimation(.spring(response: 0.32, dampingFraction: 0.82)) {
+                    model.flipCurrentFlashcard()
+                }
+            } label: {
+                VStack(spacing: 14) {
+                    Text(model.isFlashcardShowingBack ? localized("flashcards.back") : localized("flashcards.front"))
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(NPColors.brand)
+                    Text(model.isFlashcardShowingBack ? card.back : card.front)
+                        .font(.title3.weight(.medium))
+                        .foregroundStyle(NPColors.textPrimary)
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: .infinity)
+                    Text(localized("flashcards.tap_to_flip"))
+                        .npCaption()
+                }
+                .frame(maxWidth: .infinity, minHeight: 220)
+                .padding(NPSpacing.card)
+                .modifier(NPCardModifier())
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("flashcardCard")
+
+            HStack(spacing: NPSpacing.item) {
+                Button { model.showPreviousFlashcard() } label: {
+                    Image(systemName: "chevron.left")
+                        .frame(width: 42, height: 36)
+                }
+                .buttonStyle(NPSecondaryButtonStyle())
+                .disabled(model.flashcardIndex == 0)
+                .accessibilityLabel(localized("flashcards.previous"))
+
+                Spacer()
+                Text(localizedFormat(
+                    "flashcards.progress",
+                    String(model.flashcardIndex + 1),
+                    String(detail.cards.count)
+                ))
+                .npCaption()
+                Spacer()
+
+                Button { model.showNextFlashcard() } label: {
+                    Image(systemName: "chevron.right")
+                        .frame(width: 42, height: 36)
+                }
+                .buttonStyle(NPSecondaryButtonStyle())
+                .disabled(model.flashcardIndex + 1 >= detail.cards.count)
+                .accessibilityLabel(localized("flashcards.next"))
+            }
+        }
+    }
+
+    private func priorityDetails(_ card: Flashcard) -> some View {
+        DisclosureGroup {
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(card.priorityFactors.keys.sorted(), id: \.self) { key in
+                    if let value = card.priorityFactors[key] {
+                        HStack(alignment: .firstTextBaseline) {
+                            Text(priorityFactorLabel(key))
+                                .foregroundStyle(NPColors.textSecondary)
+                            Spacer(minLength: 12)
+                            Text(value.displayString)
+                                .foregroundStyle(NPColors.textPrimary)
+                        }
+                        .font(.subheadline)
+                    }
+                }
+                if let difficulty = card.difficulty?.trimmingCharacters(in: .whitespacesAndNewlines), !difficulty.isEmpty {
+                    HStack {
+                        Text(localized("flashcards.difficulty"))
+                            .foregroundStyle(NPColors.textSecondary)
+                        Spacer()
+                        Text(difficulty)
+                    }
+                    .font(.subheadline)
+                }
+            }
+            .padding(.top, 10)
+        } label: {
+            Text(localizedFormat("flashcards.priority", String(format: "%.4f", card.priorityScore)))
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(NPColors.textPrimary)
+        }
+        .modifier(NPCardModifier())
+    }
+
+    private func priorityFactorLabel(_ key: String) -> String {
+        switch key {
+        case "base": return localized("flashcards.factor.base")
+        case "error_pressure": return localized("flashcards.factor.error_pressure")
+        case "success_pressure": return localized("flashcards.factor.success_pressure")
+        case "recent_correct_streak": return localized("flashcards.factor.correct_streak")
+        default: return key
         }
     }
 }

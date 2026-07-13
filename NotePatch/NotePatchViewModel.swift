@@ -79,6 +79,7 @@ enum LearningSection: String, CaseIterable, Identifiable {
     case units
     case search
     case grading
+    case flashcards
 
     var id: String { rawValue }
     var title: String {
@@ -86,6 +87,7 @@ enum LearningSection: String, CaseIterable, Identifiable {
         case .units: return localized("review.section.units")
         case .search: return localized("review.section.search")
         case .grading: return localized("review.section.grading")
+        case .flashcards: return localized("review.section.flashcards")
         }
     }
 }
@@ -179,17 +181,26 @@ final class NotePatchViewModel: ObservableObject {
     @Published var studyNoteGroups: [StudyNoteGroup] = []
     @Published var isNotesLoading = false
     @Published var selectedStudyNoteItem: StudyNoteListItem?
-    @Published var studyNoteMarkdown: String?
+    @Published var studyNoteHTML: String?
     @Published var studyNoteReaderError: String?
     @Published var isStudyNoteLoading = false
     @Published var isStudyNoteEditorPresented = false
+    @Published var isStudyNoteEditorLoading = false
     @Published var studyNoteDraftTitle = ""
-    @Published var studyNoteDraftMarkdown = ""
+    @Published var studyNoteDraftHTML = ""
     @Published var studyNoteDraftSummary = "Manual Edit"
     @Published var studyNoteEditorError: String?
     @Published var isStudyNoteSaving = false
     @Published var isStudyNoteConflictPending = false
     @Published var selectedLearningSection: LearningSection = .units
+    @Published var selectedFlashcardLearningUnitId = ""
+    @Published var flashcardDecks: [FlashcardDeck] = []
+    @Published var selectedFlashcardDeckId: String?
+    @Published var flashcardDeckDetail: FlashcardDeckDetail?
+    @Published var flashcardIndex = 0
+    @Published var isFlashcardShowingBack = false
+    @Published var isFlashcardsLoading = false
+    @Published var flashcardError: String?
     @Published var knowledgeQuery = ""
     @Published var knowledgeLearningUnitId = ""
     @Published var knowledgeSubject = ""
@@ -220,6 +231,8 @@ final class NotePatchViewModel: ObservableObject {
     private let cacheDirectory: URL
     private var nextOpenClawMessageId: Int64 = 1
     private var presenceTask: Task<Void, Never>?
+    private var studyNoteGenerationPollingTask: Task<Void, Never>?
+    private var isAppActive = true
     private var didRestoreSession = false
     private var pendingUITestUploadFile: LocalUploadFile?
     private var retryableDocumentPurgeId: String?
@@ -355,14 +368,19 @@ final class NotePatchViewModel: ObservableObject {
     }
 
     func handleScenePhase(_ scenePhase: ScenePhase) {
-        guard !isOfflineTestMode else { return }
         switch scenePhase {
         case .active:
-            if let session {
+            isAppActive = true
+            resumeStudyNoteGenerationPollingIfNeeded()
+            if !isOfflineTestMode, let session {
                 startPresence(activeSession: session)
             }
         case .background, .inactive:
-            stopPresence(activeSession: session, sendOffline: true, clearClientId: false)
+            isAppActive = false
+            stopStudyNoteGenerationPolling()
+            if !isOfflineTestMode {
+                stopPresence(activeSession: session, sendOffline: true, clearClientId: false)
+            }
         @unknown default:
             break
         }
@@ -375,10 +393,16 @@ final class NotePatchViewModel: ObservableObject {
                 loadNotesOverview(force: false)
             } else {
                 loadLearningDashboard(force: false)
+                if selectedLearningSection == .flashcards {
+                    ensureFlashcardsLoaded()
+                }
             }
+            resumeStudyNoteGenerationPollingIfNeeded()
         case .openClaw:
+            stopStudyNoteGenerationPolling()
             loadChatHistory(force: false)
         case .documents, .profile:
+            stopStudyNoteGenerationPolling()
             break
         }
     }
@@ -1149,44 +1173,39 @@ final class NotePatchViewModel: ObservableObject {
     func openStudyNote(_ item: StudyNoteListItem) {
         cancelStudyNoteEditing()
         selectedStudyNoteItem = item
-        studyNoteMarkdown = nil
+        studyNoteHTML = nil
         studyNoteReaderError = nil
 
         if isOfflineTestMode, item.note.id == "note-1" {
-            studyNoteMarkdown = """
-            # Fractions & Ratios
-
-            ## Key Concepts
-
-            A fraction represents a part of a whole, while ratios compare the relationship between two quantities.
-
-            - Antecedent and consequent terms of a ratio must use the same unit.
-            - In a proportion, the product of the extremes equals the product of the means.
-
-            > First convert to common units, then simplify and calculate.
+            studyNoteHTML = """
+            <h1>Fractions &amp; Ratios</h1>
+            <h2>Key Concepts</h2>
+            <p>A fraction represents a part of a whole, while ratios compare the relationship between two quantities.</p>
+            <ul>
+              <li>Antecedent and consequent terms of a ratio must use the same unit.</li>
+              <li>In a proportion, the product of the extremes equals the product of the means.</li>
+            </ul>
+            <blockquote>First convert to common units, then simplify and calculate.</blockquote>
             """
             return
         }
 
-        guard let downloadURL = item.note.preferredMarkdownDownloadURL, !downloadURL.isEmpty else {
-            if item.note.jsonDownloadURL != nil {
-                selectedStudyNoteItem = nil
-                downloadAndPreview(item.note)
-            } else {
-                studyNoteReaderError = "This note has no available Markdown content."
-            }
-            return
-        }
-        guard let activeSession = currentSessionOrError() else { return }
+        guard let activeSession = currentSessionOrError(), let workspaceId = selectedWorkspaceId else { return }
 
         isStudyNoteLoading = true
         Task {
             defer { isStudyNoteLoading = false }
             do {
-                let markdown = try await loadStudyNoteMarkdown(activeSession: activeSession, note: item.note)
+                let html = try await loadStudyNoteHTML(
+                    activeSession: activeSession,
+                    workspaceId: workspaceId,
+                    learningUnitId: item.learningUnit.id,
+                    note: item.note,
+                    prefersHighlighted: true
+                )
                 guard selectedStudyNoteItem?.id == item.id else { return }
-                studyNoteMarkdown = markdown
-                statusMessage = "Note loaded."
+                studyNoteHTML = html
+                statusMessage = localized("operation.note_loaded")
             } catch {
                 guard selectedStudyNoteItem?.id == item.id else { return }
                 studyNoteReaderError = friendlyError(error)
@@ -1197,7 +1216,7 @@ final class NotePatchViewModel: ObservableObject {
     func closeStudyNoteReader() {
         cancelStudyNoteEditing()
         selectedStudyNoteItem = nil
-        studyNoteMarkdown = nil
+        studyNoteHTML = nil
         studyNoteReaderError = nil
         isStudyNoteLoading = false
     }
@@ -1207,27 +1226,55 @@ final class NotePatchViewModel: ObservableObject {
               let group = studyNoteGroups.first(where: { $0.learningUnit.id == item.learningUnit.id }) else {
             return false
         }
-        return group.notes.first?.id == item.id && studyNoteMarkdown != nil && !isStudyNoteLoading
+        return group.notes.first?.id == item.id && !isStudyNoteLoading
     }
 
     func beginStudyNoteEditing() {
-        guard canEditSelectedStudyNote, let item = selectedStudyNoteItem, let markdown = studyNoteMarkdown else {
-            studyNoteReaderError = "Only the latest loaded note version can be edited."
+        guard canEditSelectedStudyNote,
+              let item = selectedStudyNoteItem,
+              let activeSession = currentSessionOrError(),
+              let workspaceId = selectedWorkspaceId else {
+            studyNoteReaderError = localized("note.error.latest_only")
             return
         }
         studyNoteDraftTitle = item.note.title
-        studyNoteDraftMarkdown = markdown
-        studyNoteDraftSummary = "Manual Edit"
+        studyNoteDraftSummary = localized("note.editor.default_summary")
+        studyNoteDraftHTML = ""
         studyNoteEditorError = nil
         isStudyNoteConflictPending = false
         isStudyNoteEditorPresented = true
+        isStudyNoteEditorLoading = true
+
+        if isOfflineTestMode, item.note.id == "note-1" {
+            studyNoteDraftHTML = studyNoteHTML ?? "<p>Fractions &amp; Ratios</p>"
+            isStudyNoteEditorLoading = false
+            return
+        }
+
+        Task {
+            defer { isStudyNoteEditorLoading = false }
+            do {
+                let html = try await loadStudyNoteHTML(
+                    activeSession: activeSession,
+                    workspaceId: workspaceId,
+                    learningUnitId: item.learningUnit.id,
+                    note: item.note,
+                    prefersHighlighted: false
+                )
+                guard selectedStudyNoteItem?.id == item.id, isStudyNoteEditorPresented else { return }
+                studyNoteDraftHTML = html
+            } catch {
+                studyNoteEditorError = friendlyError(error)
+            }
+        }
     }
 
     func cancelStudyNoteEditing() {
         isStudyNoteEditorPresented = false
+        isStudyNoteEditorLoading = false
         studyNoteDraftTitle = ""
-        studyNoteDraftMarkdown = ""
-        studyNoteDraftSummary = "Manual Edit"
+        studyNoteDraftHTML = ""
+        studyNoteDraftSummary = localized("note.editor.default_summary")
         studyNoteEditorError = nil
         isStudyNoteConflictPending = false
         isStudyNoteSaving = false
@@ -1252,23 +1299,23 @@ final class NotePatchViewModel: ObservableObject {
             return
         }
 
-        let markdown = studyNoteDraftMarkdown.trimmingCharacters(in: .whitespacesAndNewlines)
+        let html = studyNoteDraftHTML.trimmingCharacters(in: .whitespacesAndNewlines)
         let title = studyNoteDraftTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         let summary = studyNoteDraftSummary.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !markdown.isEmpty else {
-            studyNoteEditorError = "Note content cannot be empty."
+        guard HTMLNoteSecurity.hasVisibleContent(html) else {
+            studyNoteEditorError = localized("note.error.empty_html")
             return
         }
-        guard markdown.count <= 2_000_000 else {
-            studyNoteEditorError = "Note content cannot exceed 2,000,000 characters."
+        guard html.count <= 2_000_000 else {
+            studyNoteEditorError = localized("note.error.html_too_long")
             return
         }
         guard title.isEmpty || title.count <= 255 else {
-            studyNoteEditorError = "Title cannot exceed 255 characters."
+            studyNoteEditorError = localized("note.error.title_too_long")
             return
         }
         guard summary.isEmpty || summary.count <= 500 else {
-            studyNoteEditorError = "Revision summary cannot exceed 500 characters."
+            studyNoteEditorError = localized("note.error.summary_too_long")
             return
         }
 
@@ -1278,7 +1325,7 @@ final class NotePatchViewModel: ObservableObject {
         Task {
             defer { isStudyNoteSaving = false }
             let input = StudyNoteRevisionInput(
-                markdown: markdown,
+                html: html,
                 title: title.nilIfBlank,
                 editSummary: summary.nilIfBlank
             )
@@ -1291,9 +1338,9 @@ final class NotePatchViewModel: ObservableObject {
                 )
                 let optimisticItem = StudyNoteListItem(learningUnit: item.learningUnit, note: response.note)
                 selectedStudyNoteItem = optimisticItem
-                studyNoteMarkdown = markdown
+                studyNoteHTML = html
                 isStudyNoteEditorPresented = false
-                statusMessage = "New note version saved."
+                statusMessage = localized("operation.note_revision_saved")
 
                 do {
                     let refreshedItems = try await refreshStudyNoteGroup(
@@ -1337,6 +1384,145 @@ final class NotePatchViewModel: ObservableObject {
                 showError(error)
             }
         }
+    }
+
+    var currentFlashcard: Flashcard? {
+        guard let cards = flashcardDeckDetail?.cards.sorted(by: { $0.rank < $1.rank }),
+              cards.indices.contains(flashcardIndex) else { return nil }
+        return cards[flashcardIndex]
+    }
+
+    func ensureFlashcardsLoaded(force: Bool = false) {
+        guard selectedTab == .notes, selectedNotesSection == .review, selectedLearningSection == .flashcards else { return }
+        let unitId = selectedFlashcardLearningUnitId.nilIfBlank
+            ?? selectedLearningUnitId
+            ?? learningUnits.first?.id
+        guard let unitId else {
+            flashcardDecks = []
+            flashcardDeckDetail = nil
+            selectedFlashcardDeckId = nil
+            return
+        }
+        if !force,
+           selectedFlashcardLearningUnitId == unitId,
+           flashcardDeckDetail != nil || (!flashcardDecks.isEmpty && selectedFlashcardDeckId == nil) {
+            return
+        }
+        loadFlashcards(learningUnitId: unitId)
+    }
+
+    func selectFlashcardLearningUnit(_ learningUnitId: String) {
+        guard selectedFlashcardLearningUnitId != learningUnitId || flashcardDeckDetail == nil else { return }
+        selectedFlashcardLearningUnitId = learningUnitId
+        flashcardDecks = []
+        selectedFlashcardDeckId = nil
+        flashcardDeckDetail = nil
+        flashcardIndex = 0
+        isFlashcardShowingBack = false
+        loadFlashcards(learningUnitId: learningUnitId)
+    }
+
+    func selectFlashcardDeck(_ deckId: String) {
+        guard let activeSession = currentSessionOrError(),
+              let workspaceId = selectedWorkspaceId,
+              let unitId = selectedFlashcardLearningUnitId.nilIfBlank,
+              !isFlashcardsLoading else { return }
+        selectedFlashcardDeckId = deckId
+        flashcardIndex = 0
+        isFlashcardShowingBack = false
+        isFlashcardsLoading = true
+        flashcardError = nil
+        Task {
+            defer { isFlashcardsLoading = false }
+            do {
+                let detail = try await clientFor(activeSession).getFlashcardDeck(
+                    workspaceId: workspaceId,
+                    learningUnitId: unitId,
+                    deckId: deckId
+                )
+                guard selectedWorkspaceId == workspaceId,
+                      selectedFlashcardLearningUnitId == unitId,
+                      selectedFlashcardDeckId == deckId else { return }
+                flashcardDeckDetail = sortedFlashcardDetail(detail)
+            } catch {
+                flashcardError = friendlyError(error)
+                if let backendError = error as? LearningBackendError,
+                   backendError.shouldClearSession || backendError.statusCode == 403 {
+                    showError(error)
+                }
+            }
+        }
+    }
+
+    func flipCurrentFlashcard() {
+        guard currentFlashcard != nil else { return }
+        isFlashcardShowingBack.toggle()
+    }
+
+    func showPreviousFlashcard() {
+        guard flashcardIndex > 0 else { return }
+        flashcardIndex -= 1
+        isFlashcardShowingBack = false
+    }
+
+    func showNextFlashcard() {
+        guard let count = flashcardDeckDetail?.cards.count, flashcardIndex + 1 < count else { return }
+        flashcardIndex += 1
+        isFlashcardShowingBack = false
+    }
+
+    private func loadFlashcards(learningUnitId: String) {
+        guard let activeSession = currentSessionOrError(),
+              let workspaceId = selectedWorkspaceId,
+              !isFlashcardsLoading else { return }
+        selectedFlashcardLearningUnitId = learningUnitId
+        isFlashcardsLoading = true
+        flashcardError = nil
+        Task {
+            defer { isFlashcardsLoading = false }
+            do {
+                let client = clientFor(activeSession)
+                async let decksRequest = client.listFlashcardDecks(
+                    workspaceId: workspaceId,
+                    learningUnitId: learningUnitId,
+                    page: 1,
+                    pageSize: 100
+                )
+                let latest: FlashcardDeckDetail?
+                do {
+                    latest = try await client.getLatestFlashcardDeck(
+                        workspaceId: workspaceId,
+                        learningUnitId: learningUnitId
+                    )
+                } catch let error as LearningBackendError where error.statusCode == 404 {
+                    latest = nil
+                }
+                let loadedDecks = try await decksRequest
+                let decks = loadedDecks.sorted {
+                    if $0.versionNo != $1.versionNo { return $0.versionNo > $1.versionNo }
+                    return $0.createdAt > $1.createdAt
+                }
+                guard selectedWorkspaceId == workspaceId,
+                      selectedFlashcardLearningUnitId == learningUnitId else { return }
+                flashcardDecks = decks
+                flashcardDeckDetail = latest.map(sortedFlashcardDetail)
+                selectedFlashcardDeckId = latest?.deck.id
+                flashcardIndex = 0
+                isFlashcardShowingBack = false
+            } catch {
+                guard selectedWorkspaceId == workspaceId,
+                      selectedFlashcardLearningUnitId == learningUnitId else { return }
+                flashcardError = friendlyError(error)
+                if let backendError = error as? LearningBackendError,
+                   backendError.shouldClearSession || backendError.statusCode == 403 {
+                    showError(error)
+                }
+            }
+        }
+    }
+
+    private func sortedFlashcardDetail(_ detail: FlashcardDeckDetail) -> FlashcardDeckDetail {
+        FlashcardDeckDetail(deck: detail.deck, cards: detail.cards.sorted { $0.rank < $1.rank })
     }
 
     var selectedHomework: HomeworkItem? {
@@ -1612,22 +1798,23 @@ final class NotePatchViewModel: ObservableObject {
     }
 
     func downloadAndPreview(_ note: StudyNoteVersion) {
-        let markdownURL = note.preferredMarkdownDownloadURL
-        let downloadURL = markdownURL ?? note.jsonDownloadURL
-        guard let activeSession = currentSessionOrError(), let downloadURL, !downloadURL.isEmpty else {
-            errorMessage = "This note has no available preview link."
-            return
-        }
+        guard let activeSession = currentSessionOrError(), let workspaceId = selectedWorkspaceId else { return }
         Task {
             isBusy = true
             defer { isBusy = false }
             do {
-                let isMarkdown = markdownURL != nil
+                let client = clientFor(activeSession)
+                let response = try await client.getStudyNoteDownloadURL(
+                    workspaceId: workspaceId,
+                    learningUnitId: note.learningUnitId,
+                    noteVersionId: note.id,
+                    kind: note.highlightedHTMLObjectKey == nil ? .html : .highlightedHTML
+                )
                 try await downloadAndPreview(
-                    client: clientFor(activeSession),
-                    downloadURL: downloadURL,
-                    filename: "\(note.title.isEmpty ? note.id : note.title).\(isMarkdown ? "md" : "json")",
-                    mimeType: isMarkdown ? "text/markdown" : "application/json",
+                    client: client,
+                    downloadURL: response.downloadURL,
+                    filename: response.filename,
+                    mimeType: "text/html",
                     completionMessage: "Study note downloaded."
                 )
             } catch {
@@ -1980,8 +2167,25 @@ final class NotePatchViewModel: ObservableObject {
         selectedWorkspaceId = uiSession.selectedWorkspaceId
         workspaces = [WorkspaceItem(id: "ui-workspace", name: "My Workspace")]
         documents = sampleDocuments
-        learningUnits = [LearningUnit(id: "unit-1", title: "Fractions & Ratios", subject: "Mathematics", gradeLevel: "Grade 7", topic: "Ratios")]
-        studyNotes = [StudyNoteVersion(id: "note-1", learningUnitId: "unit-1", versionNo: 1, title: "Fractions & Ratios Notes", markdownObjectKey: "", jsonObjectKey: "", highlightedObjectKey: nil, highlightMapObjectKey: nil, downloadURLs: [:])]
+        learningUnits = [LearningUnit(
+            id: "unit-1",
+            workspaceId: "ui-workspace",
+            title: "Fractions & Ratios",
+            subject: "Mathematics",
+            gradeLevel: "Grade 7",
+            topic: "Ratios",
+            knowledgeRevision: 1,
+            notesGeneratedRevision: 1
+        )]
+        studyNotes = [StudyNoteVersion(
+            id: "note-1",
+            workspaceId: "ui-workspace",
+            learningUnitId: "unit-1",
+            versionNo: 1,
+            title: "Fractions & Ratios Notes",
+            htmlObjectKey: "notes/note-1.html",
+            jsonObjectKey: "notes/note-1.json"
+        )]
         studyNoteGroups = [
             StudyNoteGroup(
                 learningUnit: learningUnits[0],
@@ -1993,6 +2197,43 @@ final class NotePatchViewModel: ObservableObject {
         homeworkRubricText = "10 points per question"
         homeworkMaxScoreText = "100"
         gradingDocuments = sampleDocuments
+        let sampleDeck = FlashcardDeck(
+            id: "deck-1",
+            workspaceId: "ui-workspace",
+            learningUnitId: "unit-1",
+            studyNoteVersionId: "note-1",
+            versionNo: 1,
+            attemptRevision: 0,
+            createdAt: "2026-07-14T00:00:00Z"
+        )
+        let sampleCards = [
+            Flashcard(
+                id: "card-1",
+                knowledgePointId: "point-1",
+                front: "What does a ratio compare?",
+                back: "The relationship between two quantities.",
+                priorityScore: 1.8,
+                priorityFactors: ["base": .number(1), "error_pressure": .number(0.4), "success_pressure": .number(0.1), "recent_correct_streak": .number(0)],
+                rank: 1,
+                createdAt: "2026-07-14T00:00:00Z"
+            ),
+            Flashcard(
+                id: "card-2",
+                knowledgePointId: "point-2",
+                front: "How do you solve a proportion?",
+                back: "Set the cross products equal, then solve for the unknown.",
+                priorityScore: 1.2,
+                priorityFactors: ["base": .number(1), "recent_correct_streak": .number(1)],
+                rank: 2,
+                createdAt: "2026-07-14T00:00:00Z"
+            )
+        ]
+        selectedFlashcardLearningUnitId = "unit-1"
+        flashcardDecks = [sampleDeck]
+        selectedFlashcardDeckId = sampleDeck.id
+        flashcardDeckDetail = FlashcardDeckDetail(deck: sampleDeck, cards: sampleCards)
+        flashcardIndex = 0
+        isFlashcardShowingBack = false
         conversations = []
         selectedConversationId = nil
         isOpenClawSending = false
@@ -2037,6 +2278,7 @@ final class NotePatchViewModel: ObservableObject {
     private func clearLocalSession() {
         presenceTask?.cancel()
         presenceTask = nil
+        stopStudyNoteGenerationPolling()
         invalidateDeferredContentLoads()
         settings.clearSession()
         isOfflineTestMode = false
@@ -2285,6 +2527,7 @@ final class NotePatchViewModel: ObservableObject {
     }
 
     private func invalidateDeferredContentLoads() {
+        stopStudyNoteGenerationPolling()
         deferredLoadTasks.values.forEach { $0.cancel() }
         deferredLoadTasks = [:]
         deferredLoadGenerations = [:]
@@ -2310,6 +2553,9 @@ final class NotePatchViewModel: ObservableObject {
         learningUnits = units
         homeworks = loadedHomeworks
         gradingDocuments = loadedDocuments
+        if selectedLearningSection == .flashcards {
+            ensureFlashcardsLoaded()
+        }
         guard let selectedHomeworkId else { return }
         guard let selected = loadedHomeworks.first(where: { $0.id == selectedHomeworkId }) else {
             self.selectedHomeworkId = nil
@@ -2337,6 +2583,7 @@ final class NotePatchViewModel: ObservableObject {
         learningUnits = units
         guard !units.isEmpty else {
             studyNoteGroups = []
+            stopStudyNoteGenerationPolling()
             return
         }
 
@@ -2352,6 +2599,7 @@ final class NotePatchViewModel: ObservableObject {
         if failedCount > 0 {
             setStatus("notes.partial_load", String(groups.count), String(failedCount))
         }
+        resumeStudyNoteGenerationPollingIfNeeded()
     }
 
     private func loadStudyNoteGroupsConcurrently(
@@ -2378,7 +2626,7 @@ final class NotePatchViewModel: ObservableObject {
                             .listStudyNotes(workspaceId: workspaceId, learningUnitId: unit.id)
                             .sorted { $0.versionNo > $1.versionNo }
                             .map { StudyNoteListItem(learningUnit: unit, note: $0) }
-                        return (index, notes.isEmpty ? nil : StudyNoteGroup(learningUnit: unit, notes: notes), nil)
+                        return (index, StudyNoteGroup(learningUnit: unit, notes: notes), nil)
                     } catch {
                         return (index, nil, error)
                     }
@@ -2393,6 +2641,64 @@ final class NotePatchViewModel: ObservableObject {
             }
         }
         return results
+    }
+
+    private func resumeStudyNoteGenerationPollingIfNeeded() {
+        guard isAppActive,
+              selectedTab == .notes,
+              selectedNotesSection == .notes,
+              studyNoteGroups.contains(where: { $0.generationState == .generating }),
+              !isOfflineTestMode,
+              session != nil,
+              selectedWorkspaceId != nil else {
+            stopStudyNoteGenerationPolling()
+            return
+        }
+        guard studyNoteGenerationPollingTask?.isCancelled != false else { return }
+
+        studyNoteGenerationPollingTask = Task { [weak self] in
+            var failureCount = 0
+            while !Task.isCancelled {
+                let delaySeconds: UInt64
+                switch failureCount {
+                case 0: delaySeconds = 8
+                case 1: delaySeconds = 16
+                default: delaySeconds = 30
+                }
+                try? await Task.sleep(nanoseconds: delaySeconds * 1_000_000_000)
+                guard !Task.isCancelled,
+                      let self,
+                      self.isAppActive,
+                      self.selectedTab == .notes,
+                      self.selectedNotesSection == .notes,
+                      let activeSession = self.session,
+                      let workspaceId = self.selectedWorkspaceId else { break }
+
+                do {
+                    try await self.loadNotesOverviewContent(
+                        activeSession: activeSession,
+                        workspaceId: workspaceId,
+                        shouldApply: { [weak self] in
+                            self?.selectedWorkspaceId == workspaceId && self?.session != nil
+                        }
+                    )
+                    failureCount = 0
+                    if !self.studyNoteGroups.contains(where: { $0.generationState == .generating }) {
+                        break
+                    }
+                } catch is CancellationError {
+                    break
+                } catch {
+                    failureCount += 1
+                }
+            }
+            self?.studyNoteGenerationPollingTask = nil
+        }
+    }
+
+    private func stopStudyNoteGenerationPolling() {
+        studyNoteGenerationPollingTask?.cancel()
+        studyNoteGenerationPollingTask = nil
     }
 
     private func refreshWorkspaceContent(activeSession: SavedSession, workspaceId: String) async throws {
@@ -2636,7 +2942,7 @@ final class NotePatchViewModel: ObservableObject {
         let group = StudyNoteGroup(learningUnit: learningUnit, notes: items)
         if let index = studyNoteGroups.firstIndex(where: { $0.learningUnit.id == learningUnit.id }) {
             studyNoteGroups[index] = group
-        } else if !items.isEmpty {
+        } else {
             studyNoteGroups.append(group)
         }
         if selectedLearningUnitId == learningUnit.id {
@@ -2645,15 +2951,57 @@ final class NotePatchViewModel: ObservableObject {
         return items
     }
 
-    private func loadStudyNoteMarkdown(activeSession: SavedSession, note: StudyNoteVersion) async throws -> String {
-        guard let downloadURL = note.preferredMarkdownDownloadURL, !downloadURL.isEmpty else {
-            throw LearningBackendError("This note has no available Markdown content.")
-        }
-        let filename = "\(note.id)-\(sanitizeFileName(note.title.isEmpty ? "study-note" : note.title)).md"
+    private func loadStudyNoteHTML(
+        activeSession: SavedSession,
+        workspaceId: String,
+        learningUnitId: String,
+        note: StudyNoteVersion,
+        prefersHighlighted: Bool
+    ) async throws -> String {
+        let client = clientFor(activeSession)
+        let hasHighlightedHTML = note.highlightedHTMLObjectKey != nil
+            || note.downloadURLs["highlighted_html"] != nil
+            || note.downloadURLs["highlighted"] != nil
+        let preferredKind: StudyNoteDownloadKind = prefersHighlighted && hasHighlightedHTML
+            ? .highlightedHTML
+            : .html
+        let embeddedURL: String? = {
+            if preferredKind == .highlightedHTML {
+                return note.downloadURLs["highlighted_html"] ?? note.downloadURLs["highlighted"]
+            }
+            return note.downloadURLs["html"] ?? note.downloadURLs["markdown"]
+        }()
+        let filename = "\(note.id)-\(sanitizeFileName(note.title.isEmpty ? "study-note" : note.title)).html"
         let targetURL = cacheDirectory
             .appendingPathComponent("study-notes", isDirectory: true)
             .appendingPathComponent(filename)
-        let downloadedURL = try await clientFor(activeSession).download(downloadURL: downloadURL, targetURL: targetURL)
+
+        if let embeddedURL, !embeddedURL.isEmpty {
+            do {
+                let downloadedURL = try await client.download(downloadURL: embeddedURL, targetURL: targetURL)
+                return try await FileImportService.shared.readUTF8File(at: downloadedURL)
+            } catch {
+                // Signed URLs are short-lived. Refresh once through the authenticated endpoint.
+            }
+        }
+
+        let response: StudyNoteDownloadURLResponse
+        do {
+            response = try await client.getStudyNoteDownloadURL(
+                workspaceId: workspaceId,
+                learningUnitId: learningUnitId,
+                noteVersionId: note.id,
+                kind: preferredKind
+            )
+        } catch let error as LearningBackendError where preferredKind == .highlightedHTML && error.statusCode == 404 {
+            response = try await client.getStudyNoteDownloadURL(
+                workspaceId: workspaceId,
+                learningUnitId: learningUnitId,
+                noteVersionId: note.id,
+                kind: .html
+            )
+        }
+        let downloadedURL = try await client.download(downloadURL: response.downloadURL, targetURL: targetURL)
         return try await FileImportService.shared.readUTF8File(at: downloadedURL)
     }
 
@@ -2671,20 +3019,26 @@ final class NotePatchViewModel: ObservableObject {
                 learningUnit: learningUnit
             )
             guard let latest = refreshedItems.first else {
-                throw LearningBackendError("No note versions available on the server for revision.")
+                throw LearningBackendError(localized("note.error.no_server_versions"))
             }
             selectedStudyNoteItem = latest
             do {
-                studyNoteMarkdown = try await loadStudyNoteMarkdown(activeSession: activeSession, note: latest.note)
+                studyNoteHTML = try await loadStudyNoteHTML(
+                    activeSession: activeSession,
+                    workspaceId: workspaceId,
+                    learningUnitId: learningUnit.id,
+                    note: latest.note,
+                    prefersHighlighted: true
+                )
             } catch {
                 studyNoteReaderError = friendlyError(error)
             }
             studyNoteEditorError = afterConflictConfirmation
-                ? "A newer version was generated on the server during save. Latest content refreshed; draft preserved."
-                : "A newer note version is available. Latest content refreshed; draft preserved."
+                ? localized("note.error.conflict_during_save")
+                : localized("note.error.conflict_available")
             isStudyNoteConflictPending = true
         } catch {
-            studyNoteEditorError = "Refresh failed after version conflict: \(friendlyError(error))"
+            studyNoteEditorError = localizedFormat("note.error.conflict_refresh_failed", friendlyError(error))
             if let backendError = error as? LearningBackendError,
                backendError.shouldClearSession || backendError.statusCode == 403 {
                 showError(error)
@@ -2731,6 +3085,14 @@ final class NotePatchViewModel: ObservableObject {
         homeworkRubricText = ""
         homeworkMaxScoreText = "100"
         lastGradingTask = nil
+        selectedFlashcardLearningUnitId = ""
+        flashcardDecks = []
+        selectedFlashcardDeckId = nil
+        flashcardDeckDetail = nil
+        flashcardIndex = 0
+        isFlashcardShowingBack = false
+        isFlashcardsLoading = false
+        flashcardError = nil
         studyNoteGroups = []
         closeStudyNoteReader()
     }

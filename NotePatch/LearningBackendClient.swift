@@ -386,6 +386,63 @@ final class LearningBackendClient {
         )
     }
 
+    func getStudyNoteDownloadURL(
+        workspaceId: String,
+        learningUnitId: String,
+        noteVersionId: String,
+        kind: StudyNoteDownloadKind,
+        expiresSeconds: Int = 900
+    ) async throws -> StudyNoteDownloadURLResponse {
+        let clampedExpiry = min(max(expiresSeconds, 60), 86_400)
+        return try await authedJSON(
+            "GET",
+            "/workspaces/\(workspaceId.pathSegment)/learning-units/\(learningUnitId.pathSegment)/notes/\(noteVersionId.pathSegment)/download-url?kind=\(kind.rawValue)&expires_seconds=\(clampedExpiry)",
+            payload: nil,
+            as: StudyNoteDownloadURLResponse.self
+        )
+    }
+
+    func listFlashcardDecks(
+        workspaceId: String,
+        learningUnitId: String,
+        page: Int = 1,
+        pageSize: Int = 100
+    ) async throws -> [FlashcardDeck] {
+        let safePage = max(page, 1)
+        let safePageSize = min(max(pageSize, 1), 100)
+        return try await authedJSON(
+            "GET",
+            "/workspaces/\(workspaceId.pathSegment)/learning-units/\(learningUnitId.pathSegment)/flashcard-decks?page=\(safePage)&page_size=\(safePageSize)",
+            payload: nil,
+            as: [FlashcardDeck].self
+        )
+    }
+
+    func getLatestFlashcardDeck(
+        workspaceId: String,
+        learningUnitId: String
+    ) async throws -> FlashcardDeckDetail {
+        try await authedJSON(
+            "GET",
+            "/workspaces/\(workspaceId.pathSegment)/learning-units/\(learningUnitId.pathSegment)/flashcard-decks/latest",
+            payload: nil,
+            as: FlashcardDeckDetail.self
+        )
+    }
+
+    func getFlashcardDeck(
+        workspaceId: String,
+        learningUnitId: String,
+        deckId: String
+    ) async throws -> FlashcardDeckDetail {
+        try await authedJSON(
+            "GET",
+            "/workspaces/\(workspaceId.pathSegment)/learning-units/\(learningUnitId.pathSegment)/flashcard-decks/\(deckId.pathSegment)",
+            payload: nil,
+            as: FlashcardDeckDetail.self
+        )
+    }
+
     func searchKnowledge(
         workspaceId: String,
         query: String,
