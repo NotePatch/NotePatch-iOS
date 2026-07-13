@@ -1611,6 +1611,7 @@ private struct OpenClawChatTab: View {
                 }
                 .padding(.horizontal, expanded ? NPSpacing.small : 0)
                 .frame(height: 38)
+                .padding(.bottom, expanded ? NPSpacing.small : 0)
                 .frame(maxHeight: .infinity, alignment: expanded ? .bottom : .center)
             }
             .frame(height: composerHeight)
