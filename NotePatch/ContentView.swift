@@ -1524,8 +1524,8 @@ private struct OpenClawChatTab: View {
             }
 
             GeometryReader { geometry in
-                let textHorizontalPadding = expanded ? NPSpacing.small : 46
-                let textViewWidth = max(0, geometry.size.width - textHorizontalPadding * 2)
+                let textHorizontalInset = expanded ? NPSpacing.small : 54
+                let textViewWidth = max(0, geometry.size.width)
 
                 ZStack(alignment: .topLeading) {
                     if expanded {
@@ -1554,14 +1554,15 @@ private struct OpenClawChatTab: View {
                         ),
                         height: $composerState.measuredTextHeight,
                         availableWidth: textViewWidth,
+                        horizontalInset: textHorizontalInset,
                         maximumLines: expanded ? 7 : 1
                     )
-                    .frame(height: expanded ? composerState.measuredTextHeight : 44)
-                    .padding(.horizontal, textHorizontalPadding)
+                    .frame(
+                        width: textViewWidth,
+                        height: expanded ? composerState.measuredTextHeight : 44
+                    )
                     .padding(.top, expanded ? NPSpacing.small : 0)
                     .padding(.bottom, expanded ? 46 : 0)
-                    .accessibilityLabel("Ask AI Co-pilot")
-                    .accessibilityIdentifier("openClawComposerTextView")
                     .disabled(chatState.isSending)
 
                     HStack(spacing: 10) {
@@ -1574,6 +1575,11 @@ private struct OpenClawChatTab: View {
                     .padding(.bottom, expanded ? NPSpacing.small : 0)
                     .frame(maxHeight: .infinity, alignment: expanded ? .bottom : .center)
                 }
+                .frame(
+                    width: geometry.size.width,
+                    height: composerHeight,
+                    alignment: .topLeading
+                )
             }
             .frame(height: composerHeight)
         }
@@ -2988,16 +2994,23 @@ private struct AdaptiveComposerTextView: UIViewRepresentable {
     @Binding var isFocused: Bool
     @Binding var height: CGFloat
     let availableWidth: CGFloat
+    let horizontalInset: CGFloat
     let maximumLines: Int
 
-    func makeUIView(context: Context) -> UITextView {
-        let textView = UITextView()
+    func makeUIView(context: Context) -> ComposerTextViewContainer {
+        let container = ComposerTextViewContainer()
+        let textView = container.textView
         textView.delegate = context.coordinator
         textView.backgroundColor = .clear
         textView.font = .preferredFont(forTextStyle: .body)
         textView.adjustsFontForContentSizeCategory = true
         textView.textColor = .label
-        textView.textContainerInset = UIEdgeInsets(top: 9, left: 8, bottom: 9, right: 8)
+        textView.textContainerInset = UIEdgeInsets(
+            top: 9,
+            left: horizontalInset,
+            bottom: 9,
+            right: horizontalInset
+        )
         textView.textContainer.lineFragmentPadding = 0
         textView.textContainer.widthTracksTextView = true
         textView.textContainer.heightTracksTextView = false
@@ -3009,12 +3022,21 @@ private struct AdaptiveComposerTextView: UIViewRepresentable {
         textView.isScrollEnabled = false
         textView.accessibilityLabel = localized("Ask AI Co-pilot")
         textView.accessibilityIdentifier = "openClawComposerTextView"
-        return textView
+        return container
     }
 
-    func updateUIView(_ textView: UITextView, context: Context) {
+    func updateUIView(_ container: ComposerTextViewContainer, context: Context) {
+        let textView = container.textView
         context.coordinator.update(parent: self)
         textView.accessibilityLabel = localized("Ask AI Co-pilot")
+        let normalizedHorizontalInset = max(0, horizontalInset)
+        let didChangeInsets =
+            abs(textView.textContainerInset.left - normalizedHorizontalInset) > 0.5 ||
+            abs(textView.textContainerInset.right - normalizedHorizontalInset) > 0.5
+        if didChangeInsets {
+            textView.textContainerInset.left = normalizedHorizontalInset
+            textView.textContainerInset.right = normalizedHorizontalInset
+        }
         let didReplaceText = textView.text != text
         if textView.text != text {
             textView.text = text
@@ -3024,7 +3046,7 @@ private struct AdaptiveComposerTextView: UIViewRepresentable {
         } else if !isFocused, textView.isFirstResponder {
             textView.resignFirstResponder()
         }
-        context.coordinator.updateHeight(for: textView, force: didReplaceText)
+        context.coordinator.updateHeight(for: textView, force: didReplaceText || didChangeInsets)
     }
 
     func makeCoordinator() -> Coordinator {
@@ -3107,6 +3129,27 @@ private struct AdaptiveComposerTextView: UIViewRepresentable {
                 }
             }
         }
+    }
+}
+
+private final class ComposerTextViewContainer: UIView {
+    let textView = UITextView()
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        clipsToBounds = true
+        textView.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(textView)
+        NSLayoutConstraint.activate([
+            textView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            textView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            textView.topAnchor.constraint(equalTo: topAnchor),
+            textView.bottomAnchor.constraint(equalTo: bottomAnchor)
+        ])
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
     }
 }
 
