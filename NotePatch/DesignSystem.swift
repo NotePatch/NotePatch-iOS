@@ -276,7 +276,7 @@ struct NPStatusChip: View {
     }
 
     var body: some View {
-        Text(text)
+        Text(localized(text))
             .font(.system(size: 12, weight: .semibold))
             .foregroundStyle(variant.fg)
             .padding(.horizontal, 10)
@@ -310,9 +310,9 @@ struct NPEmptyState: View {
             Image(systemName: systemImage)
                 .font(.system(size: 36, weight: .light))
                 .foregroundStyle(NPColors.textSecondary.opacity(0.5))
-            Text(title)
+            Text(localized(title))
                 .npSectionTitle()
-            Text(message)
+            Text(localized(message))
                 .npCaption()
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 260)
@@ -352,4 +352,3 @@ extension View {
         modifier(NPInputFieldModifier(isFocused: isFocused))
     }
 }
-

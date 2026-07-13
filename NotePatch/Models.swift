@@ -720,10 +720,10 @@ struct StudyNoteVersion: Decodable, Equatable, Identifiable {
 
     var revisionOriginLabel: String {
         switch editOrigin {
-        case "user": return "User Revision"
-        case "admin": return "Admin Revision"
-        case "skill": return "Auto-generated"
-        default: return versionNo > 1 ? "Revised" : "Auto-generated"
+        case "user": return localized("note.origin.user")
+        case "admin": return localized("note.origin.admin")
+        case "skill": return localized("note.origin.generated")
+        default: return versionNo > 1 ? localized("note.origin.revised") : localized("note.origin.generated")
         }
     }
 }

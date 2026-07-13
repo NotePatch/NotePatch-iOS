@@ -38,6 +38,67 @@ struct NotePatchTests {
         #expect(defaults.string(forKey: "tusd_base_url") == defaultTUSDBaseURL)
     }
 
+    @Test func appLanguage_resolvesSupportedSystemLanguagesAndPersistsChoice() throws {
+        #expect(AppLanguage.resolvedSystemLanguage(preferredLanguages: ["zh-Hans-CN"]) == .simplifiedChinese)
+        #expect(AppLanguage.resolvedSystemLanguage(preferredLanguages: ["zh-Hant-TW"]) == .traditionalChinese)
+        #expect(AppLanguage.resolvedSystemLanguage(preferredLanguages: ["zh-HK"]) == .traditionalChinese)
+        #expect(AppLanguage.resolvedSystemLanguage(preferredLanguages: ["fr-FR"]) == .english)
+
+        let suiteName = "NotePatchLanguageTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let store = SettingsStore(defaults: defaults, keychain: KeychainStore(service: "\(suiteName).keychain"))
+        #expect(store.loadAppLanguage() == .system)
+
+        store.saveAppLanguage(.traditionalChinese)
+        #expect(store.loadAppLanguage() == .traditionalChinese)
+    }
+
+    @Test @MainActor func appLocalization_updatesImmediatelyAndKeepsNetworkSettingsUntouched() throws {
+        let suiteName = "NotePatchLocalizationTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let store = SettingsStore(defaults: defaults, keychain: KeychainStore(service: "\(suiteName).keychain"))
+        store.saveBaseURL("https://api.example.test")
+        let localization = AppLocalization(settings: store)
+
+        localization.select(.simplifiedChinese)
+        #expect(localization.language == .simplifiedChinese)
+        #expect(localization.locale.identifier.lowercased().contains("zh-hans"))
+        #expect(localization.string("Notes") == "笔记")
+        #expect(store.loadAppLanguage() == .simplifiedChinese)
+        #expect(store.loadBaseURL() == "https://api.example.test/api/v1")
+    }
+
+    @Test @MainActor func semanticLocalizationKeysExistInEverySupportedLanguage() throws {
+        let suiteName = "NotePatchLocalizationCompletenessTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let store = SettingsStore(defaults: defaults, keychain: KeychainStore(service: "\(suiteName).keychain"))
+        let localization = AppLocalization(settings: store)
+
+        for language in [AppLanguage.english, .simplifiedChinese, .traditionalChinese] {
+            localization.select(language)
+            for key in AppLocalization.requiredSemanticKeys {
+                #expect(localization.hasLocalizedValue(for: key), "Missing \(key) for \(language.rawValue)")
+            }
+        }
+
+        let status = AppDisplayText.localized("task.progress", ["42", "75"])
+        localization.select(.simplifiedChinese)
+        #expect(status.resolved(using: localization) == "任务 42：75%")
+        localization.select(.english)
+        #expect(status.resolved(using: localization) == "Task 42: 75%")
+        #expect(AppDisplayText.raw("backend detail").resolved(using: localization) == "backend detail")
+    }
+
+    @Test @MainActor func workbenchTabsHaveExpectedOrderAndDefault() throws {
+        #expect(WorkbenchTab.allCases == [.documents, .notes, .openClaw, .profile])
+        let model = NotePatchViewModel()
+        #expect(model.selectedTab == .documents)
+        #expect(model.selectedNotesSection == .notes)
+    }
+
     @Test func fileHelpers_sanitizeMimeAndByteFormatting() {
         #expect(sanitizeFileName("a/b:c?.pdf") == "a_b_c_.pdf")
         #expect(contentTypeForFilename("photo.jpg") == "image/jpeg")
@@ -61,6 +122,8 @@ struct NotePatchTests {
             case "/api/v1/workspaces":
                 return Self.response(request, status: 200, body: #"[{"id":"ws-1","name":"My Workspace","type":"personal","owner_user_id":"u-1","created_at":"","updated_at":""}]"#)
             case "/api/v1/workspaces/ws-1/documents":
+                return Self.response(request, status: 200, body: "[]")
+            case "/api/v1/workspaces/ws-1/homeworks":
                 return Self.response(request, status: 200, body: "[]")
             case "/api/v1/workspaces/ws-1/learning-units":
                 return Self.response(request, status: 200, body: #"[{"id":"unit-1","title":"比例","subject":"数学","grade_level":"七年级","topic":""}]"#)
@@ -106,6 +169,24 @@ struct NotePatchTests {
         model.ensureContentForSelectedTabLoaded()
         try await Task.sleep(nanoseconds: 50_000_000)
         #expect(paths.filter { $0 == "/api/v1/workspaces/ws-1/learning-units" }.count == 1)
+
+        let requestsBeforeProfile = paths.count
+        model.selectedTab = .profile
+        model.ensureContentForSelectedTabLoaded()
+        try await Task.sleep(nanoseconds: 50_000_000)
+        #expect(paths.count == requestsBeforeProfile)
+
+        model.selectedTab = .notes
+        model.selectedNotesSection = .review
+        model.ensureContentForSelectedTabLoaded()
+        try await Self.waitUntil { !model.isLearningLoading && !model.isHomeworkLoading }
+        #expect(paths.filter { $0 == "/api/v1/workspaces/ws-1/learning-units" }.count == 2)
+        #expect(paths.filter { $0 == "/api/v1/workspaces/ws-1/homeworks" }.count == 1)
+        #expect(paths.filter { $0 == "/api/v1/workspaces/ws-1/documents" }.count == 2)
+
+        model.ensureContentForSelectedTabLoaded()
+        try await Task.sleep(nanoseconds: 50_000_000)
+        #expect(paths.filter { $0 == "/api/v1/workspaces/ws-1/homeworks" }.count == 1)
     }
 
     @Test @MainActor func notesOverviewKeepsSuccessfulGroupsWhenOneUnitFails() async throws {
@@ -473,14 +554,14 @@ struct NotePatchTests {
         model.stageUploadFileForPreview(LocalUploadFile(url: secondURL, filename: "second.pdf", mimeType: "application/pdf"))
 
         model.uploadSelectedQueuedFiles()
-        try await Self.waitUntil {
-            model.statusMessage == "已上传所选文件。" || model.errorMessage != nil
+        try await Self.waitUntil(attempts: 500) {
+            model.statusMessage == localized("Selected files uploaded.") || model.errorMessage != nil
         }
 
         #expect(kinds == ["homework", "note"])
         #expect(tusCreateCount == 2)
         #expect(model.queuedUploadItems.isEmpty)
-        #expect(model.statusMessage == "已上传所选文件。")
+        #expect(model.statusMessage == localized("Selected files uploaded."))
     }
 
     @Test func decodeTokenWorkspaceUploadArtifactAndTaskJSON() throws {
@@ -642,14 +723,14 @@ struct NotePatchTests {
         #expect(ocrArtifacts.artifacts.first?.downloadURL == "https://download.test/ocr.md")
     }
 
-    @Test func parseErrorMessage_handlesCommonDetailShapes() {
+    @Test @MainActor func parseErrorMessage_handlesCommonDetailShapes() {
         #expect(LearningBackendClient.parseErrorMessage(#"{"detail":"Invalid token"}"#, status: 401) == "Invalid token")
         #expect(
             LearningBackendClient.parseErrorMessage(#"{"detail":[{"msg":"Field required"},{"msg":"Too short"}]}"#, status: 422)
             == "Field required；Too short"
         )
-        #expect(LearningBackendClient.parseErrorMessage("", status: 409) == "上传尚未完成或请求冲突，请稍后重试。")
-        #expect(LearningBackendClient.parseErrorMessage("", status: 410) == "当前接口已禁用。")
+        #expect(LearningBackendClient.parseErrorMessage("", status: 409) == localized("error.http.conflict"))
+        #expect(LearningBackendClient.parseErrorMessage("", status: 410) == localized("error.http.gone"))
     }
 
     @Test func openClawAndMarkdownHelpers_matchAndroidBehavior() {
@@ -1464,7 +1545,8 @@ struct NotePatchTests {
         #expect(model.activeTask?.taskType == "purge_document")
         #expect(model.activeTask?.status == "succeeded")
         #expect(model.errorMessage == nil)
-        #expect(model.statusMessage.contains("文档及派生数据已清理，但刷新失败"))
+        #expect(model.statusMessage.contains(localized("operation.document_cleanup_completed")))
+        #expect(model.statusMessage.contains("refresh unavailable"))
     }
 
     @Test @MainActor func failedDocumentPurge_canBeRetriedWithoutRestoringDocument() async throws {
@@ -1519,7 +1601,7 @@ struct NotePatchTests {
         #expect(model.activeTask?.id == "purge-2")
         #expect(model.activeTask?.status == "succeeded")
         #expect(!model.canRetryDocumentPurge)
-        #expect(model.statusMessage == "文档及派生数据清理完成。")
+        #expect(model.statusMessage == localized("Document and derivative data cleanup complete."))
     }
 
     @Test @MainActor func processingValidationAndCancellation_stopResultReads() async throws {
@@ -1554,7 +1636,7 @@ struct NotePatchTests {
         let invalidDocument = LearningDocumentItem(id: "doc-created", workspaceId: "ws-1", originalFilename: "created.pdf", fileType: "pdf", documentKind: "homework", status: "created")
         model.startProcessing(invalidDocument)
         #expect(requestCount == 0)
-        #expect(model.errorMessage == "只有已上传、就绪或失败的文档可以处理。")
+        #expect(model.errorMessage == localized("Only uploaded, ready, or failed documents can be processed."))
 
         let readyDocument = LearningDocumentItem(id: "doc-ready", workspaceId: "ws-1", originalFilename: "ready.pdf", fileType: "pdf", documentKind: "homework", status: "uploaded")
         model.startProcessing(readyDocument)
@@ -1592,8 +1674,8 @@ struct NotePatchTests {
         #expect(model.aiHistoryEnabled == false)
         try await Self.waitUntil { !model.isAIPreferenceUpdating }
         #expect(requestCount == 1)
-        #expect(settings.loadSession()?.aiHistoryEnabled == false)
-        #expect(model.statusMessage == "AI 历史设置已保存。")
+        #expect(settings.loadAIHistoryEnabled() == false)
+        #expect(model.statusMessage == localized("AI history setting saved."))
 
         MockURLProtocol.handler = { request in
             requestCount += 1
@@ -1602,7 +1684,7 @@ struct NotePatchTests {
         model.updateAIHistoryEnabled(true)
         try await Self.waitUntil { !model.isAIPreferenceUpdating }
         #expect(model.aiHistoryEnabled == false)
-        #expect(settings.loadSession()?.aiHistoryEnabled == false)
+        #expect(settings.loadAIHistoryEnabled() == false)
         #expect(model.errorMessage == "preference rejected")
     }
 
@@ -1659,7 +1741,7 @@ struct NotePatchTests {
         #expect(referenceDeleteCount == 1)
         #expect(model.homeworkReferences.isEmpty)
         #expect(model.lastGradingTask == nil)
-        #expect(model.statusMessage == "评分依据已删除，请重新评分。")
+        #expect(model.statusMessage == localized("Reference removed. Please re-grade."))
     }
 
     @Test @MainActor func successfulGradingMutations_clearStaleResult() async throws {
@@ -1693,7 +1775,7 @@ struct NotePatchTests {
         model.saveGradingConfig()
         try await Self.waitUntil { !model.isHomeworkLoading }
         #expect(model.lastGradingTask == nil)
-        #expect(model.statusMessage == "评分配置已保存，请重新评分。")
+        #expect(model.statusMessage == localized("Grading configuration saved. Please re-grade."))
 
         model.lastGradingTask = TaskItem(id: "grade-2", workspaceId: "ws-1", taskType: "grade_homework", status: "succeeded", progress: 100)
         model.gradingDocuments = [LearningDocumentItem(id: "answer-1", workspaceId: "ws-1", originalFilename: "answer.pdf", fileType: "pdf", documentKind: "answer_key", status: "ready")]
@@ -1701,7 +1783,7 @@ struct NotePatchTests {
         try await Self.waitUntil { !model.isHomeworkLoading }
         #expect(model.homeworkReferences.first?.documentId == "answer-1")
         #expect(model.lastGradingTask == nil)
-        #expect(model.statusMessage == "评分依据已添加，请重新评分。")
+        #expect(model.statusMessage == localized("Reference added. Please re-grade."))
     }
 
     @Test @MainActor func serverURLs_persistAcrossModelInstances() throws {
@@ -1727,7 +1809,7 @@ struct NotePatchTests {
         model.session = SavedSession(baseURL: "https://api.test", tusBaseURL: "https://tus.test/", accessToken: "a", refreshToken: "r", expiresAt: "x", userId: "u", email: "u@test", fullName: nil, selectedWorkspaceId: "ws-1", aiHistoryEnabled: true)
         model.selectedWorkspaceId = "ws-1"
         model.searchKnowledge()
-        #expect(model.errorMessage == "请输入知识检索内容。")
+        #expect(model.errorMessage == localized("Please enter a knowledge search query."))
 
         let documents = try JSONDecoder.notepatch.decode(
             [LearningDocumentItem].self,
@@ -1741,7 +1823,7 @@ struct NotePatchTests {
         model.selectedHomeworkId = "h-1"
         model.homeworkMaxScoreText = "0"
         model.saveGradingConfig()
-        #expect(model.errorMessage == "满分必须大于 0。")
+        #expect(model.errorMessage == localized("Maximum score must be greater than 0."))
     }
 
     @Test @MainActor func uiTestEmail_entersEphemeralWorkbenchWithoutNetwork() async throws {

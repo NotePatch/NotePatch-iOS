@@ -225,23 +225,23 @@ func friendlyError(_ error: Error) -> String {
     }
     let nsError = error as NSError
     if nsError.domain == NSCocoaErrorDomain {
-        return "Network or file I/O error: \(nsError.localizedDescription)"
+        return AppLocalization.shared.string("Network or file I/O error: %@", nsError.localizedDescription)
     }
     return error.localizedDescription
 }
 
 func activeFilterSummary(status: String, documentKind: String, fileType: String) -> String {
     let filters = [
-        status.isEmpty ? nil : "Status \(statusLabel(status))",
-        documentKind.isEmpty ? nil : "Type \(documentKindLabel(documentKind))",
-        fileType.isEmpty ? nil : "File \(fileTypeLabel(fileType))"
+        status.isEmpty ? nil : AppLocalization.shared.string("Status %@", statusLabel(status)),
+        documentKind.isEmpty ? nil : AppLocalization.shared.string("Type %@", documentKindLabel(documentKind)),
+        fileType.isEmpty ? nil : AppLocalization.shared.string("File %@", fileTypeLabel(fileType))
     ].compactMap { $0 }
-    return filters.isEmpty ? "All Documents" : filters.joined(separator: " · ")
+    return filters.isEmpty ? localized("filter.all_documents") : filters.joined(separator: " · ")
 }
 
 func filterChoiceLabel(_ value: String) -> String {
     if value.isEmpty {
-        return "All"
+        return localized("filter.all")
     }
     let status = statusLabel(value)
     if status != value {
@@ -256,19 +256,19 @@ func filterChoiceLabel(_ value: String) -> String {
 
 func statusLabel(_ value: String) -> String {
     switch value {
-    case "created": return "Created"
-    case "uploading": return "Uploading"
-    case "uploaded": return "Uploaded"
-    case "processing": return "Processing"
-    case "ready": return "Ready"
-    case "failed": return "Failed"
-    case "deleted": return "Deleted"
-    case "queued": return "Queued"
-    case "running": return "Running"
-    case "succeeded": return "Succeeded"
-    case "cancelled": return "Cancelled"
-    case "completed": return "Complete"
-    case "draft": return "Draft"
+    case "created": return localized("status.created")
+    case "uploading": return localized("status.uploading")
+    case "uploaded": return localized("status.uploaded")
+    case "processing": return localized("status.processing")
+    case "ready": return localized("status.ready")
+    case "failed": return localized("status.failed")
+    case "deleted": return localized("status.deleted")
+    case "queued": return localized("status.queued")
+    case "running": return localized("status.running")
+    case "succeeded": return localized("status.succeeded")
+    case "cancelled": return localized("status.cancelled")
+    case "completed": return localized("status.completed")
+    case "draft": return localized("status.draft")
     default: return value
     }
 }
@@ -279,43 +279,43 @@ func canProcessDocument(status: String) -> Bool {
 
 func documentKindLabel(_ value: String) -> String {
     switch value {
-    case "homework": return "Homework"
-    case "corrected_homework": return "Graded Work"
-    case "courseware": return "Courseware"
-    case "note": return "Note"
-    case "exam": return "Exam"
-    case "answer_key": return "Answer Key"
-    case "rubric": return "Rubric"
-    case "other": return "Other"
+    case "homework": return localized("document_kind.homework")
+    case "corrected_homework": return localized("document_kind.corrected_homework")
+    case "courseware": return localized("document_kind.courseware")
+    case "note": return localized("document_kind.note")
+    case "exam": return localized("document_kind.exam")
+    case "answer_key": return localized("document_kind.answer_key")
+    case "rubric": return localized("document_kind.rubric")
+    case "other": return localized("common.other")
     default: return value
     }
 }
 
 func fileTypeLabel(_ value: String) -> String {
     switch value {
-    case "image": return "Image"
+    case "image": return localized("file_type.image")
     case "pdf": return "PDF"
     case "docx": return "DOCX"
     case "pptx": return "PPTX"
-    case "audio": return "Audio"
-    case "video": return "Video"
-    case "other": return "Other"
+    case "audio": return localized("file_type.audio")
+    case "video": return localized("file_type.video")
+    case "other": return localized("common.other")
     default: return value
     }
 }
 
 func artifactTypeLabel(_ value: String) -> String {
     switch value {
-    case "original": return "Original"
-    case "deskewed_image": return "Deskewed Image"
-    case "ocr_json": return "OCR JSON"
-    case "ocr_markdown": return "OCR Markdown"
-    case "ocr_text": return "OCR Text"
-    case "questions_json": return "Questions JSON"
-    case "grading_report": return "Grading Report"
-    case "summary": return "Summary"
-    case "flashcards": return "Flashcards"
-    case "other": return "Other"
+    case "original": return localized("artifact.original")
+    case "deskewed_image": return localized("artifact.deskewed_image")
+    case "ocr_json": return localized("artifact.ocr_json")
+    case "ocr_markdown": return localized("artifact.ocr_markdown")
+    case "ocr_text": return localized("artifact.ocr_text")
+    case "questions_json": return localized("artifact.questions_json")
+    case "grading_report": return localized("artifact.grading_report")
+    case "summary": return localized("artifact.summary")
+    case "flashcards": return localized("artifact.flashcards")
+    case "other": return localized("common.other")
     default: return value
     }
 }
@@ -330,7 +330,7 @@ func compactDateTime(_ value: String) -> String {
 
 func formatBytes(_ sizeBytes: Int64?) -> String {
     guard let sizeBytes else {
-        return "unknown size"
+        return localized("file.unknown_size")
     }
     if sizeBytes < 1024 {
         return "\(sizeBytes) B"

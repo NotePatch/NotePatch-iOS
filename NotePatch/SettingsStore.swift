@@ -16,6 +16,7 @@ final class SettingsStore {
         static let accessToken = "learning_access_token"
         static let refreshToken = "learning_refresh_token"
         static let presenceClientId = "presence_client_id"
+        static let appLanguage = "app_language"
     }
 
     private let defaults: UserDefaults
@@ -50,6 +51,18 @@ final class SettingsStore {
 
     func saveTUSBaseURL(_ baseURL: String) {
         defaults.set(normalizeTUSBaseURL(baseURL), forKey: Keys.tusBaseURL)
+    }
+
+    func loadAppLanguage() -> AppLanguage {
+        AppLanguage(rawValue: defaults.string(forKey: Keys.appLanguage) ?? "") ?? .system
+    }
+
+    func saveAppLanguage(_ language: AppLanguage) {
+        defaults.set(language.rawValue, forKey: Keys.appLanguage)
+    }
+
+    func loadAIHistoryEnabled() -> Bool? {
+        defaults.object(forKey: Keys.aiHistoryEnabled) as? Bool
     }
 
     func loadSession() -> SavedSession? {

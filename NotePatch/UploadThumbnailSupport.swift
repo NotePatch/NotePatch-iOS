@@ -194,7 +194,7 @@ struct UploadThumbnailView: View {
             UploadThumbnailImage(file: file, size: size, cornerRadius: 6)
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("预览 \(file.filename)")
+        .accessibilityLabel(localizedFormat("accessibility.preview_file", file.filename))
         .accessibilityIdentifier("uploadQueueThumbnail")
     }
 }

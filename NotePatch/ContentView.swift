@@ -171,7 +171,7 @@ private struct AuthField<Field: View>: View {
                 .foregroundStyle(NPColors.textSecondary)
                 .frame(width: 22)
             VStack(alignment: .leading, spacing: 2) {
-                Text(title)
+                Text(localized(title))
                     .font(.caption)
                     .foregroundStyle(NPColors.textSecondary)
                 field
@@ -186,13 +186,9 @@ private struct AuthField<Field: View>: View {
 
 private struct WorkbenchScreen: View {
     @ObservedObject var model: NotePatchViewModel
-    @State private var isSettingsPresented = false
 
     var body: some View {
         VStack(spacing: 0) {
-            CompactTopBar(model: model) {
-                isSettingsPresented = true
-            }
             StatusBanner(
                 isBusy: model.isBusy || model.isConversationMutating || model.isAIPreferenceUpdating || model.isHomeworkLoading || model.isStudyNoteSaving,
                 statusMessage: model.statusMessage,
@@ -201,13 +197,19 @@ private struct WorkbenchScreen: View {
             )
 
             TabView(selection: $model.selectedTab) {
+                DocumentsTab(model: model)
+                    .tag(WorkbenchTab.documents)
+                    .tabItem {
+                        Label(WorkbenchTab.documents.title, systemImage: WorkbenchTab.documents.iconName)
+                            .accessibilityIdentifier("tab.documents")
+                    }
+
                 NotesTab(model: model)
                     .tag(WorkbenchTab.notes)
-                    .tabItem { Label(WorkbenchTab.notes.title, systemImage: WorkbenchTab.notes.iconName) }
-
-                DocumentsTab(model: model)
-                .tag(WorkbenchTab.documents)
-                .tabItem { Label(WorkbenchTab.documents.title, systemImage: WorkbenchTab.documents.iconName) }
+                    .tabItem {
+                        Label(WorkbenchTab.notes.title, systemImage: WorkbenchTab.notes.iconName)
+                            .accessibilityIdentifier("tab.notes")
+                    }
 
                 OpenClawChatTab(
                     model: model,
@@ -215,11 +217,17 @@ private struct WorkbenchScreen: View {
                     composerState: model.openClawComposerState
                 )
                     .tag(WorkbenchTab.openClaw)
-                    .tabItem { Label(WorkbenchTab.openClaw.title, systemImage: WorkbenchTab.openClaw.iconName) }
+                    .tabItem {
+                        Label(WorkbenchTab.openClaw.title, systemImage: WorkbenchTab.openClaw.iconName)
+                            .accessibilityIdentifier("tab.ai")
+                    }
 
-                LearningTab(model: model)
-                    .tag(WorkbenchTab.learning)
-                    .tabItem { Label(WorkbenchTab.learning.title, systemImage: WorkbenchTab.learning.iconName) }
+                ProfileTab(model: model)
+                    .tag(WorkbenchTab.profile)
+                    .tabItem {
+                        Label(WorkbenchTab.profile.title, systemImage: WorkbenchTab.profile.iconName)
+                            .accessibilityIdentifier("tab.me")
+                    }
             }
             .tint(NPColors.brandDark)
             .animation(.spring(response: 0.35, dampingFraction: 0.85), value: model.selectedTab)
@@ -244,86 +252,9 @@ private struct WorkbenchScreen: View {
             .accessibilityIdentifier("workbenchTabs")
         }
         .background(NPColors.background)
-        .sheet(isPresented: $isSettingsPresented) {
-            NavigationView {
-                SettingsTab(model: model)
-                    .navigationTitle("Settings")
-                    .navigationBarTitleDisplayMode(.inline)
-                    .toolbar {
-                        ToolbarItem(placement: .cancellationAction) {
-                            Button("Done") {
-                                isSettingsPresented = false
-                            }
-                        }
-                    }
-            }
-        }
-        .onChange(of: model.session) { session in
-            if session == nil {
-                isSettingsPresented = false
-            }
-        }
         .onAppear {
             model.ensureContentForSelectedTabLoaded()
         }
-    }
-}
-
-// MARK: - Compact Top Bar
-
-private struct CompactTopBar: View {
-    @ObservedObject var model: NotePatchViewModel
-    let onSettings: () -> Void
-
-    var body: some View {
-        let workspaceName = model.workspaces.first(where: { $0.id == model.selectedWorkspaceId })?.name
-        HStack(spacing: 12) {
-            brandLogoIcon(size: 38, symbolSize: 17)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("NotePatch")
-                    .npCardTitle()
-                Text(workspaceName ?? "No workspace selected")
-                    .npCaption()
-                    .lineLimit(1)
-                    .accessibilityIdentifier("personalWorkspaceName")
-            }
-            Spacer(minLength: 8)
-            Button {
-                model.refreshCurrentWorkspace()
-            } label: {
-                Image(systemName: "arrow.clockwise")
-                    .frame(width: 32, height: 32)
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(NPColors.brand)
-            .disabled(model.isBusy || model.selectedWorkspaceId == nil)
-            .accessibilityLabel("Refresh workspace")
-
-            Button(action: onSettings) {
-                Image(systemName: "gearshape")
-                    .frame(width: 32, height: 32)
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(NPColors.textSecondary)
-            .accessibilityLabel("Settings")
-            .accessibilityIdentifier("settingsButton")
-
-            Text(accountInitial)
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(NPColors.brandDark)
-                .frame(width: 34, height: 34)
-                .background(NPColors.brandLight)
-                .clipShape(Circle())
-        }
-        .padding(.horizontal, NPSpacing.outer)
-        .padding(.vertical, 10)
-        .background(NPColors.surface)
-        .modifier(NPCardShadow())
-    }
-
-    private var accountInitial: String {
-        let account = model.session?.fullName?.isEmpty == false ? model.session?.fullName : model.session?.email
-        return account?.trimmingCharacters(in: .whitespacesAndNewlines).first.map(String.init)?.uppercased() ?? "N"
     }
 }
 
@@ -334,96 +265,45 @@ private struct NotesTab: View {
     @State private var readerItem: StudyNoteListItem?
 
     var body: some View {
-        NavigationView {
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: NPSpacing.item) {
-                    if model.isNotesLoading && model.studyNoteGroups.isEmpty {
-                        ProgressView("Loading study notes...")
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 36)
-                    } else if model.studyNoteGroups.isEmpty {
-                        NPEmptyState(
-                            systemImage: "note.text",
-                            title: "No study notes yet",
-                            message: "Study notes will appear here after uploading and processing courseware, notes, or exam papers."
-                        )
-                        .padding(.top, 56)
-                    } else {
-                        ForEach(model.studyNoteGroups) { group in
-                            VStack(alignment: .leading, spacing: NPSpacing.small) {
-                                Text(group.learningUnit.title)
-                                    .npCardTitle()
-                                let details = [group.learningUnit.subject, group.learningUnit.gradeLevel, group.learningUnit.topic]
-                                    .compactMap { $0?.isEmpty == false ? $0 : nil }
-                                if !details.isEmpty {
-                                    Text(details.joined(separator: " · "))
-                                        .npCaption()
-                                }
-                                ForEach(group.notes) { item in
-                                    Button {
-                                        model.openStudyNote(item)
-                                        if model.isOfflineTestMode || item.note.preferredMarkdownDownloadURL != nil {
-                                            readerItem = item
-                                        }
-                                    } label: {
-                                        HStack(spacing: 12) {
-                                            Image(systemName: "note.text")
-                                                .font(.title3)
-                                                .foregroundStyle(NPColors.brand)
-                                                .frame(width: 28)
-                                            VStack(alignment: .leading, spacing: 3) {
-                                                Text(item.note.title.isEmpty ? "Digital Notes" : item.note.title)
-                                                    .font(.subheadline.weight(.medium))
-                                                    .foregroundStyle(NPColors.textPrimary)
-                                                    .lineLimit(2)
-                                                Text("Version \(item.note.versionNo)")
-                                                    .npCaption()
-                                                Text(item.note.revisionOriginLabel)
-                                                    .npCaption()
-                                                if let summary = item.note.editSummary?.trimmingCharacters(in: .whitespacesAndNewlines), !summary.isEmpty {
-                                                    Text(summary)
-                                                        .npCaption()
-                                                        .lineLimit(1)
-                                                }
-                                            }
-                                            Spacer(minLength: 8)
-                                            Image(systemName: "chevron.right")
-                                                .font(.caption.weight(.semibold))
-                                                .foregroundStyle(NPColors.textSecondary.opacity(0.5))
-                                        }
-                                        .padding(NPSpacing.card)
-                                        .modifier(NPCardModifier())
-                                    }
-                                    .buttonStyle(.plain)
-                                    .accessibilityIdentifier("studyNoteRow-\(item.note.id)")
-                                }
-                            }
-                        }
-                    }
-                }
-                .padding(.horizontal, NPSpacing.outer)
-                .padding(.vertical, NPSpacing.item)
-            }
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .principal) {
-                    Text("Notes")
-                        .font(.system(size: 26, weight: .medium, design: .serif))
-                        .foregroundStyle(NPColors.textPrimary)
-                        .frame(height: 48, alignment: .center)
-                }
-                ToolbarItem(placement: .navigationBarTrailing) {
+        VStack(spacing: 0) {
+            HStack {
+                Text(model.selectedNotesSection.title)
+                    .font(.system(size: 26, weight: .medium, design: .serif))
+                    .foregroundStyle(NPColors.textPrimary)
+                    .accessibilityIdentifier("notesTab")
+                Spacer()
+                if model.selectedNotesSection == .notes {
                     Button {
                         model.loadNotesOverview(allowOfflineNetwork: true)
                     } label: {
                         Image(systemName: "arrow.clockwise")
                     }
+                    .buttonStyle(NPToolbarIconButtonStyle())
                     .disabled(model.isNotesLoading)
-                    .accessibilityLabel("Refresh notes")
+                    .accessibilityLabel(localizedFormat("accessibility.refresh_named", localized("notes.section.notes")))
+                }
+            }
+            .frame(height: 48)
+            .padding(.horizontal, NPSpacing.outer)
+
+            Picker(localized("notes.section.picker"), selection: $model.selectedNotesSection) {
+                ForEach(NotesSection.allCases) { section in
+                    Text(section.title).tag(section)
+                }
+            }
+            .pickerStyle(.segmented)
+            .padding(.horizontal, NPSpacing.outer)
+            .padding(.vertical, 10)
+            .accessibilityIdentifier("notesSectionPicker")
+
+            Group {
+                if model.selectedNotesSection == .notes {
+                    notesOverview
+                } else {
+                    LearningTab(model: model)
                 }
             }
         }
-        .navigationViewStyle(StackNavigationViewStyle())
         .sheet(item: $readerItem, onDismiss: model.closeStudyNoteReader) { _ in
             NavigationView {
                 StudyNoteReader(model: model)
@@ -437,7 +317,81 @@ private struct NotesTab: View {
             }
             .navigationViewStyle(StackNavigationViewStyle())
         }
-        .accessibilityIdentifier("notesTab")
+        .onChange(of: model.selectedNotesSection) { _ in
+            model.ensureContentForSelectedTabLoaded()
+        }
+    }
+
+    private var notesOverview: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: NPSpacing.item) {
+                if model.isNotesLoading && model.studyNoteGroups.isEmpty {
+                    ProgressView("Loading study notes...")
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 36)
+                } else if model.studyNoteGroups.isEmpty {
+                    NPEmptyState(
+                        systemImage: "note.text",
+                        title: "No study notes yet",
+                        message: "Study notes will appear here after uploading and processing courseware, notes, or exam papers."
+                    )
+                    .padding(.top, 56)
+                } else {
+                    ForEach(model.studyNoteGroups) { group in
+                        VStack(alignment: .leading, spacing: NPSpacing.small) {
+                            Text(group.learningUnit.title)
+                                .npCardTitle()
+                            let details = [group.learningUnit.subject, group.learningUnit.gradeLevel, group.learningUnit.topic]
+                                .compactMap { $0?.isEmpty == false ? $0 : nil }
+                            if !details.isEmpty {
+                                Text(details.joined(separator: " · "))
+                                    .npCaption()
+                            }
+                            ForEach(group.notes) { item in
+                                Button {
+                                    model.openStudyNote(item)
+                                    if model.isOfflineTestMode || item.note.preferredMarkdownDownloadURL != nil {
+                                        readerItem = item
+                                    }
+                                } label: {
+                                    HStack(spacing: 12) {
+                                        Image(systemName: "note.text")
+                                            .font(.title3)
+                                            .foregroundStyle(NPColors.brand)
+                                            .frame(width: 28)
+                                        VStack(alignment: .leading, spacing: 3) {
+                                            Text(item.note.title.isEmpty ? localized("Digital Notes") : item.note.title)
+                                                .font(.subheadline.weight(.medium))
+                                                .foregroundStyle(NPColors.textPrimary)
+                                                .lineLimit(2)
+                                            Text(localizedFormat("note.version", String(item.note.versionNo)))
+                                                .npCaption()
+                                            Text(item.note.revisionOriginLabel)
+                                                .npCaption()
+                                            if let summary = item.note.editSummary?.trimmingCharacters(in: .whitespacesAndNewlines), !summary.isEmpty {
+                                                Text(summary)
+                                                    .npCaption()
+                                                    .lineLimit(1)
+                                            }
+                                        }
+                                        Spacer(minLength: 8)
+                                        Image(systemName: "chevron.right")
+                                            .font(.caption.weight(.semibold))
+                                            .foregroundStyle(NPColors.textSecondary.opacity(0.5))
+                                    }
+                                    .padding(NPSpacing.card)
+                                    .modifier(NPCardModifier())
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityIdentifier("studyNoteRow-\(item.note.id)")
+                            }
+                        }
+                    }
+                }
+            }
+            .padding(.horizontal, NPSpacing.outer)
+            .padding(.vertical, NPSpacing.item)
+        }
     }
 }
 
@@ -452,10 +406,10 @@ private struct StudyNoteReader: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: NPSpacing.item) {
                         VStack(alignment: .leading, spacing: 5) {
-                            Text(item.note.title.isEmpty ? "Digital Notes" : item.note.title)
+                            Text(item.note.title.isEmpty ? localized("Digital Notes") : item.note.title)
                                 .font(.title2.weight(.bold))
                                 .foregroundStyle(NPColors.textPrimary)
-                            Text("\(item.learningUnit.title) · Version \(item.note.versionNo)")
+                            Text("\(item.learningUnit.title) · \(localizedFormat("note.version", String(item.note.versionNo)))")
                                 .font(.subheadline)
                                 .foregroundStyle(NPColors.textSecondary)
                             Text(item.note.revisionOriginLabel)
@@ -624,6 +578,7 @@ private struct DocumentsTab: View {
             Text("Documents")
                 .font(.system(size: 26, weight: .medium, design: .serif))
                 .foregroundStyle(NPColors.textPrimary)
+                .accessibilityIdentifier("documentsTab")
                 .frame(height: 48, alignment: .center)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, NPSpacing.outer)
@@ -638,6 +593,7 @@ private struct DocumentsTab: View {
             .padding(.horizontal, NPSpacing.outer)
             .padding(.top, 12)
             .padding(.bottom, 4)
+            .accessibilityIdentifier("documentsSectionPicker")
 
             if model.selectedDocumentsSection == .documents {
                 documentList
@@ -645,7 +601,6 @@ private struct DocumentsTab: View {
                 TaskTab(model: model)
             }
         }
-        .accessibilityIdentifier("documentsTab")
         .sheet(isPresented: $isUploadPresented) {
             NavigationView {
                 UploadDocumentScreen(model: model)
@@ -686,7 +641,7 @@ private struct DocumentsTab: View {
                     Text("Document List")
                         .npCardTitle()
                     Spacer()
-                    Text("\(model.documents.count)")
+                    Text(localizedFormat("documents.count", String(model.documents.count)))
                         .npCaption()
                 }
                 .padding(.top, 2)
@@ -749,7 +704,7 @@ private struct UploadDocumentScreen: View {
                             Label("Pending", systemImage: "tray.and.arrow.up")
                                 .npCardTitle()
                             Spacer()
-                            Text("\(model.queuedUploadItems.count) items")
+                            Text(localizedFormat("upload.items_count", String(model.queuedUploadItems.count)))
                                 .npCaption()
                         }
 
@@ -775,7 +730,7 @@ private struct UploadDocumentScreen: View {
                             Button {
                                 model.uploadSelectedQueuedFiles()
                             } label: {
-                                Label("Upload selected (\(model.queuedUploadItems.filter(\.isSelected).count))", systemImage: "arrow.up.circle.fill")
+                                Label(localizedFormat("upload.selected_count", String(model.queuedUploadItems.filter(\.isSelected).count)), systemImage: "arrow.up.circle.fill")
                                     .frame(maxWidth: .infinity)
                             }
                             .buttonStyle(NPPrimaryButtonStyle())
@@ -840,7 +795,10 @@ private struct QueuedUploadRow: View {
             }
             .buttonStyle(.plain)
             .disabled(isBusy)
-            .accessibilityLabel(item.isSelected ? "Deselect \(item.file.filename)" : "Select \(item.file.filename)")
+            .accessibilityLabel(localizedFormat(
+                item.isSelected ? "accessibility.deselect_file" : "accessibility.select_file",
+                item.file.filename
+            ))
 
             UploadThumbnailView(file: item.file, onPreview: onPreview)
                 .disabled(isBusy)
@@ -863,7 +821,7 @@ private struct QueuedUploadRow: View {
             }
             .buttonStyle(.plain)
             .disabled(isBusy)
-            .accessibilityLabel("Preview \(item.file.filename)")
+            .accessibilityLabel(localizedFormat("accessibility.preview_file", item.file.filename))
 
             Button(role: .destructive, action: onRemove) {
                 Image(systemName: "trash")
@@ -871,7 +829,7 @@ private struct QueuedUploadRow: View {
             }
             .buttonStyle(.plain)
             .disabled(isBusy)
-            .accessibilityLabel("Remove \(item.file.filename)")
+            .accessibilityLabel(localizedFormat("accessibility.remove_file", item.file.filename))
         }
         .padding(NPSpacing.small)
         .background(NPColors.surface)
@@ -997,7 +955,7 @@ private struct UploadSourceLabel: View {
         VStack(spacing: 6) {
             Image(systemName: systemImage)
                 .font(.system(size: 19, weight: .medium))
-            Text(title)
+            Text(localized(title))
                 .font(.caption.weight(.medium))
         }
         .frame(maxWidth: .infinity)
@@ -1227,7 +1185,6 @@ private struct TaskTab: View {
                 .padding(.top, 14)
                 .padding(.bottom, NPSpacing.section)
         }
-        .accessibilityIdentifier("tasksTab")
     }
 }
 
@@ -1401,9 +1358,10 @@ private struct OpenClawChatTab: View {
         VStack(spacing: 0) {
             HStack(spacing: 10) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(chatState.selectedConversation?.title ?? "New conversation")
+                    Text(chatState.selectedConversation?.title ?? localized("New conversation"))
                         .npCardTitle()
                         .lineLimit(1)
+                        .accessibilityIdentifier("openClawTab")
                     Text(chatState.selectedConversation == nil ? "Auto-saved after first message" : "Saved AI session")
                         .npCaption()
                         .lineLimit(1)
@@ -1496,7 +1454,6 @@ private struct OpenClawChatTab: View {
                 .accessibilityIdentifier("openClawComposer")
             }
         }
-        .accessibilityIdentifier("openClawTab")
         .onDisappear { dismissComposer() }
         .fileImporter(
             isPresented: $isShowingAIFileImporter,
@@ -1733,7 +1690,7 @@ private struct AIComposerAttachmentChip: View {
             }
             .buttonStyle(.plain)
             .foregroundStyle(NPColors.textSecondary)
-            .accessibilityLabel("Remove \(file.filename)")
+            .accessibilityLabel(localizedFormat("accessibility.remove_file", file.filename))
         }
         .padding(.leading, 7)
         .padding(.trailing, 4)
@@ -1771,14 +1728,6 @@ private struct LearningTab: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            Text("Review")
-                .font(.system(size: 26, weight: .medium, design: .serif))
-                .foregroundStyle(NPColors.textPrimary)
-                .frame(height: 48, alignment: .center)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, NPSpacing.outer)
-                .padding(.bottom, 2)
-
             Picker("Learning view", selection: $model.selectedLearningSection) {
                 ForEach(LearningSection.allCases) { section in
                     Text(section.title).tag(section)
@@ -1787,6 +1736,7 @@ private struct LearningTab: View {
             .pickerStyle(.segmented)
             .padding(.horizontal, NPSpacing.outer)
             .padding(.vertical, 10)
+            .accessibilityIdentifier("reviewSectionPicker")
 
             ScrollView {
                 Group {
@@ -1803,7 +1753,6 @@ private struct LearningTab: View {
                 .padding(.bottom, NPSpacing.section)
             }
         }
-        .accessibilityIdentifier("learningTab")
     }
 }
 
@@ -1854,8 +1803,8 @@ private struct LearningUnitsSection: View {
                         HStack(spacing: 12) {
                             Image(systemName: "note.text").foregroundStyle(NPColors.brand)
                             VStack(alignment: .leading, spacing: 3) {
-                                Text(note.title.isEmpty ? "Digital Notes" : note.title).font(.subheadline.weight(.medium)).lineLimit(2)
-                                Text("Version \(note.versionNo)").npCaption()
+                                Text(note.title.isEmpty ? localized("Digital Notes") : note.title).font(.subheadline.weight(.medium)).lineLimit(2)
+                                Text(localizedFormat("note.version", String(note.versionNo))).npCaption()
                             }
                             Spacer()
                             Button { model.downloadAndPreview(note) } label: { Image(systemName: "eye") }
@@ -1880,14 +1829,14 @@ private struct LearningSectionHeader: View {
     var body: some View {
         HStack {
             VStack(alignment: .leading, spacing: 2) {
-                Text(title).npSectionTitle()
-                Text(subtitle).npCaption()
+                Text(localized(title)).npSectionTitle()
+                Text(localized(subtitle)).npCaption()
             }
             Spacer()
             Button(action: onRefresh) { Image(systemName: "arrow.clockwise") }
                 .buttonStyle(NPSecondaryButtonStyle())
                 .disabled(isLoading)
-                .accessibilityLabel("Refresh \(title)")
+                .accessibilityLabel(localizedFormat("accessibility.refresh_named", localized(title)))
         }
     }
 }
@@ -1935,13 +1884,13 @@ private struct KnowledgeSearchSection: View {
                 HStack {
                     Text("Search results").npCardTitle()
                     Spacer()
-                    Text("\(model.knowledgeResults.count) results").npCaption()
+                    Text(localizedFormat("knowledge.results_count", String(model.knowledgeResults.count))).npCaption()
                 }
                 ForEach(model.knowledgeResults) { item in
                     NPSection {
                         VStack(alignment: .leading, spacing: NPSpacing.small) {
                             HStack(alignment: .firstTextBaseline) {
-                                Text(item.metadataTitle ?? item.sourceType ?? "Knowledge snippet")
+                                Text(item.metadataTitle ?? item.sourceType ?? localized("Knowledge snippet"))
                                     .font(.subheadline.weight(.semibold))
                                     .foregroundStyle(NPColors.textPrimary)
                                     .lineLimit(2)
@@ -1990,7 +1939,7 @@ private struct HomeworkGradingSection: View {
                 Button { model.loadLearningDashboard(allowOfflineNetwork: true) } label: { Image(systemName: "arrow.clockwise") }
                     .buttonStyle(NPToolbarIconButtonStyle())
                     .disabled(model.isHomeworkLoading)
-                    .accessibilityLabel("Refresh homework")
+                    .accessibilityLabel(localized("accessibility.refresh_homework"))
             }
 
             if model.isHomeworkLoading && model.homeworks.isEmpty {
@@ -2071,7 +2020,7 @@ private struct HomeworkGradingSection: View {
                             Spacer()
                             Button(role: .destructive) { model.deleteHomeworkReference(reference) } label: { Image(systemName: "trash") }
                                 .disabled(model.isHomeworkLoading)
-                                .accessibilityLabel("Remove reference")
+                                .accessibilityLabel(localized("accessibility.remove_reference"))
                         }
                         .modifier(NPCardModifier())
                     }
@@ -2102,7 +2051,7 @@ private struct HomeworkGradingSection: View {
                 HStack {
                     Text(mode).font(.subheadline.weight(.semibold)).foregroundStyle(NPColors.textPrimary)
                     if let confidence = model.gradingConfidence {
-                        Text("confidence \(String(format: "%.4f", confidence))").npCaption()
+                        Text(localizedFormat("grading.confidence", String(format: "%.4f", confidence))).npCaption()
                     }
                 }
             }
@@ -2239,7 +2188,7 @@ private struct OpenClawMessageBubble: View {
                         .foregroundStyle(foregroundColor)
                 }
                 if let errorEvent = message.events.last(where: { $0.level == "error" }) {
-                    Text("Error event: \(errorEvent.message)")
+                    Text(localizedFormat("chat.error_event", errorEvent.message))
                         .npCaption()
                         .foregroundStyle(NPColors.destructive)
                         .lineLimit(3)
@@ -2253,7 +2202,7 @@ private struct OpenClawMessageBubble: View {
                         .npCaption()
                         .foregroundStyle(NPColors.warning)
                 } else if !message.citations.isEmpty {
-                    Text("Citing \(message.citations.count) sources")
+                    Text(localizedFormat("chat.citing_sources", String(message.citations.count)))
                         .npCaption()
                 }
             }
@@ -2293,100 +2242,27 @@ private struct OpenClawMessageBubble: View {
     }
 }
 
-// MARK: - Settings Tab
+// MARK: - Profile Tab
 
-private struct SettingsTab: View {
+private struct ProfileTab: View {
     @ObservedObject var model: NotePatchViewModel
+    @EnvironmentObject private var localization: AppLocalization
 
     var body: some View {
         ScrollView {
             VStack(spacing: NPSpacing.section) {
-                NPSection {
-                    VStack(alignment: .leading, spacing: 14) {
-                        Label("Server", systemImage: "server.rack")
-                            .npCardTitle()
-
-                        LabeledField(title: "API address") {
-                            TextField("API address", text: $model.apiBaseURLText)
-                                .textInputAutocapitalization(.never)
-                                .keyboardType(.URL)
-                        }
-                        LabeledField(title: "TUSD upload address") {
-                            TextField("TUSD address", text: $model.tusBaseURLText)
-                                .textInputAutocapitalization(.never)
-                                .keyboardType(.URL)
-                        }
-
-                        Button {
-                            model.saveServerURLs()
-                        } label: {
-                            Label("Save server settings", systemImage: "checkmark")
-                                .frame(maxWidth: .infinity)
-                        }
-                        .buttonStyle(NPPrimaryButtonStyle())
-                        .disabled(model.isBusy)
-
-                        HStack(spacing: NPSpacing.small) {
-                            Button {
-                                model.checkAPIConnection()
-                            } label: {
-                                Label("Test API", systemImage: "network")
-                                    .frame(maxWidth: .infinity)
-                            }
-                            .buttonStyle(NPSecondaryButtonStyle())
-                            .disabled(model.isBusy)
-
-                            Button {
-                                model.checkTUSConnection()
-                            } label: {
-                                Label("Test TUSD", systemImage: "arrow.up.circle")
-                                    .frame(maxWidth: .infinity)
-                            }
-                            .buttonStyle(NPSecondaryButtonStyle())
-                            .disabled(model.isBusy)
-                        }
-                    }
-                }
+                profileHeader
 
                 WorkspaceManagementSection(model: model)
 
-                NPSection {
-                    VStack(alignment: .leading, spacing: NPSpacing.small) {
-                        Label("AI", systemImage: "sparkles")
-                            .npCardTitle()
-                        Toggle("AI history", isOn: Binding(
-                            get: { model.aiHistoryEnabled },
-                            set: { model.updateAIHistoryEnabled($0) }
-                        ))
-                        .disabled(model.isBusy || model.isAIPreferenceUpdating)
-                        Text("Session records are retained, but future requests won't include history context.")
-                            .npCaption()
-                    }
-                }
+                languageSection
+
+                aiSection
+
+                serverSection
 
                 NPSection {
                     VStack(alignment: .leading, spacing: 14) {
-                        Label("Account", systemImage: "person.crop.circle")
-                            .npCardTitle()
-                        HStack(spacing: 12) {
-                            Image(systemName: "person.fill")
-                                .foregroundStyle(NPColors.brandDark)
-                                .frame(width: 42, height: 42)
-                                .background(NPColors.brandLight)
-                                .clipShape(Circle())
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(model.session?.fullName?.isEmpty == false ? model.session?.fullName ?? "" : "NotePatch User")
-                                    .font(.subheadline.weight(.medium))
-                                    .foregroundStyle(NPColors.textPrimary)
-                                    .lineLimit(1)
-                                Text(model.session?.email ?? "")
-                                    .npCaption()
-                                    .lineLimit(1)
-                            }
-                        }
-                        Text("Session valid until \(compactDateTime(model.session?.expiresAt ?? ""))")
-                            .npCaption()
-                            .lineLimit(1)
                         Button(role: .destructive) {
                             model.logout()
                         } label: {
@@ -2403,7 +2279,116 @@ private struct SettingsTab: View {
             .padding(.top, 14)
             .padding(.bottom, NPSpacing.section)
         }
-        .accessibilityIdentifier("settingsTab")
+    }
+
+    private var profileHeader: some View {
+        NPSection {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(spacing: 14) {
+                    brandLogoIcon(size: 52, symbolSize: 23)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("NotePatch")
+                            .npSectionTitle()
+                            .accessibilityIdentifier("profileTab")
+                        Text(model.session?.fullName?.isEmpty == false ? model.session?.fullName ?? "" : localized("account.default_user"))
+                            .font(.subheadline.weight(.medium))
+                            .foregroundStyle(NPColors.textPrimary)
+                            .lineLimit(1)
+                        Text(model.session?.email ?? "")
+                            .npCaption()
+                            .lineLimit(1)
+                    }
+                }
+                Text(localizedFormat("account.session_valid_until", compactDateTime(model.session?.expiresAt ?? "")))
+                    .npCaption()
+            }
+        }
+    }
+
+    private var languageSection: some View {
+        NPSection {
+            VStack(alignment: .leading, spacing: NPSpacing.small) {
+                Label("Language", systemImage: "globe")
+                    .npCardTitle()
+                Picker("Language", selection: Binding(
+                    get: { localization.language },
+                    set: { localization.select($0) }
+                )) {
+                    ForEach(AppLanguage.allCases) { language in
+                        Text(language.displayName).tag(language)
+                    }
+                }
+                .pickerStyle(MenuPickerStyle())
+                .accessibilityIdentifier("appLanguagePicker")
+                Text("Changes apply immediately throughout NotePatch.")
+                    .npCaption()
+            }
+        }
+    }
+
+    private var aiSection: some View {
+        NPSection {
+            VStack(alignment: .leading, spacing: NPSpacing.small) {
+                Label("AI", systemImage: "sparkles")
+                    .npCardTitle()
+                Toggle("AI history", isOn: Binding(
+                    get: { model.aiHistoryEnabled },
+                    set: { model.updateAIHistoryEnabled($0) }
+                ))
+                .disabled(model.isBusy || model.isAIPreferenceUpdating)
+                Text("Session records are retained, but future requests won't include history context.")
+                    .npCaption()
+            }
+        }
+    }
+
+    private var serverSection: some View {
+        NPSection {
+            VStack(alignment: .leading, spacing: 14) {
+                Label("Server", systemImage: "server.rack")
+                    .npCardTitle()
+
+                LabeledField(title: "API address") {
+                    TextField("API address", text: $model.apiBaseURLText)
+                        .textInputAutocapitalization(.never)
+                        .keyboardType(.URL)
+                }
+                LabeledField(title: "TUSD upload address") {
+                    TextField("TUSD address", text: $model.tusBaseURLText)
+                        .textInputAutocapitalization(.never)
+                        .keyboardType(.URL)
+                }
+
+                Button {
+                    model.saveServerURLs()
+                } label: {
+                    Label("Save server settings", systemImage: "checkmark")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(NPPrimaryButtonStyle())
+                .disabled(model.isBusy)
+
+                HStack(spacing: NPSpacing.small) {
+                    Button {
+                        model.checkAPIConnection()
+                    } label: {
+                        Label("Test API", systemImage: "network")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(NPSecondaryButtonStyle())
+                    .disabled(model.isBusy)
+
+                    Button {
+                        model.checkTUSConnection()
+                    } label: {
+                        Label("Test TUSD", systemImage: "arrow.up.circle")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(NPSecondaryButtonStyle())
+                    .disabled(model.isBusy)
+                }
+            }
+        }
     }
 }
 
@@ -2553,9 +2538,9 @@ private struct CollapsibleSection<Content: View>: View {
             VStack(alignment: .leading, spacing: 10) {
                 HStack {
                     VStack(alignment: .leading, spacing: 3) {
-                        Text(title)
+                        Text(localized(title))
                             .npCardTitle()
-                        Text(summary.isEmpty ? "All" : summary)
+                        Text(summary.isEmpty ? localized("filter.all") : summary)
                             .npCaption()
                             .lineLimit(1)
                     }
@@ -2594,7 +2579,7 @@ private struct SectionLabel: View {
     }
 
     var body: some View {
-        Text(text)
+        Text(localized(text))
             .font(.subheadline.weight(.semibold))
             .foregroundStyle(NPColors.textPrimary)
     }
@@ -2606,7 +2591,7 @@ private struct LabeledField<Field: View>: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(title)
+            Text(localized(title))
                 .npCaption()
             field
                 .padding(.horizontal, 11)
@@ -2631,7 +2616,7 @@ private struct IconButton: View {
         .buttonStyle(.plain)
         .foregroundStyle(NPColors.brand)
         .disabled(!enabled)
-        .accessibilityLabel(accessibilityLabel)
+        .accessibilityLabel(localized(accessibilityLabel))
     }
 }
 
@@ -2658,7 +2643,7 @@ private struct ChoiceButton: View {
     }
 
     private var label: some View {
-        Text(text)
+        Text(localized(text))
             .font(.subheadline)
             .lineLimit(1)
             .minimumScaleFactor(0.82)
@@ -2681,7 +2666,7 @@ private struct TextButton: View {
 
     var body: some View {
         Button(action: action) {
-            Label(title, systemImage: systemImage)
+            Label(localized(title), systemImage: systemImage)
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
         }
@@ -2700,7 +2685,7 @@ private struct DetailText: View {
     }
 
     var body: some View {
-        Text(text)
+        Text(localized(text))
             .npCaption()
             .lineLimit(lineLimit)
     }
@@ -2746,7 +2731,7 @@ private struct StatusBanner: View {
                     }
                     .buttonStyle(.plain)
                     .foregroundStyle(NPColors.textSecondary)
-                    .accessibilityLabel("Dismiss")
+                    .accessibilityLabel(localized("common.dismiss"))
                 }
             }
             .foregroundStyle(NPColors.textPrimary)
@@ -2757,27 +2742,16 @@ private struct StatusBanner: View {
             .clipShape(RoundedRectangle(cornerRadius: NPRadius.button, style: .continuous))
             .padding(.horizontal, NPSpacing.outer)
             .padding(.top, NPSpacing.small)
+            .accessibilityIdentifier("globalStatusBanner")
         }
     }
 
     private var shouldShowStatus: Bool {
-        statusMessage.isEmpty == false && (
-            isBusy ||
-            statusMessage.contains("connected") ||
-            statusMessage.contains("saved") ||
-            statusMessage.contains("created") ||
-            statusMessage.contains("completed") ||
-            statusMessage.contains("downloaded") ||
-            statusMessage.contains("deleted") ||
-            statusMessage.contains("artifacts") ||
-            statusMessage.contains("OCR") ||
-            statusMessage.contains("online") ||
-            statusMessage.contains("offline test")
-        )
+        !statusMessage.isEmpty
     }
 
     private var isWarning: Bool {
-        errorMessage != nil || statusMessage.contains("failed") || statusMessage.contains("retry")
+        errorMessage != nil
     }
 
     private var bannerIcon: String {
@@ -2891,7 +2865,7 @@ private func statusColor(_ status: String) -> Color {
 
 private func taskStatusLabel(_ task: TaskItem) -> String {
     if task.cancelRequestedAt != nil && !["succeeded", "failed", "cancelled"].contains(task.status) {
-        return "Cancelling"
+        return localized("task.status.cancelling")
     }
     return statusLabel(task.status)
 }
@@ -2906,9 +2880,9 @@ private func taskStatusColor(_ task: TaskItem) -> Color {
 private func taskTypeLabel(_ taskType: String) -> String {
     switch taskType {
     case "purge_document":
-        return "Document cleanup"
+        return localized("task.type.document_cleanup")
     case "process_document", "document_process":
-        return "Document processing"
+        return localized("task.type.document_processing")
     case "openclaw", "openclaw_task":
         return "OpenClaw"
     default:
@@ -3022,13 +2996,14 @@ private struct AdaptiveComposerTextView: UIViewRepresentable {
         textView.showsVerticalScrollIndicator = true
         textView.alwaysBounceVertical = false
         textView.isScrollEnabled = false
-        textView.accessibilityLabel = "Ask AI Co-pilot"
+        textView.accessibilityLabel = localized("Ask AI Co-pilot")
         textView.accessibilityIdentifier = "openClawComposerTextView"
         return textView
     }
 
     func updateUIView(_ textView: UITextView, context: Context) {
         context.coordinator.update(parent: self)
+        textView.accessibilityLabel = localized("Ask AI Co-pilot")
         let didReplaceText = textView.text != text
         if textView.text != text {
             textView.text = text

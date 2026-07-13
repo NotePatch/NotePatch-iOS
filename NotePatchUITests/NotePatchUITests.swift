@@ -6,10 +6,16 @@ final class NotePatchUITests: XCTestCase {
         XCUIDevice.shared.orientation = .portrait
     }
 
+    private func makeApp(_ arguments: [String] = []) -> XCUIApplication {
+        let app = XCUIApplication()
+        app.launchArguments.append(contentsOf: ["-NotePatchUITestLanguage", "simplifiedChinese"])
+        app.launchArguments.append(contentsOf: arguments)
+        return app
+    }
+
     @MainActor
     func testAuthScreenLaunchesWithoutStoredSession() throws {
-        let app = XCUIApplication()
-        app.launchArguments.append("-NotePatchUITestNoSession")
+        let app = makeApp(["-NotePatchUITestNoSession"])
         app.launch()
 
         XCTAssertTrue(app.staticTexts["NotePatch"].waitForExistence(timeout: 5))
@@ -21,8 +27,7 @@ final class NotePatchUITests: XCTestCase {
 
     @MainActor
     func testUITestEmailLogsIntoOfflineWorkbenchWithoutPassword() throws {
-        let app = XCUIApplication()
-        app.launchArguments.append("-NotePatchUITestNoSession")
+        let app = makeApp(["-NotePatchUITestNoSession"])
         app.launch()
 
         let email = app.textFields["emailField"]
@@ -32,37 +37,40 @@ final class NotePatchUITests: XCTestCase {
         app.buttons["loginButton"].tap()
 
         XCTAssertTrue(app.otherElements["workbenchTabs"].waitForExistence(timeout: 8))
-        XCTAssertTrue(app.staticTexts["My Workspace"].exists)
-        XCTAssertTrue(app.staticTexts["UI 离线测试模式"].exists)
-        XCTAssertTrue(app.tabBars.buttons["笔记"].exists)
         XCTAssertTrue(app.tabBars.buttons["文档"].exists)
+        XCTAssertTrue(app.tabBars.buttons["笔记"].exists)
         XCTAssertTrue(app.tabBars.buttons["AI"].exists)
-        XCTAssertTrue(app.tabBars.buttons["复习"].exists)
+        XCTAssertTrue(app.tabBars.buttons["我的"].exists)
+        XCTAssertTrue(app.descendants(matching: .any)["globalStatusBanner"].exists)
+        app.tabBars.buttons["我的"].tap()
+        XCTAssertTrue(app.staticTexts["My Workspace"].exists)
     }
 
     @MainActor
     func testWorkbenchTabsUsePersonalWorkspaceLanguage() throws {
-        let app = XCUIApplication()
-        app.launchArguments.append("-NotePatchUITestWorkbench")
+        let app = makeApp(["-NotePatchUITestWorkbench"])
         app.launch()
 
         XCTAssertTrue(app.otherElements["workbenchTabs"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.staticTexts["My Workspace"].exists)
-        XCTAssertTrue(app.tabBars.buttons["笔记"].exists)
         XCTAssertTrue(app.tabBars.buttons["文档"].exists)
+        XCTAssertTrue(app.tabBars.buttons["笔记"].exists)
         XCTAssertTrue(app.tabBars.buttons["AI"].exists)
-        XCTAssertTrue(app.tabBars.buttons["复习"].exists)
+        XCTAssertTrue(app.tabBars.buttons["我的"].exists)
         app.tabBars.buttons["文档"].tap()
-        let documentSections = app.segmentedControls.firstMatch
+        let documentSections = app.segmentedControls["documentsSectionPicker"]
         XCTAssertTrue(documentSections.waitForExistence(timeout: 3))
         XCTAssertTrue(documentSections.buttons["文档"].exists)
         XCTAssertTrue(documentSections.buttons["任务"].exists)
         documentSections.buttons["任务"].tap()
         XCTAssertTrue(app.staticTexts["当前任务"].waitForExistence(timeout: 3))
-        app.tabBars.buttons["复习"].tap()
-        XCTAssertTrue(app.descendants(matching: .any)["learningTab"].waitForExistence(timeout: 3))
-        app.buttons["settingsButton"].tap()
-        XCTAssertTrue(app.descendants(matching: .any)["settingsTab"].waitForExistence(timeout: 3))
+        app.tabBars.buttons["笔记"].tap()
+        let notesSections = app.segmentedControls["notesSectionPicker"]
+        XCTAssertTrue(notesSections.waitForExistence(timeout: 3))
+        notesSections.buttons["复习"].tap()
+        XCTAssertTrue(app.segmentedControls["reviewSectionPicker"].waitForExistence(timeout: 3))
+        app.tabBars.buttons["我的"].tap()
+        XCTAssertTrue(app.descendants(matching: .any)["profileTab"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["My Workspace"].exists)
         XCTAssertFalse(app.staticTexts["family"].exists)
         XCTAssertFalse(app.staticTexts["class"].exists)
         XCTAssertFalse(app.staticTexts["school"].exists)
@@ -70,16 +78,15 @@ final class NotePatchUITests: XCTestCase {
 
     @MainActor
     func testOfflineStudyNoteCanBeReadInsideTheApp() throws {
-        let app = XCUIApplication()
-        app.launchArguments.append("-NotePatchUITestWorkbench")
+        let app = makeApp(["-NotePatchUITestWorkbench"])
         app.launch()
 
         XCTAssertTrue(app.otherElements["workbenchTabs"].waitForExistence(timeout: 5))
         app.tabBars.buttons["笔记"].tap()
-        let noteTitle = app.staticTexts["分数与比例笔记"]
+        let noteTitle = app.staticTexts["Fractions & Ratios Notes"]
         XCTAssertTrue(noteTitle.waitForExistence(timeout: 3))
         noteTitle.tap()
-        XCTAssertTrue(app.staticTexts["核心概念"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["Key Concepts"].waitForExistence(timeout: 3))
         XCTAssertTrue(app.buttons["editStudyNoteButton"].exists)
         app.buttons["editStudyNoteButton"].tap()
         XCTAssertTrue(app.textFields["studyNoteEditorTitle"].waitForExistence(timeout: 3))
@@ -90,8 +97,7 @@ final class NotePatchUITests: XCTestCase {
 
     @MainActor
     func testFailedDocumentPurgeShowsRetryAction() throws {
-        let app = XCUIApplication()
-        app.launchArguments.append(contentsOf: ["-NotePatchUITestWorkbench", "-NotePatchUITestPurgeFailure"])
+        let app = makeApp(["-NotePatchUITestWorkbench", "-NotePatchUITestPurgeFailure"])
         app.launch()
 
         XCTAssertTrue(app.otherElements["workbenchTabs"].waitForExistence(timeout: 5))
@@ -105,8 +111,7 @@ final class NotePatchUITests: XCTestCase {
 
     @MainActor
     func testPendingImageAppearsInUploadQueueAndCanBeRemoved() throws {
-        let app = XCUIApplication()
-        app.launchArguments.append(contentsOf: ["-NotePatchUITestWorkbench", "-NotePatchUITestPendingImage"])
+        let app = makeApp(["-NotePatchUITestWorkbench", "-NotePatchUITestPendingImage"])
         app.launch()
 
         XCTAssertTrue(app.otherElements["workbenchTabs"].waitForExistence(timeout: 5))
@@ -123,51 +128,48 @@ final class NotePatchUITests: XCTestCase {
 
     @MainActor
     func testOpenClawEditorAcceptsMultilineInput() throws {
-        let app = XCUIApplication()
-        app.launchArguments.append(contentsOf: ["-NotePatchUITestWorkbench", "-NotePatchUITestLongChat"])
+        let app = makeApp(["-NotePatchUITestWorkbench", "-NotePatchUITestLongChat"])
         app.launch()
 
         XCTAssertTrue(app.otherElements["workbenchTabs"].waitForExistence(timeout: 5))
-        app.tabBars.buttons["AI Co-pilot"].tap()
+        app.tabBars.buttons["AI"].tap()
 
-        let editor = app.textViews["Ask AI Co-pilot"]
+        let editor = app.textViews["openClawComposerTextView"]
         XCTAssertTrue(editor.waitForExistence(timeout: 3))
-        let attachmentButton = app.buttons["Add attachment"]
+        let attachmentButton = app.buttons["openClawAttachmentButton"]
         XCTAssertTrue(attachmentButton.exists)
         editor.tap()
         XCTAssertGreaterThan(attachmentButton.frame.minY, editor.frame.minY + 20)
         editor.typeText("第一行\n第二行")
-        let sendButton = app.buttons["Send"]
+        let sendButton = app.buttons["openClawSendButton"]
         XCTAssertTrue(sendButton.isEnabled)
         XCTAssertLessThanOrEqual(sendButton.frame.maxX, app.frame.maxX - 12)
     }
 
     @MainActor
     func testOpenClawAttachmentMenuShowsPhotoAndFileOptions() throws {
-        let app = XCUIApplication()
-        app.launchArguments.append("-NotePatchUITestWorkbench")
+        let app = makeApp(["-NotePatchUITestWorkbench"])
         app.launch()
 
         XCTAssertTrue(app.otherElements["workbenchTabs"].waitForExistence(timeout: 5))
-        app.tabBars.buttons["AI Co-pilot"].tap()
+        app.tabBars.buttons["AI"].tap()
 
-        let attachmentButton = app.buttons["Add attachment"]
+        let attachmentButton = app.buttons["openClawAttachmentButton"]
         XCTAssertTrue(attachmentButton.waitForExistence(timeout: 3))
         attachmentButton.tap()
-        XCTAssertTrue(app.buttons["Choose photo"].waitForExistence(timeout: 2))
-        XCTAssertTrue(app.buttons["Choose file"].exists)
+        XCTAssertTrue(app.buttons["选择照片"].waitForExistence(timeout: 2))
+        XCTAssertTrue(app.buttons["选择文件"].exists)
     }
 
     @MainActor
     func testOpenClawKeyboardStaysVisibleAndDismissesAfterCrossingComposer() throws {
-        let app = XCUIApplication()
-        app.launchArguments.append("-NotePatchUITestWorkbench")
+        let app = makeApp(["-NotePatchUITestWorkbench"])
         app.launch()
 
         XCTAssertTrue(app.otherElements["workbenchTabs"].waitForExistence(timeout: 5))
-        app.tabBars.buttons["AI Co-pilot"].tap()
+        app.tabBars.buttons["AI"].tap()
 
-        let editor = app.textViews["Ask AI Co-pilot"]
+        let editor = app.textViews["openClawComposerTextView"]
         XCTAssertTrue(editor.waitForExistence(timeout: 3))
         editor.tap()
 
@@ -190,7 +192,7 @@ final class NotePatchUITests: XCTestCase {
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: startY))
             .press(
                 forDuration: 0.05,
-                thenDragTo: app.buttons["发送"].coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.9))
+                thenDragTo: app.buttons["openClawSendButton"].coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.9))
             )
 
         let keyboardDismissed = expectation(
@@ -202,14 +204,16 @@ final class NotePatchUITests: XCTestCase {
 
     @MainActor
     func testLearningSearchAndGradingWorkflowIsAvailable() throws {
-        let app = XCUIApplication()
-        app.launchArguments.append("-NotePatchUITestWorkbench")
+        let app = makeApp(["-NotePatchUITestWorkbench"])
         app.launch()
 
         XCTAssertTrue(app.otherElements["workbenchTabs"].waitForExistence(timeout: 5))
-        app.tabBars.buttons["复习"].tap()
+        app.tabBars.buttons["笔记"].tap()
+        let notesSections = app.segmentedControls["notesSectionPicker"]
+        XCTAssertTrue(notesSections.waitForExistence(timeout: 3))
+        notesSections.buttons["复习"].tap()
 
-        let segments = app.segmentedControls.firstMatch
+        let segments = app.segmentedControls["reviewSectionPicker"]
         XCTAssertTrue(segments.waitForExistence(timeout: 3))
         segments.buttons["检索"].tap()
         let query = app.textFields.firstMatch
@@ -229,7 +233,7 @@ final class NotePatchUITests: XCTestCase {
     @MainActor
     func testLaunchPerformance() throws {
         measure(metrics: [XCTApplicationLaunchMetric()]) {
-            let app = XCUIApplication()
+            let app = makeApp()
             app.launchArguments.append("-NotePatchUITestNoSession")
             app.launch()
         }

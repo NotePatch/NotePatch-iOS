@@ -21,28 +21,42 @@ private struct DeferredWorkspaceLoadKey: Hashable {
 }
 
 enum WorkbenchTab: Int, CaseIterable, Identifiable {
-    case notes
     case documents
+    case notes
     case openClaw
-    case learning
+    case profile
 
     var id: Int { rawValue }
 
     var title: String {
         switch self {
-        case .notes: return "Notes"
-        case .documents: return "Documents"
-        case .openClaw: return "AI Co-pilot"
-        case .learning: return "Review"
+        case .documents: return localized("tab.documents")
+        case .notes: return localized("tab.notes")
+        case .openClaw: return localized("tab.ai")
+        case .profile: return localized("tab.me")
         }
     }
 
     var iconName: String {
         switch self {
-        case .notes: return "note.text"
         case .documents: return "doc.text"
+        case .notes: return "note.text"
         case .openClaw: return "sparkles"
-        case .learning: return "book.closed"
+        case .profile: return "person.crop.circle"
+        }
+    }
+}
+
+enum NotesSection: String, CaseIterable, Identifiable {
+    case notes
+    case review
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .notes: return localized("notes.section.notes")
+        case .review: return localized("notes.section.review")
         }
     }
 }
@@ -55,8 +69,8 @@ enum DocumentsSection: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .documents: return "Documents"
-        case .tasks: return "Tasks"
+        case .documents: return localized("documents.section.documents")
+        case .tasks: return localized("documents.section.tasks")
         }
     }
 }
@@ -69,9 +83,9 @@ enum LearningSection: String, CaseIterable, Identifiable {
     var id: String { rawValue }
     var title: String {
         switch self {
-        case .units: return "Units"
-        case .search: return "Search"
-        case .grading: return "Grading"
+        case .units: return localized("review.section.units")
+        case .search: return localized("review.section.search")
+        case .grading: return localized("review.section.grading")
         }
     }
 }
@@ -131,10 +145,11 @@ final class NotePatchViewModel: ObservableObject {
     @Published var passwordText = ""
     @Published var fullNameText: String
     @Published var isBusy = false
-    @Published var statusMessage = ""
-    @Published var errorMessage: String?
+    @Published private var statusDisplayText: AppDisplayText = .raw("")
+    @Published private var errorDisplayText: AppDisplayText?
     @Published var selectedTab: WorkbenchTab = .documents
     @Published var selectedDocumentsSection: DocumentsSection = .documents
+    @Published var selectedNotesSection: NotesSection = .notes
 
     @Published var workspaces: [WorkspaceItem] = []
     @Published var selectedWorkspaceId: String?
@@ -152,7 +167,7 @@ final class NotePatchViewModel: ObservableObject {
     @Published var documentKindFilter = ""
     @Published var fileTypeFilter = ""
     @Published var uploadProgressPercent: Int?
-    @Published var uploadProgressLabel = ""
+    @Published private var uploadProgressDisplayText: AppDisplayText = .raw("")
     let openClawState: OpenClawViewState
     let openClawComposerState: OpenClawComposerState
     @Published var aiHistoryEnabled = true
@@ -213,6 +228,37 @@ final class NotePatchViewModel: ObservableObject {
     private var deferredLoadGenerations: [DeferredWorkspaceLoadKey: UUID] = [:]
 
     var uploadCacheDirectory: URL { cacheDirectory }
+
+    var statusMessage: String {
+        get { statusDisplayText.resolved() }
+        set { statusDisplayText = newValue.isEmpty ? .raw("") : .localized(newValue) }
+    }
+
+    var errorMessage: String? {
+        get { errorDisplayText?.resolved() }
+        set { errorDisplayText = newValue.map { .localized($0) } }
+    }
+
+    var uploadProgressLabel: String {
+        get { uploadProgressDisplayText.resolved() }
+        set { uploadProgressDisplayText = newValue.isEmpty ? .raw("") : .localized(newValue) }
+    }
+
+    private func setStatus(_ key: String, _ arguments: String...) {
+        statusDisplayText = .localized(key, arguments)
+    }
+
+    private func setError(_ key: String, _ arguments: String...) {
+        errorDisplayText = .localized(key, arguments)
+    }
+
+    private func setRawError(_ message: String) {
+        errorDisplayText = .raw(message)
+    }
+
+    private func setUploadProgress(_ key: String, _ arguments: String...) {
+        uploadProgressDisplayText = .localized(key, arguments)
+    }
 
     var openClawInput: String {
         get { openClawComposerState.text }
@@ -325,12 +371,14 @@ final class NotePatchViewModel: ObservableObject {
     func ensureContentForSelectedTabLoaded() {
         switch selectedTab {
         case .notes:
-            loadNotesOverview(force: false)
+            if selectedNotesSection == .notes {
+                loadNotesOverview(force: false)
+            } else {
+                loadLearningDashboard(force: false)
+            }
         case .openClaw:
             loadChatHistory(force: false)
-        case .learning:
-            loadLearningDashboard(force: false)
-        case .documents:
+        case .documents, .profile:
             break
         }
     }
@@ -516,7 +564,7 @@ final class NotePatchViewModel: ObservableObject {
             do {
                 try await refreshWorkspaceContent(activeSession: session ?? activeSession, workspaceId: workspaceId)
                 let name = workspaces.first(where: { $0.id == workspaceId })?.name ?? workspaceId
-                statusMessage = "Switched to \(name)."
+                setStatus("workspace.switched", name)
             } catch {
                 showError(error)
             }
@@ -661,7 +709,7 @@ final class NotePatchViewModel: ObservableObject {
             )
         )
         errorMessage = nil
-        statusMessage = "Added \(uploadFile.filename) to upload queue."
+        setStatus("upload.added_to_queue", uploadFile.filename)
     }
 
     func toggleQueuedUpload(_ id: UUID) {
@@ -693,7 +741,7 @@ final class NotePatchViewModel: ObservableObject {
                 guard let index = queuedUploadItems.firstIndex(where: { $0.id == id }) else { continue }
                 queuedUploadItems[index].state = .uploading
                 let item = queuedUploadItems[index]
-                uploadProgressLabel = "\(offset + 1)/\(selectedIds.count) · \(item.file.filename)"
+                setUploadProgress("upload.batch_progress", String(offset + 1), String(selectedIds.count), item.file.filename)
                 uploadProgressPercent = 0
                 do {
                     try await performUpload(item, activeSession: activeSession, workspaceId: workspaceId)
@@ -721,7 +769,7 @@ final class NotePatchViewModel: ObservableObject {
             if failureMessages.isEmpty {
                 statusMessage = "Selected files uploaded."
             } else {
-                errorMessage = "Some files failed to upload. You can keep them and retry.\n" + failureMessages.joined(separator: "\n")
+                setError("upload.some_failed", failureMessages.joined(separator: "\n"))
             }
         }
     }
@@ -748,7 +796,7 @@ final class NotePatchViewModel: ObservableObject {
             let progress = total <= 0 ? 0 : Int((uploaded * 100) / total).clamped(to: 0...100)
             await MainActor.run {
                 self?.uploadProgressPercent = progress
-                self?.statusMessage = "TUS uploading: \(progress)%"
+                self?.setStatus("upload.tus_progress", String(progress))
             }
         }
         statusMessage = "Confirming upload..."
@@ -788,7 +836,11 @@ final class NotePatchViewModel: ObservableObject {
                 let finishedTask = try await pollTask(activeSession: activeSession, workspaceId: workspaceId, taskId: task.id) { [weak self] updatedTask, events in
                     self?.activeTask = updatedTask
                     self?.taskEvents = events
-                    self?.statusMessage = "Task \(updatedTask.status): \(updatedTask.progress.clamped(to: 0...100))%"
+                    self?.setStatus(
+                        "task.progress",
+                        statusLabel(updatedTask.status),
+                        String(updatedTask.progress.clamped(to: 0...100))
+                    )
                 }
                 try await refreshWorkspaceContent(activeSession: activeSession, workspaceId: workspaceId)
                 selectedArtifactDocumentId = document.id
@@ -1014,7 +1066,7 @@ final class NotePatchViewModel: ObservableObject {
                         )
                     }
                 } catch {
-                    handlePostCommitRefreshFailure(error, completion: "Conversation deleted")
+                    handlePostCommitRefreshFailure(error, completionKey: "operation.conversation_deleted")
                 }
             } catch {
                 showError(error)
@@ -1250,7 +1302,7 @@ final class NotePatchViewModel: ObservableObject {
                         selectedStudyNoteItem = refreshed
                     }
                 } catch {
-                    handlePostCommitRefreshFailure(error, completion: "New note version saved")
+                    handlePostCommitRefreshFailure(error, completionKey: "operation.note_revision_saved")
                 }
             } catch let error as LearningBackendError where error.statusCode == 409 {
                 await handleStudyNoteRevisionConflict(
@@ -1311,7 +1363,9 @@ final class NotePatchViewModel: ObservableObject {
 
     var gradingModeLabel: String? {
         guard let lastGradingTask else { return nil }
-        return lastGradingTask.result?.objectStringValue(for: "grading_mode") == "official" ? "Official Grading" : "Diagnostic Grading"
+        return lastGradingTask.result?.objectStringValue(for: "grading_mode") == "official"
+            ? localized("grading.mode.official")
+            : localized("grading.mode.diagnostic")
     }
 
     var gradingConfidence: Double? {
@@ -1348,7 +1402,11 @@ final class NotePatchViewModel: ObservableObject {
                 )
                 knowledgeResults = response.items
                 hasSearchedKnowledge = true
-                statusMessage = response.items.isEmpty ? "No matching results in the knowledge base." : "Found \(response.items.count) related results."
+                if response.items.isEmpty {
+                    statusMessage = "No matching results in the knowledge base."
+                } else {
+                    setStatus("knowledge.results_found", String(response.items.count))
+                }
             } catch {
                 showError(error)
             }
@@ -1509,7 +1567,7 @@ final class NotePatchViewModel: ObservableObject {
                 do {
                     homeworkReferences = try await client.listHomeworkReferences(workspaceId: workspaceId, homeworkId: homeworkId)
                 } catch {
-                    handlePostCommitRefreshFailure(error, completion: "Reference removed, please re-grade")
+                    handlePostCommitRefreshFailure(error, completionKey: "operation.reference_removed")
                 }
             } catch {
                 showError(error)
@@ -1534,7 +1592,11 @@ final class NotePatchViewModel: ObservableObject {
                 let finished = try await pollTask(activeSession: activeSession, workspaceId: workspaceId, taskId: task.id) { [weak self] task, events in
                     self?.activeTask = task
                     self?.taskEvents = events
-                    self?.statusMessage = "Grading task \(task.status): \(task.progress.clamped(to: 0...100))%"
+                    self?.setStatus(
+                        "grading.task_progress",
+                        statusLabel(task.status),
+                        String(task.progress.clamped(to: 0...100))
+                    )
                 }
                 lastGradingTask = finished
                 try await refreshHomeworks(activeSession: activeSession, workspaceId: workspaceId)
@@ -1652,7 +1714,11 @@ final class NotePatchViewModel: ObservableObject {
                 ) { [weak self] task, events in
                     self?.activeTask = task
                     self?.taskEvents = events
-                    self?.statusMessage = "Document cleanup \(task.status): \(task.progress.clamped(to: 0...100))%"
+                    self?.setStatus(
+                        "document.cleanup_progress",
+                        statusLabel(task.status),
+                        String(task.progress.clamped(to: 0...100))
+                    )
                 }
 
                 guard finishedTask.status == "succeeded" else { return }
@@ -1660,7 +1726,7 @@ final class NotePatchViewModel: ObservableObject {
                 isDocumentPurgeRetryAvailable = false
                 statusMessage = "Document and derivative data cleanup complete."
                 if let refreshError = await refreshAfterDocumentDeletion(activeSession: activeSession, workspaceId: workspaceId) {
-                    handlePostCommitRefreshFailure(refreshError, completion: "Document and derivative data cleaned up")
+                    handlePostCommitRefreshFailure(refreshError, completionKey: "operation.document_cleanup_completed")
                 }
             } catch {
                 if deletionAccepted && !shouldStopPostCommitRefresh(for: error) {
@@ -1835,17 +1901,23 @@ final class NotePatchViewModel: ObservableObject {
         } else if let backendError = error as? LearningBackendError, backendError.statusCode == 403 {
             recoverFromWorkspaceAccessDenied()
         }
-        errorMessage = friendlyError(error)
+        if let backendError = error as? LearningBackendError,
+           backendError.statusCode != nil,
+           !backendError.shouldClearSession {
+            setRawError(friendlyError(error))
+        } else {
+            errorMessage = friendlyError(error)
+        }
         statusMessage = ""
     }
 
-    private func handlePostCommitRefreshFailure(_ error: Error, completion: String) {
+    private func handlePostCommitRefreshFailure(_ error: Error, completionKey: String) {
         if shouldStopPostCommitRefresh(for: error) {
             showError(error)
             return
         }
         errorMessage = nil
-        statusMessage = "\(completion), but refresh failed: \(friendlyError(error))"
+        setStatus("operation.refresh_failed", localized(completionKey), localized(friendlyError(error)))
     }
 
     private func shouldStopPostCommitRefresh(for error: Error) -> Bool {
@@ -2275,7 +2347,7 @@ final class NotePatchViewModel: ObservableObject {
         studyNoteGroups = groups
         let failedCount = results.filter { $0.error != nil }.count
         if failedCount > 0 {
-            statusMessage = "Loaded \(groups.count) note unit(s), \(failedCount) unit(s) failed to load. Tap to refresh and retry."
+            setStatus("notes.partial_load", String(groups.count), String(failedCount))
         }
     }
 
@@ -2403,7 +2475,7 @@ final class NotePatchViewModel: ObservableObject {
         saveSelectedWorkspace(selected?.id)
         if let selected {
             try await refreshWorkspaceContent(activeSession: session ?? activeSession, workspaceId: selected.id)
-            statusMessage = "Workspace loaded: \(selected.name)"
+            setStatus("workspace.loaded", selected.name)
             ensureContentForSelectedTabLoaded()
         } else {
             documents = []
@@ -2469,7 +2541,7 @@ final class NotePatchViewModel: ObservableObject {
                 )
             } catch let error as LearningBackendError where error.statusCode == 409 {
                 lastConflict = error
-                statusMessage = "tusd is syncing files, retrying \(attempt + 1)/\(completeUploadMaxRetries)..."
+                setStatus("upload.tusd_sync_retry", String(attempt + 1), String(completeUploadMaxRetries))
                 try await Task.sleep(nanoseconds: 1_000_000_000)
             }
         }

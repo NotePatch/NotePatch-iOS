@@ -679,19 +679,19 @@ final class LearningBackendClient {
     private static func defaultErrorMessage(_ status: Int) -> String {
         switch status {
         case 401:
-            return "Session expired or invalid. Please sign in again."
+            return localized("error.http.unauthorized")
         case 403:
-            return "This account does not have access to that workspace."
+            return localized("error.http.forbidden")
         case 404:
-            return "Resource not found or has been deleted."
+            return localized("error.http.not_found")
         case 409:
-            return "Upload not yet complete or request conflict. Please try again later."
+            return localized("error.http.conflict")
         case 410:
-            return "This endpoint is currently disabled."
+            return localized("error.http.gone")
         case 422:
-            return "Request parameters do not meet server requirements."
+            return localized("error.http.validation")
         default:
-            return "Server request failed: HTTP \(status)"
+            return localizedFormat("error.http.generic", String(status))
         }
     }
 }
