@@ -215,6 +215,7 @@ struct NPToolbarIconButtonStyle: ButtonStyle {
     }
 }
 
+
 // MARK: - Typography
 
 extension View {
