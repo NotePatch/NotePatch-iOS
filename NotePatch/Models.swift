@@ -1,7 +1,8 @@
 import Foundation
 
-let defaultLearningBackendBaseURL = "http://192.168.100.123:8001/api/v1"
-let defaultTUSDBaseURL = "http://192.168.100.123:1080/files/"
+let defaultServiceRootURL = "https://5mbps.me:8443/notepatch/1"
+let defaultLearningBackendBaseURL = "\(defaultServiceRootURL)/api/v1"
+let defaultTUSDBaseURL = "\(defaultServiceRootURL)/files/"
 
 func normalizeLearningBackendBaseURL(_ rawBaseURL: String) -> String {
     let trimmed = rawBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -18,8 +19,11 @@ func normalizeLearningBackendBaseURL(_ rawBaseURL: String) -> String {
     guard var components = URLComponents(string: normalized) else {
         return normalized
     }
-    if components.path.isEmpty || components.path == "/" {
-        components.path = "/api/v1"
+    let path = components.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+    let defaultRootPath = URLComponents(string: defaultServiceRootURL)?.path
+        .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+    if path.isEmpty || path == defaultRootPath {
+        components.path = path.isEmpty ? "/api/v1" : "/\(path)/api/v1"
     }
     return components.string?.trimmingCharacters(in: CharacterSet(charactersIn: "/")) ?? normalized
 }
@@ -34,7 +38,18 @@ func normalizeTUSBaseURL(_ rawBaseURL: String) -> String {
     } else {
         withScheme = "http://\(trimmed)"
     }
-    return withScheme.hasSuffix("/") ? withScheme : "\(withScheme)/"
+    let normalized = withScheme.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+    guard var components = URLComponents(string: normalized) else {
+        return "\(normalized)/"
+    }
+    let path = components.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+    let defaultRootPath = URLComponents(string: defaultServiceRootURL)?.path
+        .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+    if path.isEmpty || path == defaultRootPath {
+        components.path = path.isEmpty ? "/files" : "/\(path)/files"
+    }
+    let resolved = components.string?.trimmingCharacters(in: CharacterSet(charactersIn: "/")) ?? normalized
+    return "\(resolved)/"
 }
 
 struct LearningBackendError: Error, LocalizedError {
