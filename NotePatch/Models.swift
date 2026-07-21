@@ -1,12 +1,12 @@
 import Foundation
 
 let defaultServiceRootURL = "https://5mbps.me:8443/notepatch/1"
-let defaultLearningBackendBaseURL = "\(defaultServiceRootURL)/api/v1"
-let defaultTUSDBaseURL = "\(defaultServiceRootURL)/files/"
+let defaultTUSDServiceRootURL = "https://5mbps.me:8443/notepatch/2"
+let defaultLearningBackendBaseURL = defaultServiceRootURL
+let defaultTUSDBaseURL = "\(defaultTUSDServiceRootURL)/files/"
 
 func normalizeLearningBackendBaseURL(_ rawBaseURL: String) -> String {
     let trimmed = rawBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)
-        .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
     let withScheme: String
     if trimmed.isEmpty {
         withScheme = defaultLearningBackendBaseURL
@@ -20,10 +20,19 @@ func normalizeLearningBackendBaseURL(_ rawBaseURL: String) -> String {
         return normalized
     }
     let path = components.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-    let defaultRootPath = URLComponents(string: defaultServiceRootURL)?.path
-        .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-    if path.isEmpty || path == defaultRootPath {
-        components.path = path.isEmpty ? "/api/v1" : "/\(path)/api/v1"
+    components.path = path.isEmpty ? "" : "/\(path)"
+    components.query = nil
+    components.fragment = nil
+    return components.string?.trimmingCharacters(in: CharacterSet(charactersIn: "/")) ?? normalized
+}
+
+func migrateLegacyLearningBackendBaseURL(_ rawBaseURL: String) -> String {
+    let normalized = normalizeLearningBackendBaseURL(rawBaseURL)
+    guard var components = URLComponents(string: normalized) else { return normalized }
+    var segments = components.path.split(separator: "/").map(String.init)
+    if segments.count >= 2, Array(segments.suffix(2)) == ["api", "v1"] {
+        segments.removeLast(2)
+        components.path = segments.isEmpty ? "" : "/\(segments.joined(separator: "/"))"
     }
     return components.string?.trimmingCharacters(in: CharacterSet(charactersIn: "/")) ?? normalized
 }
@@ -43,7 +52,7 @@ func normalizeTUSBaseURL(_ rawBaseURL: String) -> String {
         return "\(normalized)/"
     }
     let path = components.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-    let defaultRootPath = URLComponents(string: defaultServiceRootURL)?.path
+    let defaultRootPath = URLComponents(string: defaultTUSDServiceRootURL)?.path
         .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
     if path.isEmpty || path == defaultRootPath {
         components.path = path.isEmpty ? "/files" : "/\(path)/files"
@@ -59,7 +68,7 @@ struct LearningBackendError: Error, LocalizedError {
     let refreshTokenAttempt: String?
     let cause: Error?
 
-    init(
+    nonisolated init(
         _ message: String,
         statusCode: Int? = nil,
         shouldClearSession: Bool = false,
@@ -73,7 +82,7 @@ struct LearningBackendError: Error, LocalizedError {
         self.cause = cause
     }
 
-    var errorDescription: String? {
+    nonisolated var errorDescription: String? {
         message
     }
 }
@@ -619,99 +628,210 @@ struct ChatMessagesResponse: Decodable, Equatable {
 
 struct LearningUnit: Decodable, Equatable, Identifiable {
     let id: String
+    let workspaceId: String?
     let title: String
     let subject: String?
     let gradeLevel: String?
     let topic: String?
+    let metadata: [String: JSONValue]
+    let knowledgeRevision: Int
+    let attemptRevision: Int
+    let notesGeneratedRevision: Int
+    let noteGenerationDueAt: String?
+    let createdAt: String?
+    let updatedAt: String?
 
     enum CodingKeys: String, CodingKey {
         case id
+        case workspaceId = "workspace_id"
         case title
         case subject
         case gradeLevel = "grade_level"
         case topic
+        case metadata
+        case knowledgeRevision = "knowledge_revision"
+        case attemptRevision = "attempt_revision"
+        case notesGeneratedRevision = "notes_generated_revision"
+        case noteGenerationDueAt = "note_generation_due_at"
+        case createdAt = "created_at"
+        case updatedAt = "updated_at"
+    }
+
+    init(
+        id: String,
+        workspaceId: String? = nil,
+        title: String,
+        subject: String? = nil,
+        gradeLevel: String? = nil,
+        topic: String? = nil,
+        metadata: [String: JSONValue] = [:],
+        knowledgeRevision: Int = 0,
+        attemptRevision: Int = 0,
+        notesGeneratedRevision: Int = 0,
+        noteGenerationDueAt: String? = nil,
+        createdAt: String? = nil,
+        updatedAt: String? = nil
+    ) {
+        self.id = id
+        self.workspaceId = workspaceId
+        self.title = title
+        self.subject = subject
+        self.gradeLevel = gradeLevel
+        self.topic = topic
+        self.metadata = metadata
+        self.knowledgeRevision = knowledgeRevision
+        self.attemptRevision = attemptRevision
+        self.notesGeneratedRevision = notesGeneratedRevision
+        self.noteGenerationDueAt = noteGenerationDueAt
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        workspaceId = try container.decodeIfPresent(String.self, forKey: .workspaceId)
+        title = try container.decode(String.self, forKey: .title)
+        subject = try container.decodeIfPresent(String.self, forKey: .subject)
+        gradeLevel = try container.decodeIfPresent(String.self, forKey: .gradeLevel)
+        topic = try container.decodeIfPresent(String.self, forKey: .topic)
+        metadata = try container.decodeIfPresent([String: JSONValue].self, forKey: .metadata) ?? [:]
+        knowledgeRevision = try container.decodeIfPresent(Int.self, forKey: .knowledgeRevision) ?? 0
+        attemptRevision = try container.decodeIfPresent(Int.self, forKey: .attemptRevision) ?? 0
+        notesGeneratedRevision = try container.decodeIfPresent(Int.self, forKey: .notesGeneratedRevision) ?? 0
+        noteGenerationDueAt = try container.decodeIfPresent(String.self, forKey: .noteGenerationDueAt)
+        createdAt = try container.decodeIfPresent(String.self, forKey: .createdAt)
+        updatedAt = try container.decodeIfPresent(String.self, forKey: .updatedAt)
     }
 }
 
 struct StudyNoteVersion: Decodable, Equatable, Identifiable {
     let id: String
+    let workspaceId: String?
     let learningUnitId: String
+    let taskId: String?
     let versionNo: Int
     let title: String
-    let markdownObjectKey: String
+    let htmlObjectKey: String
     let jsonObjectKey: String
-    let highlightedObjectKey: String?
+    let highlightedHTMLObjectKey: String?
     let highlightMapObjectKey: String?
+    let knowledgePointIds: [String]
+    let sourceDocumentIds: [String]
+    let sourceMistakeIds: [String]
     let sourceVersionId: String?
+    let editedByUserId: String?
     let editOrigin: String?
     let editSummary: String?
+    let metadata: [String: JSONValue]
+    let createdAt: String?
     let downloadURLs: [String: String]
 
     enum CodingKeys: String, CodingKey {
         case id
+        case workspaceId = "workspace_id"
         case learningUnitId = "learning_unit_id"
+        case taskId = "task_id"
         case versionNo = "version_no"
         case title
-        case markdownObjectKey = "markdown_object_key"
+        case htmlObjectKey = "html_object_key"
+        case legacyMarkdownObjectKey = "markdown_object_key"
         case jsonObjectKey = "json_object_key"
-        case highlightedObjectKey = "highlighted_object_key"
+        case highlightedHTMLObjectKey = "highlighted_html_object_key"
+        case legacyHighlightedObjectKey = "highlighted_object_key"
         case highlightMapObjectKey = "highlight_map_object_key"
+        case knowledgePointIds = "knowledge_point_ids"
+        case sourceDocumentIds = "source_document_ids"
+        case sourceMistakeIds = "source_mistake_ids"
         case sourceVersionId = "source_version_id"
+        case editedByUserId = "edited_by_user_id"
         case editOrigin = "edit_origin"
         case editSummary = "edit_summary"
+        case metadata
+        case createdAt = "created_at"
         case downloadURLs = "download_urls"
     }
 
     init(
         id: String,
+        workspaceId: String? = nil,
         learningUnitId: String,
+        taskId: String? = nil,
         versionNo: Int,
         title: String,
-        markdownObjectKey: String,
+        htmlObjectKey: String,
         jsonObjectKey: String,
-        highlightedObjectKey: String? = nil,
+        highlightedHTMLObjectKey: String? = nil,
         highlightMapObjectKey: String? = nil,
+        knowledgePointIds: [String] = [],
+        sourceDocumentIds: [String] = [],
+        sourceMistakeIds: [String] = [],
         sourceVersionId: String? = nil,
+        editedByUserId: String? = nil,
         editOrigin: String? = nil,
         editSummary: String? = nil,
+        metadata: [String: JSONValue] = [:],
+        createdAt: String? = nil,
         downloadURLs: [String: String] = [:]
     ) {
         self.id = id
+        self.workspaceId = workspaceId
         self.learningUnitId = learningUnitId
+        self.taskId = taskId
         self.versionNo = versionNo
         self.title = title
-        self.markdownObjectKey = markdownObjectKey
+        self.htmlObjectKey = htmlObjectKey
         self.jsonObjectKey = jsonObjectKey
-        self.highlightedObjectKey = highlightedObjectKey
+        self.highlightedHTMLObjectKey = highlightedHTMLObjectKey
         self.highlightMapObjectKey = highlightMapObjectKey
+        self.knowledgePointIds = knowledgePointIds
+        self.sourceDocumentIds = sourceDocumentIds
+        self.sourceMistakeIds = sourceMistakeIds
         self.sourceVersionId = sourceVersionId
+        self.editedByUserId = editedByUserId
         self.editOrigin = editOrigin
         self.editSummary = editSummary
+        self.metadata = metadata
+        self.createdAt = createdAt
         self.downloadURLs = downloadURLs
     }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(String.self, forKey: .id)
+        workspaceId = try container.decodeIfPresent(String.self, forKey: .workspaceId)
         learningUnitId = try container.decode(String.self, forKey: .learningUnitId)
+        taskId = try container.decodeIfPresent(String.self, forKey: .taskId)
         versionNo = try container.decode(Int.self, forKey: .versionNo)
         title = try container.decode(String.self, forKey: .title)
-        markdownObjectKey = try container.decode(String.self, forKey: .markdownObjectKey)
+        htmlObjectKey = try container.decodeIfPresent(String.self, forKey: .htmlObjectKey)
+            ?? container.decodeIfPresent(String.self, forKey: .legacyMarkdownObjectKey)
+            ?? ""
         jsonObjectKey = try container.decode(String.self, forKey: .jsonObjectKey)
-        highlightedObjectKey = try container.decodeIfPresent(String.self, forKey: .highlightedObjectKey)
+        highlightedHTMLObjectKey = try container.decodeIfPresent(String.self, forKey: .highlightedHTMLObjectKey)
+            ?? container.decodeIfPresent(String.self, forKey: .legacyHighlightedObjectKey)
         highlightMapObjectKey = try container.decodeIfPresent(String.self, forKey: .highlightMapObjectKey)
+        knowledgePointIds = try container.decodeIfPresent([String].self, forKey: .knowledgePointIds) ?? []
+        sourceDocumentIds = try container.decodeIfPresent([String].self, forKey: .sourceDocumentIds) ?? []
+        sourceMistakeIds = try container.decodeIfPresent([String].self, forKey: .sourceMistakeIds) ?? []
         sourceVersionId = try container.decodeIfPresent(String.self, forKey: .sourceVersionId)
+        editedByUserId = try container.decodeIfPresent(String.self, forKey: .editedByUserId)
         editOrigin = try container.decodeIfPresent(String.self, forKey: .editOrigin)
         editSummary = try container.decodeIfPresent(String.self, forKey: .editSummary)
+        metadata = try container.decodeIfPresent([String: JSONValue].self, forKey: .metadata) ?? [:]
+        createdAt = try container.decodeIfPresent(String.self, forKey: .createdAt)
         downloadURLs = try container.decodeIfPresent([String: String].self, forKey: .downloadURLs) ?? [:]
     }
 
     var preferredDownloadURL: String? {
-        downloadURLs["highlighted"] ?? downloadURLs["markdown"] ?? downloadURLs["json"]
+        preferredHTMLDownloadURL ?? downloadURLs["json"]
     }
 
-    var preferredMarkdownDownloadURL: String? {
-        downloadURLs["highlighted"] ?? downloadURLs["markdown"]
+    var preferredHTMLDownloadURL: String? {
+        downloadURLs["highlighted_html"]
+            ?? downloadURLs["html"]
+            ?? downloadURLs["highlighted"]
+            ?? downloadURLs["markdown"]
     }
 
     var jsonDownloadURL: String? {
@@ -720,21 +840,21 @@ struct StudyNoteVersion: Decodable, Equatable, Identifiable {
 
     var revisionOriginLabel: String {
         switch editOrigin {
-        case "user": return "User Revision"
-        case "admin": return "Admin Revision"
-        case "skill": return "Auto-generated"
-        default: return versionNo > 1 ? "Revised" : "Auto-generated"
+        case "user": return localized("note.origin.user")
+        case "admin": return localized("note.origin.admin")
+        case "skill": return localized("note.origin.generated")
+        default: return versionNo > 1 ? localized("note.origin.revised") : localized("note.origin.generated")
         }
     }
 }
 
 struct StudyNoteRevisionInput: Equatable {
-    let markdown: String
+    let html: String
     let title: String?
     let editSummary: String?
 
     var payload: [String: Any] {
-        var values: [String: Any] = ["markdown": markdown]
+        var values: [String: Any] = ["html": html]
         if let title { values["title"] = title }
         if let editSummary { values["edit_summary"] = editSummary }
         return values
@@ -763,6 +883,153 @@ struct StudyNoteGroup: Equatable, Identifiable {
     let notes: [StudyNoteListItem]
 
     var id: String { learningUnit.id }
+
+    var generationState: StudyNoteGenerationState {
+        if learningUnit.knowledgeRevision == 0 { return .noKnowledge }
+        if learningUnit.notesGeneratedRevision < learningUnit.knowledgeRevision { return .generating }
+        return notes.isEmpty ? .unavailable : .ready
+    }
+
+    var isLatestNoteStale: Bool {
+        !notes.isEmpty && learningUnit.notesGeneratedRevision < learningUnit.knowledgeRevision
+    }
+}
+
+enum StudyNoteGenerationState: String, Equatable {
+    case noKnowledge
+    case generating
+    case ready
+    case unavailable
+}
+
+enum StudyNoteDownloadKind: String {
+    case html
+    case json
+    case highlightedHTML = "highlighted_html"
+    case highlightMap = "highlight_map"
+}
+
+struct StudyNoteDownloadURLResponse: Decodable, Equatable {
+    let noteVersionId: String
+    let learningUnitId: String
+    let kind: String
+    let filename: String
+    let expiresIn: Int
+    let downloadURL: String
+
+    enum CodingKeys: String, CodingKey {
+        case noteVersionId = "note_version_id"
+        case learningUnitId = "learning_unit_id"
+        case kind
+        case filename
+        case expiresIn = "expires_in"
+        case downloadURL = "download_url"
+    }
+}
+
+struct FlashcardDeck: Decodable, Equatable, Identifiable {
+    let id: String
+    let workspaceId: String
+    let learningUnitId: String
+    let studyNoteVersionId: String
+    let taskId: String?
+    let versionNo: Int
+    let attemptRevision: Int
+    let weightingConfig: [String: JSONValue]
+    let metadata: [String: JSONValue]
+    let createdAt: String
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case workspaceId = "workspace_id"
+        case learningUnitId = "learning_unit_id"
+        case studyNoteVersionId = "study_note_version_id"
+        case taskId = "task_id"
+        case versionNo = "version_no"
+        case attemptRevision = "attempt_revision"
+        case weightingConfig = "weighting_config"
+        case metadata
+        case createdAt = "created_at"
+    }
+
+    init(
+        id: String,
+        workspaceId: String,
+        learningUnitId: String,
+        studyNoteVersionId: String,
+        taskId: String? = nil,
+        versionNo: Int,
+        attemptRevision: Int,
+        weightingConfig: [String: JSONValue] = [:],
+        metadata: [String: JSONValue] = [:],
+        createdAt: String
+    ) {
+        self.id = id
+        self.workspaceId = workspaceId
+        self.learningUnitId = learningUnitId
+        self.studyNoteVersionId = studyNoteVersionId
+        self.taskId = taskId
+        self.versionNo = versionNo
+        self.attemptRevision = attemptRevision
+        self.weightingConfig = weightingConfig
+        self.metadata = metadata
+        self.createdAt = createdAt
+    }
+}
+
+struct Flashcard: Decodable, Equatable, Identifiable {
+    let id: String
+    let knowledgePointId: String
+    let front: String
+    let back: String
+    let priorityScore: Double
+    let priorityFactors: [String: JSONValue]
+    let sourceRefs: [JSONValue]
+    let difficulty: String?
+    let rank: Int
+    let createdAt: String
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case knowledgePointId = "knowledge_point_id"
+        case front
+        case back
+        case priorityScore = "priority_score"
+        case priorityFactors = "priority_factors"
+        case sourceRefs = "source_refs"
+        case difficulty
+        case rank
+        case createdAt = "created_at"
+    }
+
+    init(
+        id: String,
+        knowledgePointId: String,
+        front: String,
+        back: String,
+        priorityScore: Double,
+        priorityFactors: [String: JSONValue] = [:],
+        sourceRefs: [JSONValue] = [],
+        difficulty: String? = nil,
+        rank: Int,
+        createdAt: String
+    ) {
+        self.id = id
+        self.knowledgePointId = knowledgePointId
+        self.front = front
+        self.back = back
+        self.priorityScore = priorityScore
+        self.priorityFactors = priorityFactors
+        self.sourceRefs = sourceRefs
+        self.difficulty = difficulty
+        self.rank = rank
+        self.createdAt = createdAt
+    }
+}
+
+struct FlashcardDeckDetail: Decodable, Equatable {
+    let deck: FlashcardDeck
+    let cards: [Flashcard]
 }
 
 struct LearningMetadata: Equatable {

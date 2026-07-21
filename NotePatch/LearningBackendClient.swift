@@ -6,6 +6,11 @@ private struct RefreshFlightKey: Hashable {
     let refreshToken: String
 }
 
+private enum RelativeRequestScope {
+    case service
+    case api
+}
+
 @MainActor
 private final class RefreshSingleFlight {
     static let shared = RefreshSingleFlight()
@@ -49,7 +54,9 @@ final class LearningBackendClient {
     }
 
     func healthCheck() async throws -> String {
-        let (data, response) = try await data(for: request(method: "GET", pathOrURL: "/health"))
+        let (data, response) = try await data(
+            for: request(method: "GET", pathOrURL: "/health", scope: .service)
+        )
         try validate(response: response, data: data)
         return String(data: data, encoding: .utf8) ?? ""
     }
@@ -379,6 +386,63 @@ final class LearningBackendClient {
         )
     }
 
+    func getStudyNoteDownloadURL(
+        workspaceId: String,
+        learningUnitId: String,
+        noteVersionId: String,
+        kind: StudyNoteDownloadKind,
+        expiresSeconds: Int = 900
+    ) async throws -> StudyNoteDownloadURLResponse {
+        let clampedExpiry = min(max(expiresSeconds, 60), 86_400)
+        return try await authedJSON(
+            "GET",
+            "/workspaces/\(workspaceId.pathSegment)/learning-units/\(learningUnitId.pathSegment)/notes/\(noteVersionId.pathSegment)/download-url?kind=\(kind.rawValue)&expires_seconds=\(clampedExpiry)",
+            payload: nil,
+            as: StudyNoteDownloadURLResponse.self
+        )
+    }
+
+    func listFlashcardDecks(
+        workspaceId: String,
+        learningUnitId: String,
+        page: Int = 1,
+        pageSize: Int = 100
+    ) async throws -> [FlashcardDeck] {
+        let safePage = max(page, 1)
+        let safePageSize = min(max(pageSize, 1), 100)
+        return try await authedJSON(
+            "GET",
+            "/workspaces/\(workspaceId.pathSegment)/learning-units/\(learningUnitId.pathSegment)/flashcard-decks?page=\(safePage)&page_size=\(safePageSize)",
+            payload: nil,
+            as: [FlashcardDeck].self
+        )
+    }
+
+    func getLatestFlashcardDeck(
+        workspaceId: String,
+        learningUnitId: String
+    ) async throws -> FlashcardDeckDetail {
+        try await authedJSON(
+            "GET",
+            "/workspaces/\(workspaceId.pathSegment)/learning-units/\(learningUnitId.pathSegment)/flashcard-decks/latest",
+            payload: nil,
+            as: FlashcardDeckDetail.self
+        )
+    }
+
+    func getFlashcardDeck(
+        workspaceId: String,
+        learningUnitId: String,
+        deckId: String
+    ) async throws -> FlashcardDeckDetail {
+        try await authedJSON(
+            "GET",
+            "/workspaces/\(workspaceId.pathSegment)/learning-units/\(learningUnitId.pathSegment)/flashcard-decks/\(deckId.pathSegment)",
+            payload: nil,
+            as: FlashcardDeckDetail.self
+        )
+    }
+
     func searchKnowledge(
         workspaceId: String,
         query: String,
@@ -596,7 +660,11 @@ final class LearningBackendClient {
         return "Bearer \(accessToken)"
     }
 
-    private func request(method: String, pathOrURL: String) throws -> URLRequest {
+    private func request(
+        method: String,
+        pathOrURL: String,
+        scope: RelativeRequestScope = .api
+    ) throws -> URLRequest {
         let url: URL
         if pathOrURL.hasPrefix("http://") || pathOrURL.hasPrefix("https://") {
             guard let absoluteURL = URL(string: pathOrURL) else {
@@ -605,7 +673,12 @@ final class LearningBackendClient {
             url = absoluteURL
         } else {
             let path = pathOrURL.hasPrefix("/") ? pathOrURL : "/\(pathOrURL)"
-            guard let absoluteURL = URL(string: "\(normalizedBaseURL)\(path)") else {
+            let prefix: String
+            switch scope {
+            case .service: prefix = ""
+            case .api: prefix = "/api/v1"
+            }
+            guard let absoluteURL = URL(string: "\(normalizedBaseURL)\(prefix)\(path)") else {
                 throw LearningBackendError("Server address format is invalid. Please check the API or TUS address.")
             }
             url = absoluteURL
@@ -679,19 +752,19 @@ final class LearningBackendClient {
     private static func defaultErrorMessage(_ status: Int) -> String {
         switch status {
         case 401:
-            return "Session expired or invalid. Please sign in again."
+            return localized("error.http.unauthorized")
         case 403:
-            return "This account does not have access to that workspace."
+            return localized("error.http.forbidden")
         case 404:
-            return "Resource not found or has been deleted."
+            return localized("error.http.not_found")
         case 409:
-            return "Upload not yet complete or request conflict. Please try again later."
+            return localized("error.http.conflict")
         case 410:
-            return "This endpoint is currently disabled."
+            return localized("error.http.gone")
         case 422:
-            return "Request parameters do not meet server requirements."
+            return localized("error.http.validation")
         default:
-            return "Server request failed: HTTP \(status)"
+            return localizedFormat("error.http.generic", String(status))
         }
     }
 }

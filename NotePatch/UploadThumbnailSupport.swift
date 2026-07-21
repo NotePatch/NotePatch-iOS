@@ -92,9 +92,10 @@ final class UploadThumbnailLoader: ObservableObject {
         }
 
         image = nil
+        let generationSize = CGSize(width: max(size.width, 56), height: max(size.height, 64))
         switch kind {
         case .image:
-            let maxPixelSize = max(1, Int(max(size.width, size.height) * max(scale, 1)))
+            let maxPixelSize = max(1, Int(max(generationSize.width, generationSize.height) * max(scale, 1)))
             DispatchQueue.global(qos: .userInitiated).async {
                 let thumbnail = downsampleUploadImage(at: file.url, maxPixelSize: maxPixelSize)
                 DispatchQueue.main.async { [weak self] in
@@ -104,7 +105,7 @@ final class UploadThumbnailLoader: ObservableObject {
         case .quickLook:
             let request = QLThumbnailGenerator.Request(
                 fileAt: file.url,
-                size: size,
+                size: generationSize,
                 scale: scale,
                 representationTypes: .thumbnail
             )
@@ -132,42 +133,36 @@ final class UploadThumbnailLoader: ObservableObject {
     }
 }
 
-struct UploadThumbnailView: View {
+struct UploadThumbnailImage: View {
     let file: LocalUploadFile
-    let onPreview: () -> Void
+    let size: CGSize
+    let cornerRadius: CGFloat
 
     @StateObject private var loader = UploadThumbnailLoader()
     @Environment(\.displayScale) private var displayScale
 
-    private let size = CGSize(width: 56, height: 64)
-
     var body: some View {
-        Button(action: onPreview) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(Color(.secondarySystemGroupedBackground))
+        ZStack {
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                .fill(Color(.secondarySystemGroupedBackground))
 
-                if let image = loader.image {
-                    Image(uiImage: image)
-                        .resizable()
-                        .aspectRatio(contentMode: file.isImage ? .fill : .fit)
-                        .padding(file.isImage ? 0 : 3)
-                } else {
-                    Image(systemName: fallbackIcon)
-                        .font(.system(size: 22, weight: .medium))
-                        .foregroundStyle(Color.accentColor)
-                }
-            }
-            .frame(width: size.width, height: size.height)
-            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .stroke(Color.primary.opacity(0.12), lineWidth: 0.5)
+            if let image = loader.image {
+                Image(uiImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: file.isImage ? .fill : .fit)
+                    .padding(file.isImage ? 0 : 3)
+            } else {
+                Image(systemName: fallbackIcon)
+                    .font(.system(size: min(size.width, size.height) * 0.4, weight: .medium))
+                    .foregroundStyle(Color.accentColor)
             }
         }
-        .buttonStyle(.plain)
-        .accessibilityLabel("预览 \(file.filename)")
-        .accessibilityIdentifier("uploadQueueThumbnail")
+        .frame(width: size.width, height: size.height)
+        .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                .stroke(Color.primary.opacity(0.12), lineWidth: 0.5)
+        }
         .onAppear {
             loader.load(file: file, size: size, scale: displayScale)
         }
@@ -185,5 +180,21 @@ struct UploadThumbnailView: View {
         case "mp4", "mov", "m4v": return "video"
         default: return "doc"
         }
+    }
+}
+
+struct UploadThumbnailView: View {
+    let file: LocalUploadFile
+    let onPreview: () -> Void
+
+    private let size = CGSize(width: 56, height: 64)
+
+    var body: some View {
+        Button(action: onPreview) {
+            UploadThumbnailImage(file: file, size: size, cornerRadius: 6)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(localizedFormat("accessibility.preview_file", file.filename))
+        .accessibilityIdentifier("uploadQueueThumbnail")
     }
 }

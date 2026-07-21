@@ -127,9 +127,51 @@ final class TusUploader {
         }
     }
 
+    static func preferredEndpoint(configuredEndpoint: String, serverEndpoint: String?) -> String {
+        let configured = configuredEndpoint.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !configured.isEmpty {
+            return normalizeTUSBaseURL(configured)
+        }
+        return normalizeTUSBaseURL(serverEndpoint ?? "")
+    }
+
     static func resolveUploadURL(endpoint: String, location: String) throws -> String {
-        guard let endpointURL = URL(string: endpoint),
-              let resolved = URL(string: location, relativeTo: endpointURL)?.absoluteURL else {
+        guard let endpointURL = URL(string: endpoint) else {
+            throw LearningBackendError("TUSD returned an invalid Location.")
+        }
+        if location.hasPrefix("http://") || location.hasPrefix("https://") {
+            guard let absolute = URL(string: location) else {
+                throw LearningBackendError("TUSD returned an invalid Location.")
+            }
+            return absolute.absoluteString
+        }
+        if location.hasPrefix("/") {
+            guard var components = URLComponents(url: endpointURL, resolvingAgainstBaseURL: false),
+                  let locationComponents = URLComponents(string: location) else {
+                throw LearningBackendError("TUSD returned an invalid Location.")
+            }
+            let endpointPath = components.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            let locationPath = locationComponents.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            let endpointSegments = endpointPath.split(separator: "/").map(String.init)
+            let locationSegments = locationPath.split(separator: "/").map(String.init)
+
+            if locationSegments.starts(with: endpointSegments) {
+                components.path = "/\(locationPath)"
+            } else if let filesIndex = endpointSegments.lastIndex(of: "files"),
+                      locationSegments.first == "files" {
+                let proxyPrefix = endpointSegments[..<filesIndex]
+                components.path = "/\((Array(proxyPrefix) + locationSegments).joined(separator: "/"))"
+            } else {
+                components.path = "/\(locationPath)"
+            }
+            components.query = locationComponents.query
+            components.fragment = locationComponents.fragment
+            guard let resolved = components.url else {
+                throw LearningBackendError("TUSD returned an invalid Location.")
+            }
+            return resolved.absoluteString
+        }
+        guard let resolved = URL(string: location, relativeTo: endpointURL)?.absoluteURL else {
             throw LearningBackendError("TUSD returned an invalid Location.")
         }
         return resolved.absoluteString

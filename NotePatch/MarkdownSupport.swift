@@ -6,12 +6,14 @@ struct MarkdownBlock: Equatable, Identifiable, Sendable {
     let type: MarkdownBlockType
     let text: String
     let level: Int
+    let inlineTokens: [MarkdownInlineToken]
 
     nonisolated init(id: String, type: MarkdownBlockType, text: String, level: Int = 0) {
         self.id = id
         self.type = type
         self.text = text
         self.level = level
+        self.inlineTokens = parseMarkdownInline(text)
     }
 }
 
@@ -257,9 +259,11 @@ final class MarkdownRenderState: ObservableObject {
         blocks = []
         let expectedMarkdown = markdown
         parseTask = Task { [weak self] in
+            let trace = NPPerformanceTrace.begin("MarkdownParse")
             let parsed = await Task.detached(priority: .userInitiated) {
                 parseMarkdownBlocks(expectedMarkdown)
             }.value
+            NPPerformanceTrace.end("MarkdownParse", id: trace)
             guard !Task.isCancelled, let self, self.markdown == expectedMarkdown else { return }
             self.cache(parsed, for: key, source: expectedMarkdown)
             self.blocks = parsed

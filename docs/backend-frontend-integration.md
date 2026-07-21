@@ -619,8 +619,12 @@ complete-upload
   -> document_processing_pipeline
   -> OCR artifacts
   -> build_knowledge_base
+  -> debounce after last knowledge update (300s by default)
   -> generate_study_notes
+  -> generate_flashcards
 ```
+
+`build_knowledge_base` 与笔记生成是两个独立生命周期。300 秒仅表示最后一次知识更新后的最早启动时间，不表示笔记会在 300 秒内完成。OpenClaw skill 执行、schema 校验、HTML 清洗、SeaweedFS 写入以及最多 3 次任务重试都会继续占用时间。
 
 上传作业后，如果 metadata 带 `learning_unit_id`，后端会把作业挂到已有学习单元；否则会自动创建/归类学习单元：
 
@@ -642,6 +646,10 @@ type LearningUnit = {
   subject: string | null;
   grade_level: string | null;
   topic: string | null;
+  knowledge_revision: number;
+  attempt_revision: number;
+  notes_generated_revision: number;
+  note_generation_due_at: string | null;
 };
 
 type StudyNoteVersion = {
@@ -649,10 +657,11 @@ type StudyNoteVersion = {
   learning_unit_id: string;
   version_no: number;
   title: string;
-  markdown_object_key: string;
+  html_object_key: string;
   json_object_key: string;
-  highlighted_object_key: string | null;
+  highlighted_html_object_key: string | null;
   highlight_map_object_key: string | null;
+  knowledge_point_ids: string[];
   source_version_id: string | null;
   edit_origin: "skill" | "user" | "admin" | null;
   edit_summary: string | null;
@@ -669,11 +678,17 @@ async function listStudyNotes(workspaceId: string, learningUnitId: string) {
   );
 }
 
-async function reviseStudyNote(workspaceId: string, learningUnitId: string, latestVersionId: string, markdown: string) {
+async function reviseStudyNote(workspaceId: string, learningUnitId: string, latestVersionId: string, html: string) {
   return apiFetch(
     `/workspaces/${workspaceId}/learning-units/${learningUnitId}/notes/${latestVersionId}/revisions`,
-    { method: "POST", body: JSON.stringify({ markdown, edit_summary: "Manual edit" }) },
+    { method: "POST", body: JSON.stringify({ html, edit_summary: "Manual edit" }) },
   );
+}
+
+function noteGenerationState(unit: LearningUnit, notes: StudyNoteVersion[]) {
+  if (unit.knowledge_revision === 0) return "no_knowledge";
+  if (unit.notes_generated_revision < unit.knowledge_revision) return "generating";
+  return notes.length > 0 ? "ready" : "unavailable";
 }
 ```
 
@@ -684,18 +699,28 @@ GET /workspaces/{workspace_id}/learning-units
 GET /workspaces/{workspace_id}/learning-units/{learning_unit_id}?include_download_url=true
 GET /workspaces/{workspace_id}/learning-units/{learning_unit_id}/knowledge-chunks
 GET /workspaces/{workspace_id}/learning-units/{learning_unit_id}/notes?include_download_url=true
-GET /workspaces/{workspace_id}/learning-units/{learning_unit_id}/notes/{note_version_id}/download-url?kind=highlighted
+GET /workspaces/{workspace_id}/learning-units/{learning_unit_id}/notes/{note_version_id}/download-url?kind=highlighted_html
 POST /workspaces/{workspace_id}/learning-units/{learning_unit_id}/notes/{latest_note_version_id}/revisions
+GET /workspaces/{workspace_id}/learning-units/{learning_unit_id}/flashcard-decks
+GET /workspaces/{workspace_id}/learning-units/{learning_unit_id}/flashcard-decks/latest
+GET /workspaces/{workspace_id}/learning-units/{learning_unit_id}/flashcard-decks/{deck_id}
 ```
 
 UI 建议：
 
-- 文档处理 task 成功后，刷新 learning units 和 notes。
+- 文档处理 task 成功只代表 OCR 主流程结束；课件/笔记还要继续完成知识库和防抖笔记任务。
+- 当 `notes_generated_revision < knowledge_revision` 时显示“正在整理笔记”，每 5-10 秒刷新 learning unit 和 notes；不要在等待 5 分钟后直接判定失败。
+- 当 revisions 相等且 notes 列表非空时展示 `version_no` 最大的版本。若 `knowledge_revision === 0`，表示尚无可用于笔记的知识库内容。
+- notes API 返回 metadata 和短期签名 URL，不内联返回 HTML。使用 `download_urls.highlighted_html`，不存在时回退到 `download_urls.html`。
 - `grade_homework` 成功后，刷新 mistakes、knowledge chunks 和 latest note。
-- 如果 latest note 有 `highlighted` 下载 URL，优先展示高亮版；否则展示普通 markdown。
+- 如果 latest note 有 `highlighted_html` 下载 URL，优先展示高亮 HTML；否则展示普通 HTML。
 - 修订接口只接受当前最新版本 ID；并发编辑过期时返回 `409`，前端应刷新后让用户重新确认。
-- 手动编辑创建新版本；错题高亮只更新最新版本的 highlighted artifact。没有笔记时评分不会创建高亮任务。
+- HTML 必须按不可信内容处理；推荐受控富文本组件或 sandboxed WebView，不执行 script、事件属性或外部资源。
+- 手动编辑创建新版本；错题高亮只更新最新版本的 highlighted HTML artifact。没有笔记时评分不会创建高亮任务。
+- `flashcard-decks/latest` 中每张卡包含 `priority_score` 和 `priority_factors`，可向用户解释错误频率、时间衰减和连续答对降权。
 - 前端不要直接调用 OpenClaw skill；当前 skill 执行和后续替换都由后端 worker 管理。
+
+若笔记长时间未生成，用户端保留“仍在生成/暂不可用”状态；运维端应查看 `generate_study_notes` 的 task events。常见可恢复情况是 gateway 已返回 HTTP 200，但 skill 没有写出必需的 `study_note.json`，worker 会自动重试，最终成功前不要缓存空 notes 列表为永久结果。
 
 后端内部区分 `default`、`ocr` 和 `chat` 三个 worker queue：文档处理进入 `ocr`，学习任务进入 `default`，交互式 OpenClaw 对话进入 `chat`，避免聊天被长任务阻塞。这个拆分不改变前端 API。
 
