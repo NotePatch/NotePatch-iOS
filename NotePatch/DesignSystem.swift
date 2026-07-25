@@ -42,26 +42,25 @@ extension Color {
 // MARK: - Color Tokens
 
 struct NPColors {
-    // Background — cool-toned subtle grey for depth layering
-    static let background = Color(hex: "#F5F7F8")
+    // Background — warmer, barely-there tone
+    static let background = Color(hex: "#FAFAF8")
     static let surface     = Color(hex: "#FFFFFF")
 
-    // Text
-    static let textPrimary   = Color(hex: "#171717")
-    static let textSecondary = Color(hex: "#6B7280")
+    // Text — higher contrast primary, softer secondary
+    static let textPrimary   = Color(hex: "#111111")
+    static let textSecondary = Color(hex: "#6E6E73")
 
-    // Dividers & Borders — lighter, almost invisible
-    static let divider = Color(hex: "#F0F1F3")
-    static let border  = Color(hex: "#E5E7EB")
+    // Dividers & Borders — near-invisible
+    static let divider = Color(hex: "#EEEEEC")
+    static let border  = Color(hex: "#E5E5E0")
 
-    // Brand Green — micro‑gradient endpoints
-    static let brandLight = Color(hex: "#C6E3C9")
-    static let brand      = Color(hex: "#7EB88B")
-    static let brandDark  = Color(hex: "#4F8A63")
-    static let brandGlow  = Color(hex: "#5CBF7B")  // slightly teal‑tinted for gradient
+    // Brand Green — softer, sage-leaning
+    static let brandLight = Color(hex: "#D8F0DF")
+    static let brand      = Color(hex: "#5FA86D")
+    static let brandDark  = Color(hex: "#4A8A5E")
 
     // AI bubble tint
-    static let aiUserBubble = Color(hex: "#EDF8EF")
+    static let aiUserBubble = Color(hex: "#EEF7F0")
 
     // Semantic
     static let destructive = Color(hex: "#D15A5A")
@@ -81,11 +80,12 @@ struct NPSpacing {
 // MARK: - Radius Tokens
 
 struct NPRadius {
-    static let card       = 18.0
+    static let card       = 20.0
     static let button     = 14.0
     static let input      = 14.0
-    static let sheet      = 20.0
-    static let chip       = 12.0
+    static let sheet      = 22.0
+    static let chip       = 10.0
+    static let segmented  = 10.0
 }
 
 // MARK: - Shadow Modifier
@@ -93,7 +93,7 @@ struct NPRadius {
 struct NPCardShadow: ViewModifier {
     func body(content: Content) -> some View {
         content
-            .shadow(color: Color.black.opacity(0.04), radius: 16, x: 0, y: 4)
+            .shadow(color: Color.black.opacity(0.03), radius: 12, x: 0, y: 2)
     }
 }
 
@@ -120,17 +120,15 @@ struct NPPrimaryButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.system(size: 15, weight: .semibold))
-            .foregroundStyle(.white)
-            .frame(height: 48)
+            .foregroundStyle(NPColors.brandDark)
+            .frame(height: 50)
             .frame(maxWidth: .infinity)
             .background(
-                RoundedRectangle(cornerRadius: NPRadius.button, style: .continuous)
-                    .fill(
-                        LinearGradient(
-                            colors: [NPColors.brandGlow, NPColors.brandDark],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
+                RoundedRectangle(cornerRadius: NPRadius.button + 4, style: .continuous)
+                    .fill(NPColors.brandLight.opacity(0.55))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: NPRadius.button + 4, style: .continuous)
+                            .stroke(NPColors.brand.opacity(0.25), lineWidth: 1)
                     )
             )
             .scaleEffect(configuration.isPressed ? 0.97 : 1.0)
@@ -169,18 +167,18 @@ struct NPIconButtonStyle: ButtonStyle {
 
 // MARK: - Document Card Button Styles
 
-/// 文档卡片主操作按钮：纯浅绿块 + 深绿文字，无边框
+/// Document card action button: light sage bg + dark green text, no border, compact
 struct NPDocumentPrimaryButtonStyle: ButtonStyle {
     @Environment(\.isEnabled) private var isEnabled
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: 13, weight: .semibold))
+            .font(.system(size: 13, weight: .medium))
             .foregroundStyle(NPColors.brandDark)
-            .frame(height: 36)
+            .frame(height: 32)
             .frame(maxWidth: .infinity)
             .background(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(NPColors.brandLight.opacity(0.30))
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(NPColors.brandLight.opacity(0.45))
             )
             .scaleEffect(configuration.isPressed ? 0.97 : 1.0)
             .opacity(isEnabled ? 1.0 : 0.5)
@@ -230,7 +228,7 @@ extension View {
     }
 
     func npCardTitle() -> some View {
-        self.font(.system(size: 17, weight: .medium))
+        self.font(.system(size: 16, weight: .semibold))
             .foregroundStyle(NPColors.textPrimary)
     }
 
@@ -240,7 +238,7 @@ extension View {
     }
 
     func npCaption() -> some View {
-        self.font(.system(size: 13, weight: .regular))
+        self.font(.system(size: 12, weight: .regular))
             .foregroundStyle(NPColors.textSecondary)
     }
 }
@@ -277,10 +275,10 @@ struct NPStatusChip: View {
 
     var body: some View {
         Text(localized(text))
-            .font(.system(size: 12, weight: .semibold))
+            .font(.system(size: 11, weight: .medium))
             .foregroundStyle(variant.fg)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
             .background(variant.bg)
             .clipShape(Capsule())
             .fixedSize()
@@ -343,7 +341,7 @@ struct NPInputFieldModifier: ViewModifier {
             .shadow(color: Color.black.opacity(0.03), radius: 4, x: 0, y: 1)
             .overlay {
                 RoundedRectangle(cornerRadius: NPRadius.input, style: .continuous)
-                    .stroke(isFocused ? NPColors.brandGlow : NPColors.divider, lineWidth: isFocused ? 1.5 : 0.5)
+                    .stroke(isFocused ? NPColors.brand : NPColors.divider, lineWidth: isFocused ? 1.5 : 0.5)
             }
     }
 }

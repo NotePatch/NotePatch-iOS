@@ -266,15 +266,22 @@ private struct NotesTab: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            NotePatchLogoImage(height: 28)
+            NotePatchLogoImage(height: 64)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, NPSpacing.outer)
-                .padding(.top, 10)
+                .padding(.top, 16)
                 .padding(.bottom, 4)
+
+            Text("Patch your knowledge together.")
+                .font(.system(size: 13, weight: .regular, design: .default))
+                .foregroundStyle(NPColors.textSecondary.opacity(0.7))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, NPSpacing.outer)
+                .padding(.bottom, 32)
 
             HStack {
                 Text(model.selectedNotesSection.title)
-                    .font(.system(size: 26, weight: .medium, design: .serif))
+                    .font(.system(size: 44, weight: .bold, design: .default))
                     .foregroundStyle(NPColors.textPrimary)
                     .accessibilityIdentifier("notesTab")
                 Spacer()
@@ -654,21 +661,29 @@ private struct DocumentsTab: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            NotePatchLogoImage(height: 28)
+            // Brand area
+            NotePatchLogoImage(height: 64)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, NPSpacing.outer)
-                .padding(.top, 10)
+                .padding(.top, 16)
                 .padding(.bottom, 4)
 
-            Text("Documents")
-                .font(.system(size: 26, weight: .bold, design: .default))
-                .foregroundStyle(NPColors.textPrimary)
-                .accessibilityIdentifier("documentsTab")
-                .frame(height: 48, alignment: .center)
+            Text("Patch your knowledge together.")
+                .font(.system(size: 13, weight: .regular, design: .default))
+                .foregroundStyle(NPColors.textSecondary.opacity(0.7))
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, NPSpacing.outer)
-                .padding(.bottom, 2)
+                .padding(.bottom, 32)
 
+            // Page title
+            Text("Documents")
+                .font(.system(size: 44, weight: .bold, design: .default))
+                .foregroundStyle(NPColors.textPrimary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, NPSpacing.outer)
+                .padding(.bottom, 16)
+
+            // Segmented control — reduced visual weight
             Picker("Document view", selection: $model.selectedDocumentsSection) {
                 ForEach(DocumentsSection.allCases) { section in
                     Text(section.title).tag(section)
@@ -676,9 +691,7 @@ private struct DocumentsTab: View {
             }
             .pickerStyle(.segmented)
             .padding(.horizontal, NPSpacing.outer)
-            .padding(.top, 12)
-            .padding(.bottom, 4)
-            .accessibilityIdentifier("documentsSectionPicker")
+            .padding(.bottom, 20)
 
             if model.selectedDocumentsSection == .documents {
                 documentList
@@ -714,22 +727,49 @@ private struct DocumentsTab: View {
                 .buttonStyle(NPPrimaryButtonStyle())
                 .accessibilityIdentifier("showUploadPageButton")
 
-                CollapsibleSection(
-                    title: "Filters",
-                    summary: activeFilterSummary(status: model.statusFilter, documentKind: model.documentKindFilter, fileType: model.fileTypeFilter),
-                    expanded: $filtersExpanded
-                ) {
-                    FilterPanel(model: model)
+                // Filter —
+                Button {
+                    withAnimation(.npInteractive) { filtersExpanded.toggle() }
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "line.3.horizontal.decrease")
+                            .font(.system(size: 12, weight: .medium))
+                        Text(activeFilterSummary(status: model.statusFilter, documentKind: model.documentKindFilter, fileType: model.fileTypeFilter))
+                            .lineLimit(1)
+                        Image(systemName: filtersExpanded ? "chevron.up" : "chevron.down")
+                            .font(.system(size: 9, weight: .semibold))
+                    }
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(NPColors.textSecondary)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 9)
+                    .background(NPColors.surface)
+                    .clipShape(Capsule())
+                    .shadow(color: Color.black.opacity(0.03), radius: 6, x: 0, y: 1)
+                }
+                .buttonStyle(.plain)
+
+                if filtersExpanded {
+                    NPSection {
+                        FilterPanel(model: model)
+                    }
                 }
 
                 HStack {
-                    Text("Document List")
-                        .npCardTitle()
+                    Text("Documents")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(NPColors.textSecondary)
+                        .textCase(.uppercase)
                     Spacer()
-                    Text(localizedFormat("documents.count", String(model.documents.count)))
-                        .npCaption()
+                    Text("\(model.documents.count)")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(NPColors.textSecondary)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 2)
+                        .background(NPColors.divider)
+                        .clipShape(Capsule())
                 }
-                .padding(.top, 2)
+                .padding(.top, 6)
 
                 if model.documents.isEmpty {
                     NPEmptyState(systemImage: "doc", title: "No documents", message: "No documents yet. Upload an image, PDF, or file to get started.")
@@ -757,7 +797,6 @@ private struct DocumentsTab: View {
             .padding(.top, 14)
             .padding(.bottom, NPSpacing.section)
         }
-        .animation(.npCardEntry, value: model.documents.count)
     }
 
 }
@@ -1824,14 +1863,21 @@ private struct LearningTab: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            NotePatchLogoImage(height: 28)
+            NotePatchLogoImage(height: 64)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, NPSpacing.outer)
-                .padding(.top, 10)
+                .padding(.top, 16)
                 .padding(.bottom, 4)
 
+            Text("Patch your knowledge together.")
+                .font(.system(size: 13, weight: .regular, design: .default))
+                .foregroundStyle(NPColors.textSecondary.opacity(0.7))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, NPSpacing.outer)
+                .padding(.bottom, 32)
+
             Text("Review")
-                .font(.system(size: 26, weight: .bold, design: .default))
+                .font(.system(size: 44, weight: .bold, design: .default))
                 .foregroundStyle(NPColors.textPrimary)
                 .frame(height: 48, alignment: .center)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -2562,59 +2608,83 @@ private struct ProfileTab: View {
 
     var body: some View {
         ScrollView {
-            VStack(spacing: NPSpacing.section) {
-                profileHeader
+            VStack(spacing: 24) {
+                // ——— Brand Hero ———
+                NotePatchLogoImage(height: 64)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding(.horizontal, NPSpacing.outer)
+                    .padding(.top, 16)
+                    .padding(.bottom, 4)
 
-                WorkspaceManagementSection(model: model)
+                Text("Patch your knowledge together.")
+                    .font(.system(size: 13, weight: .regular, design: .default))
+                    .foregroundStyle(NPColors.textSecondary.opacity(0.7))
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding(.horizontal, NPSpacing.outer)
+                    .padding(.bottom, 24)
 
-                languageSection
-
-                aiSection
-
-                serverSection
-
+                // ——— Profile Card ———
                 NPSection {
-                    VStack(alignment: .leading, spacing: 14) {
-                        Button(role: .destructive) {
-                            model.logout()
-                        } label: {
-                            Label("Sign Out", systemImage: "rectangle.portrait.and.arrow.right")
-                                .frame(maxWidth: .infinity)
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack(spacing: 14) {
+                            Circle()
+                                .fill(NPColors.brandLight)
+                                .frame(width: 48, height: 48)
+                                .overlay(
+                                    Text(accountInitial)
+                                        .font(.system(size: 20, weight: .semibold))
+                                        .foregroundStyle(NPColors.brandDark)
+                                )
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(model.session?.fullName?.isEmpty == false ? model.session?.fullName ?? "" : localized("account.default_user"))
+                                    .font(.system(size: 17, weight: .semibold))
+                                    .foregroundStyle(NPColors.textPrimary)
+                                    .lineLimit(1)
+                                Text(model.session?.email ?? "")
+                                    .font(.system(size: 13, weight: .regular))
+                                    .foregroundStyle(NPColors.textSecondary)
+                                    .lineLimit(1)
+                            }
                         }
-                        .buttonStyle(NPSecondaryButtonStyle())
-                        .foregroundStyle(NPColors.destructive)
-                        .disabled(model.isBusy)
+                        Text(localizedFormat("account.session_valid_until", compactDateTime(model.session?.expiresAt ?? "")))
+                            .font(.system(size: 12, weight: .regular))
+                            .foregroundStyle(NPColors.textSecondary.opacity(0.75))
                     }
                 }
+
+                // ——— Workspace ———
+                WorkspaceManagementSection(model: model)
+
+                // ——— Preferences ———
+                languageSection
+
+                // ——— AI ———
+                aiSection
+
+                // ——— Server ———
+                serverSection
+
+                // ——— Sign Out ———
+                Button(role: .destructive) {
+                    model.logout()
+                } label: {
+                    Label("Sign Out", systemImage: "rectangle.portrait.and.arrow.right")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(NPSecondaryButtonStyle())
+                .foregroundStyle(NPColors.destructive)
+                .disabled(model.isBusy)
+                .padding(.bottom, 24)
             }
             .padding(.horizontal, NPSpacing.outer)
-            .padding(.top, 14)
-            .padding(.bottom, NPSpacing.section)
+            .padding(.top, 8)
+            .padding(.bottom, 40)
         }
     }
 
-    private var profileHeader: some View {
-        NPSection {
-            VStack(alignment: .leading, spacing: 14) {
-                HStack(spacing: 14) {
-                    NotePatchLogoImage(height: 36)
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text("NotePatch")
-                            .npSectionTitle()
-                            .accessibilityIdentifier("profileTab")
-                        Text(model.session?.fullName?.isEmpty == false ? model.session?.fullName ?? "" : localized("account.default_user"))
-                            .font(.subheadline.weight(.medium))
-                            .foregroundStyle(NPColors.textPrimary)
-                            .lineLimit(1)
-                        Text(model.session?.email ?? "")
-                            .npCaption()
-                            .lineLimit(1)
-                    }
-                }
-                Text(localizedFormat("account.session_valid_until", compactDateTime(model.session?.expiresAt ?? "")))
-                    .npCaption()
-            }
-        }
+    private var accountInitial: String {
+        let account = model.session?.fullName?.isEmpty == false ? model.session?.fullName : model.session?.email
+        return account?.trimmingCharacters(in: .whitespacesAndNewlines).first.map(String.init)?.uppercased() ?? "N"
     }
 
     private var languageSection: some View {

@@ -330,7 +330,7 @@ func compactDateTime(_ value: String) -> String {
 
 func formatBytes(_ sizeBytes: Int64?) -> String {
     guard let sizeBytes else {
-        return localized("file.unknown_size")
+        return "\u{2014}"
     }
     if sizeBytes < 1024 {
         return "\(sizeBytes) B"
