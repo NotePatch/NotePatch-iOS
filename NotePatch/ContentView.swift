@@ -47,7 +47,7 @@ private struct AuthScreen: View {
                 VStack(spacing: NPSpacing.section) {
                     // Hero section
                     VStack(spacing: 16) {
-                        brandLogoIcon(size: 80, symbolSize: 34)
+                        NotePatchLogoImage(height: 56)
                             .scaleEffect(appear ? 1 : 0.80)
                             .opacity(appear ? 1 : 0)
 
@@ -266,6 +266,12 @@ private struct NotesTab: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            NotePatchLogoImage(height: 28)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, NPSpacing.outer)
+                .padding(.top, 10)
+                .padding(.bottom, 4)
+
             HStack {
                 Text(model.selectedNotesSection.title)
                     .font(.system(size: 26, weight: .medium, design: .serif))
@@ -648,6 +654,12 @@ private struct DocumentsTab: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            NotePatchLogoImage(height: 28)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, NPSpacing.outer)
+                .padding(.top, 10)
+                .padding(.bottom, 4)
+
             Text("Documents")
                 .font(.system(size: 26, weight: .bold, design: .default))
                 .foregroundStyle(NPColors.textPrimary)
@@ -1812,6 +1824,12 @@ private struct LearningTab: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            NotePatchLogoImage(height: 28)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, NPSpacing.outer)
+                .padding(.top, 10)
+                .padding(.bottom, 4)
+
             Text("Review")
                 .font(.system(size: 26, weight: .bold, design: .default))
                 .foregroundStyle(NPColors.textPrimary)
@@ -2579,7 +2597,7 @@ private struct ProfileTab: View {
         NPSection {
             VStack(alignment: .leading, spacing: 14) {
                 HStack(spacing: 14) {
-                    brandLogoIcon(size: 52, symbolSize: 23)
+                    NotePatchLogoImage(height: 36)
                     VStack(alignment: .leading, spacing: 3) {
                         Text("NotePatch")
                             .npSectionTitle()
@@ -3105,16 +3123,18 @@ private struct StatusPanel: View {
     }
 }
 
-// MARK: - Helper: Brand Logo Icon
+// MARK: - Helper: NotePatch Brand Logo Image
+// Renders the yarn-textured wordmark with 2.25:1 aspect ratio.
+// White background of the source image blends naturally with NPColors.surface (or any white surface).
 
-private func brandLogoIcon(size: CGFloat, symbolSize: CGFloat) -> some View {
-    ZStack {
-        RoundedRectangle(cornerRadius: NPRadius.card)
-            .fill(NPColors.brand)
-            .frame(width: size, height: size)
-        Image(systemName: "doc.text.viewfinder")
-            .font(.system(size: symbolSize, weight: .semibold))
-            .foregroundStyle(.white)
+private struct NotePatchLogoImage: View {
+    var height: CGFloat
+    var body: some View {
+        Image("NotePatchLogo")
+            .resizable()
+            .interpolation(.high)
+            .aspectRatio(contentMode: .fit)
+            .frame(height: height)
     }
 }
 
