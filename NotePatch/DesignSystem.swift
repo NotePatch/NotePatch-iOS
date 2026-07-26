@@ -2,13 +2,13 @@
 //  DesignSystem.swift
 //  NotePatch
 //
-//  NotePatch Design System — light/dark dual theme, premium pink accent in dark mode.
-//  Apple HIG-inspired minimalism with unique NotePatch identity.
+//  NotePatch Design System — Paper-inspired, warm, intelligent.
+//  Visual identity: calm premium notebook, not Apple Notes clone.
 //
-//  Color usage: 90% Neutral / 8% Brand / 2% Accent
-//  Spacing: 8pt grid
-//  Typography: Apple hierarchy
-//  Radius: cards 20, buttons 14, inputs 14, chips 10
+//  Palette: warm paper tones + muted sage accent
+//  Depth: one soft overhead light, consistent shadow direction
+//  Cards: like premium notebook pages, white + hairline border + generous radius
+//  Animation: 220ms ease-out cubic, calm and intentional
 //
 
 import SwiftUI
@@ -39,56 +39,122 @@ extension Color {
     }
 }
 
-// MARK: - Color Tokens
+// MARK: - Color Tokens (Paper-inspired warm palette)
 
 struct NPColors {
-    static let background    = Color(hex: "#FAFAF8")
-    static let surface       = Color(hex: "#FFFFFF")
-    static let surfaceAlt    = Color(hex: "#F7F7F7")
-    static let textPrimary   = Color(hex: "#111111")
-    static let textSecondary = Color(hex: "#6E6E73")
-    static let divider       = Color(hex: "#EEEEEC")
-    static let border        = Color(hex: "#E5E5E0")
-    static let brandLight    = Color(hex: "#D8F0DF")
-    static let brand         = Color(hex: "#5FA86D")
-    static let brandDark     = Color(hex: "#4A8A5E")
-    static let brandGlow     = Color(hex: "#A3D7AC")
-    static let aiUserBubble  = Color(hex: "#EEF7F0")
+    // ── 4-layer background hierarchy ──
+    /// Page canvas — warm paper tone, never cold white.
+    static let background    = Color(hex: "#EEF2EC")
+    /// Primary surface — layering surface, slightly warm.
+    static let surface       = Color(hex: "#F8F9F6")
+    /// Card surface — pure white, like a premium notebook page.
+    static let surfaceCard   = Color(hex: "#FFFFFF")
+    /// Interactive surface — barely perceptible warmth for tappable elements.
+    static let interactive   = Color(hex: "#F6F8F5")
+
+    // ── Text hierarchy (warm near-black base) ──
+    /// Primary — warm near-black for body and titles.
+    static let textPrimary   = Color(hex: "#171717")
+    /// Secondary — 62% of primary, for labels and helper text.
+    static let textSecondary = Color(red: 23.0/255.0, green: 23.0/255.0, blue: 23.0/255.0, opacity: 0.62)
+    /// Tertiary — 42% of primary, for metadata and captions.
+    static let textTertiary  = Color(red: 23.0/255.0, green: 23.0/255.0, blue: 23.0/255.0, opacity: 0.42)
+
+    // ── Dividers & Borders ──
+    /// 5% black — subtle separation, paper-like.
+    static let border        = Color.black.opacity(0.05)
+    static let divider       = Color.black.opacity(0.05)
+
+    // ── Brand (Muted Sage Green) ──
+    static let brandLight    = Color(hex: "#E2F0E8")
+    static let brand         = Color(hex: "#5D9972")
+    static let brandDark     = Color(hex: "#2E6548")
+
+    // ── Semantic ──
+    static let aiUserBubble  = Color(hex: "#EFF5F1")
     static let destructive   = Color(hex: "#D15A5A")
     static let warning       = Color(hex: "#E8A840")
+    static let successBg     = Color(hex: "#E7F3EA")
+    static let successText   = Color(hex: "#4F8E66")
 }
 
-// MARK: - Spacing Tokens (8pt Grid)
+// MARK: - Shadow Tokens (Single overhead light source)
 
-struct NPSpacing {
-    static let outer   = 24.0
-    static let section = 24.0
-    static let card    = 18.0
-    static let item    = 16.0
-    static let small   = 8.0
+struct NPShadow {
+    /// Button — subtle, clickable surfaces.
+    static let small: (color: Color, radius: CGFloat, y: CGFloat)  = (.black.opacity(0.05), 10, 4)
+    /// Card — premium notebook page floating above desk.
+    static let medium: (color: Color, radius: CGFloat, y: CGFloat) = (.black.opacity(0.06), 24, 10)
+    /// Sheet — distant surface.
+    static let large: (color: Color, radius: CGFloat, y: CGFloat)  = (.black.opacity(0.06), 40, 16)
+    /// Hover lift — deeper shadow when interacting.
+    static let hover: (color: Color, radius: CGFloat, y: CGFloat)  = (.black.opacity(0.10), 28, 12)
+    /// Upload button — green-tinted, distinctive primary action.
+    static let upload: (color: Color, radius: CGFloat, y: CGFloat) = (Color(hex: "#5D9972").opacity(0.10), 18, 8)
 }
 
 // MARK: - Radius Tokens
 
 struct NPRadius {
-    static let card       = 20.0
-    static let button     = 14.0
-    static let input      = 14.0
-    static let sheet      = 22.0
-    static let chip       = 10.0
-    static let segmented  = 10.0
+    static let xs         = 8.0
+    static let small      = 10.0
+    static let medium     = 14.0
+    static let large      = 20.0
+    static let xl         = 22.0
+    /// Card — premium notebook page corner.
+    static let card: CGFloat       = 24.0
+    /// Tab bar — floating dock corner.
+    static let tabBar: CGFloat     = 28.0
+    // Aliases
+    static let button     = medium
+    static let input      = medium
+    static let sheet      = xl
+    static let chip       = small
+    static let segmented  = small
 }
 
-// MARK: - Shadow Modifier
+// MARK: - Spacing Tokens (4pt grid)
+
+struct NPSpacing {
+    static let xxs     = 4.0
+    static let xs      = 4.0
+    static let small   = 8.0
+    static let medium  = 12.0
+    static let large   = 20.0
+    static let xl      = 24.0
+    static let xxl     = 32.0
+    static let xxxl    = 40.0
+    static let huge    = 48.0
+    // Legacy aliases
+    static let outer   = xl
+    static let section = xl
+    static let card    = 18.0
+    static let item    = 16.0
+}
+
+// MARK: - Elevation (Z-axis position)
+
+struct NPElevation {
+    static let base: Double     = 0
+    static let raised: Double   = 100
+    static let card: Double     = 200
+    static let sheet: Double    = 300
+    static let overlay: Double  = 400
+}
+
+// MARK: - Card Modifier (Premium notebook page)
 
 struct NPCardShadow: ViewModifier {
     func body(content: Content) -> some View {
         content
-            .shadow(color: Color.black.opacity(0.03), radius: 12, x: 0, y: 2)
+            .shadow(
+                color: NPShadow.medium.color,
+                radius: NPShadow.medium.radius,
+                x: 0,
+                y: NPShadow.medium.y
+            )
     }
 }
-
-// MARK: - Card Modifier (no border — floats via shadow alone)
 
 struct NPCardModifier: ViewModifier {
     var radius: CGFloat = NPRadius.card
@@ -98,95 +164,77 @@ struct NPCardModifier: ViewModifier {
         content
             .padding(padding)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(NPColors.surface)
+            .background(NPColors.surfaceCard)
             .clipShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: radius, style: .continuous)
+                    .stroke(Color.white.opacity(0.70), lineWidth: 0.5)
+            }
             .modifier(NPCardShadow())
     }
 }
 
-// MARK: - Button Styles
-
-// MARK: - Button Styles
+// MARK: - Primary Button Style (220ms cubic, calm)
 
 struct NPPrimaryButtonStyle: ButtonStyle {
     @Environment(\.isEnabled) private var isEnabled
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: 16, weight: .bold, design: .default))
-            .foregroundStyle(Color(hex: "#184A36"))
+            .font(.system(size: 15, weight: .medium, design: .default))
+            .foregroundStyle(NPColors.brandDark)
             .frame(height: 46)
             .frame(maxWidth: .infinity)
             .background {
-                ZStack {
-                    Capsule(style: .continuous)
-                        .fill(
-                            LinearGradient(
-                                colors: [Color.white.opacity(0.90), Color(hex: "#F0FAF5").opacity(0.50)],
-                                startPoint: .top, endPoint: .bottom
-                            )
-                        )
-                    Capsule(style: .continuous)
-                        .fill(.white.opacity(0.0))
-                        .background(.ultraThinMaterial)
-                        .clipShape(Capsule(style: .continuous))
-                }
+                Capsule(style: .continuous)
+                    .fill(NPColors.interactive)
             }
             .overlay {
                 Capsule(style: .continuous)
-                    .stroke(Color.white.opacity(0.80), lineWidth: 1)
+                    .stroke(NPColors.border, lineWidth: 0.5)
             }
-            .overlay {
-                Capsule(style: .continuous)
-                    .inset(by: 1)
-                    .stroke(Color.white.opacity(1.0), lineWidth: 1)
-                    .mask(VStack(spacing: 0) { Color.white.frame(height: 2); Color.clear })
-            }
-            .shadow(color: .black.opacity(0.04), radius: 16, x: 0, y: 4)
+            .shadow(
+                color: NPShadow.small.color,
+                radius: NPShadow.small.radius,
+                x: 0,
+                y: NPShadow.small.y
+            )
             .scaleEffect(configuration.isPressed ? 0.98 : 1.0)
             .opacity(isEnabled ? 1.0 : 0.5)
-            .animation(.spring(response: 0.3, dampingFraction: 0.75), value: configuration.isPressed)
+            .animation(Animation.npButton, value: configuration.isPressed)
     }
 }
+
+// MARK: - Secondary Button Style
 
 struct NPSecondaryButtonStyle: ButtonStyle {
     @Environment(\.isEnabled) private var isEnabled
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: 14, weight: .bold, design: .default))
-            .foregroundStyle(Color(hex: "#184A36"))
+            .font(.system(size: 14, weight: .medium, design: .default))
+            .foregroundStyle(NPColors.brandDark)
             .frame(height: 44)
             .frame(maxWidth: .infinity)
             .background {
-                ZStack {
-                    Capsule(style: .continuous)
-                        .fill(
-                            LinearGradient(
-                                colors: [Color.white.opacity(0.90), Color(hex: "#F0FAF5").opacity(0.50)],
-                                startPoint: .top, endPoint: .bottom
-                            )
-                        )
-                    Capsule(style: .continuous)
-                        .fill(.white.opacity(0.0))
-                        .background(.ultraThinMaterial)
-                        .clipShape(Capsule(style: .continuous))
-                }
+                Capsule(style: .continuous)
+                    .fill(NPColors.interactive)
             }
             .overlay {
                 Capsule(style: .continuous)
-                    .stroke(Color.white.opacity(0.80), lineWidth: 1)
+                    .stroke(NPColors.border, lineWidth: 0.5)
             }
-            .overlay {
-                Capsule(style: .continuous)
-                    .inset(by: 1)
-                    .stroke(Color.white.opacity(1.0), lineWidth: 1)
-                    .mask(VStack(spacing: 0) { Color.white.frame(height: 2); Color.clear })
-            }
-            .shadow(color: .black.opacity(0.03), radius: 12, x: 0, y: 2)
+            .shadow(
+                color: NPShadow.small.color,
+                radius: NPShadow.small.radius,
+                x: 0,
+                y: NPShadow.small.y
+            )
             .scaleEffect(configuration.isPressed ? 0.98 : 1.0)
             .opacity(isEnabled ? 1.0 : 0.5)
-            .animation(.spring(response: 0.3, dampingFraction: 0.75), value: configuration.isPressed)
+            .animation(Animation.npButton, value: configuration.isPressed)
     }
 }
+
+// MARK: - Icon Button Style
 
 struct NPIconButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
@@ -194,65 +242,99 @@ struct NPIconButtonStyle: ButtonStyle {
             .font(.system(size: 17))
             .foregroundStyle(NPColors.textSecondary)
             .scaleEffect(configuration.isPressed ? 0.92 : 1.0)
-            .animation(.spring(response: 0.3, dampingFraction: 0.75), value: configuration.isPressed)
+            .animation(Animation.npButton, value: configuration.isPressed)
     }
 }
 
-// MARK: - Document Card Button Styles
+// MARK: - Upload Button Style (Visual anchor, primary action)
 
-/// Document card action button: ice glass, compact
-struct NPDocumentPrimaryButtonStyle: ButtonStyle {
+struct NPUploadButtonStyle: ButtonStyle {
     @Environment(\.isEnabled) private var isEnabled
+    @State private var isHovering = false
+
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: 13, weight: .bold, design: .default))
-            .foregroundStyle(Color(hex: "#184A36"))
+            .font(.system(size: 15, weight: .medium, design: .default))
+            .foregroundStyle(NPColors.brandDark)
+            .frame(height: 48)
+            .frame(maxWidth: .infinity)
+            .background {
+                Capsule(style: .continuous)
+                    .fill(Color(hex: "#F8FBF8"))
+            }
+            .overlay {
+                Capsule(style: .continuous)
+                    .stroke(Color(hex: "#5D9972").opacity(0.10), lineWidth: 1)
+            }
+            .shadow(
+                color: NPShadow.upload.color,
+                radius: NPShadow.upload.radius,
+                x: 0,
+                y: NPShadow.upload.y
+            )
+            .scaleEffect(isHovering ? 1.02 : configuration.isPressed ? 0.98 : 1.0)
+            .offset(y: isHovering ? -3 : 0)
+            .opacity(isEnabled ? 1.0 : 0.5)
+            .animation(Animation.npButton, value: isHovering)
+            .animation(Animation.npButton, value: configuration.isPressed)
+            .onHover { h in
+                withAnimation(Animation.npButton) { isHovering = h }
+            }
+    }
+}
+
+// MARK: - Reprocess Button Style (Card action, no glow)
+
+struct NPDocumentPrimaryButtonStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var isEnabled
+    @State private var isHovering = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 13, weight: .medium, design: .default))
+            .foregroundStyle(NPColors.brandDark)
             .frame(height: 38)
             .frame(maxWidth: .infinity)
             .background {
-                ZStack {
-                    Capsule(style: .continuous)
-                        .fill(
-                            LinearGradient(
-                                colors: [Color.white.opacity(0.90), Color(hex: "#F0FAF5").opacity(0.50)],
-                                startPoint: .top, endPoint: .bottom
-                            )
-                        )
-                    Capsule(style: .continuous)
-                        .fill(.white.opacity(0.0))
-                        .background(.ultraThinMaterial)
-                        .clipShape(Capsule(style: .continuous))
-                }
+                Capsule(style: .continuous)
+                    .fill(isHovering ? NPColors.surfaceCard : NPColors.interactive)
             }
             .overlay {
                 Capsule(style: .continuous)
-                    .stroke(Color.white.opacity(0.75), lineWidth: 1)
+                    .stroke(NPColors.border, lineWidth: 0.5)
             }
-            .overlay {
-                Capsule(style: .continuous)
-                    .inset(by: 0.8)
-                    .stroke(Color.white.opacity(1.0), lineWidth: 0.8)
-                    .mask(VStack(spacing: 0) { Color.white.frame(height: 1.5); Color.clear })
-            }
-            .shadow(color: .black.opacity(0.03), radius: 10, x: 0, y: 2)
+            .shadow(
+                color: isHovering ? .black.opacity(0.08) : .black.opacity(0.05),
+                radius: isHovering ? 18 : 8,
+                x: 0,
+                y: isHovering ? 8 : 3
+            )
             .scaleEffect(configuration.isPressed ? 0.98 : 1.0)
+            .offset(y: isHovering && !configuration.isPressed ? -2 : 0)
             .opacity(isEnabled ? 1.0 : 0.5)
-            .animation(.spring(response: 0.3, dampingFraction: 0.75), value: configuration.isPressed)
+            .animation(Animation.npButton, value: isHovering)
+            .animation(Animation.npButton, value: configuration.isPressed)
+            .onHover { h in
+                withAnimation(Animation.npButton) { isHovering = h }
+            }
     }
 }
 
-/// 文档卡片裸图标按钮：无边框、无背景、深灰 icon
+// MARK: - Document Icon Button Style
+
 struct NPDocumentIconButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.system(size: 17, weight: .regular))
             .foregroundStyle(NPColors.textSecondary)
             .scaleEffect(configuration.isPressed ? 0.88 : 1.0)
-            .animation(.spring(response: 0.3, dampingFraction: 0.75), value: configuration.isPressed)
+            .animation(Animation.npButton, value: configuration.isPressed)
     }
 }
 
-/// 头部工具栏纯图标按钮：无边框、无背景、品牌绿 icon
+// MARK: - Toolbar Icon Button Style
+
 struct NPToolbarIconButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
@@ -261,41 +343,33 @@ struct NPToolbarIconButtonStyle: ButtonStyle {
             .frame(width: 36, height: 36)
             .background(
                 Circle()
-                    .fill(NPColors.brandLight.opacity(configuration.isPressed ? 0.40 : 0.20))
+                    .fill(NPColors.brandLight.opacity(configuration.isPressed ? 0.45 : 0.25))
             )
             .scaleEffect(configuration.isPressed ? 0.93 : 1.0)
-            .animation(.spring(response: 0.3, dampingFraction: 0.75), value: configuration.isPressed)
+            .animation(Animation.npButton, value: configuration.isPressed)
     }
 }
 
-
-// MARK: - Typography
+// MARK: - Typography (Dynamic Type-native)
 
 extension View {
-    func npScreenTitle() -> some View {
-        self.font(.system(size: 22, weight: .semibold))
-            .foregroundStyle(NPColors.textPrimary)
-    }
+    func npTitle()      -> some View { self.font(.title2.weight(.semibold)).foregroundStyle(NPColors.textPrimary) }
+    func npHeading()    -> some View { self.font(.title3.weight(.semibold)).foregroundStyle(NPColors.textPrimary) }
+    func npSubheading() -> some View { self.font(.headline.weight(.semibold)).foregroundStyle(NPColors.textPrimary) }
+    func npBody()       -> some View { self.font(.body).foregroundStyle(NPColors.textPrimary) }
+    func npCallout()    -> some View { self.font(.callout).foregroundStyle(NPColors.textSecondary) }
+    func npCaption()    -> some View { self.font(.caption).foregroundStyle(NPColors.textTertiary) }
+}
 
-    func npSectionTitle() -> some View {
-        self.font(.system(size: 18, weight: .semibold))
-            .foregroundStyle(NPColors.textPrimary)
-    }
+// MARK: - Legacy Typography (backward compatibility)
 
-    func npCardTitle() -> some View {
-        self.font(.system(size: 16, weight: .semibold))
-            .foregroundStyle(NPColors.textPrimary)
-    }
-
-    func npBody() -> some View {
-        self.font(.system(size: 15, weight: .regular))
-            .foregroundStyle(NPColors.textPrimary)
-    }
-
-    func npCaption() -> some View {
-        self.font(.system(size: 12, weight: .regular))
-            .foregroundStyle(NPColors.textSecondary)
-    }
+extension View {
+    @available(*, deprecated, message: "Use npTitle()")
+    func npScreenTitle() -> some View { npTitle() }
+    @available(*, deprecated, message: "Use npHeading()")
+    func npSectionTitle() -> some View { npHeading() }
+    @available(*, deprecated, message: "Use npSubheading()")
+    func npCardTitle() -> some View { npSubheading() }
 }
 
 // MARK: - Status Chip
@@ -312,15 +386,15 @@ struct NPStatusChip: View {
 
         var bg: Color {
             switch self {
-            case .brand:       return NPColors.brandLight.opacity(0.30)
-            case .neutral:     return NPColors.divider.opacity(0.60)
+            case .brand:       return NPColors.successBg
+            case .neutral:     return Color.black.opacity(0.04)
             case .warning:     return NPColors.warning.opacity(0.15)
             case .destructive: return NPColors.destructive.opacity(0.12)
             }
         }
         var fg: Color {
             switch self {
-            case .brand:       return NPColors.brandDark
+            case .brand:       return NPColors.successText
             case .neutral:     return NPColors.textSecondary
             case .warning:     return NPColors.warning
             case .destructive: return NPColors.destructive
@@ -340,7 +414,7 @@ struct NPStatusChip: View {
     }
 }
 
-// MARK: - Section Container (replaces old glassly SectionContainer)
+// MARK: - Section Container
 
 struct NPSection<Content: View>: View {
     @ViewBuilder let content: Content
@@ -362,38 +436,53 @@ struct NPEmptyState: View {
         VStack(spacing: NPSpacing.small) {
             Image(systemName: systemImage)
                 .font(.system(size: 36, weight: .light))
-                .foregroundStyle(NPColors.textSecondary.opacity(0.5))
+                .foregroundStyle(NPColors.textTertiary.opacity(0.5))
             Text(localized(title))
-                .npSectionTitle()
+                .npHeading()
             Text(localized(message))
                 .npCaption()
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 260)
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 40)
+        .padding(.vertical, NPSpacing.xxxl)
     }
 }
 
-// MARK: - Animation Presets
+// MARK: - Animation Presets (Calm cubic-based, no bounce)
 
 extension Animation {
-    static let npInteractive  = Animation.spring(response: 0.28, dampingFraction: 0.78)
-    static let npCardEntry    = Animation.spring(response: 0.35, dampingFraction: 0.85)
-    static let npSheetSpring  = Animation.spring(response: 0.40, dampingFraction: 0.84)
+    /// 220ms ease-out cubic — primary interaction curve.
+    static let npButton      = Animation.timingCurve(0.2, 0.8, 0.2, 1.0, duration: 0.22)
+    /// Quick fade transitions.
+    static let npQuick       = Animation.easeOut(duration: 0.20)
+    /// Instant response.
+    static let npInstant     = Animation.easeOut(duration: 0.10)
+    /// Gentle surface transition.
+    static let npCardEntry   = Animation.timingCurve(0.2, 0.8, 0.2, 1.0, duration: 0.25)
+    /// Sheet presentation.
+    static let npSheetSpring = Animation.spring(response: 0.40, dampingFraction: 0.84)
+    /// Button breath — subtle attention draw.
+    static let npBreath      = Animation.easeInOut(duration: 1.0)
+    /// Legacy spring — kept for compatibility.
+    static let npInteractive = Animation.timingCurve(0.2, 0.8, 0.2, 1.0, duration: 0.22)
 }
 
 // MARK: - Input Field Modifier
 
-/// 标准输入框：白底 + 14px 圆角，聚焦时品牌绿描边，默认无边框仅靠阴影区分
 struct NPInputFieldModifier: ViewModifier {
     var isFocused: Bool = false
 
     func body(content: Content) -> some View {
         content
-            .background(NPColors.surface)
+            .background(NPColors.surfaceCard)
             .clipShape(RoundedRectangle(cornerRadius: NPRadius.input, style: .continuous))
-            .shadow(color: Color.black.opacity(0.03), radius: 4, x: 0, y: 1)
+            .shadow(
+                color: NPShadow.small.color,
+                radius: NPShadow.small.radius,
+                x: 0,
+                y: NPShadow.small.y
+            )
             .overlay {
                 RoundedRectangle(cornerRadius: NPRadius.input, style: .continuous)
                     .stroke(isFocused ? NPColors.brand : NPColors.divider, lineWidth: isFocused ? 1.5 : 0.5)
@@ -405,4 +494,19 @@ extension View {
     func npInputField(isFocused: Bool = false) -> some View {
         modifier(NPInputFieldModifier(isFocused: isFocused))
     }
+}
+
+// MARK: - Segmented Control Styling
+
+enum NPSegmentedControl {
+    static let background    = Color(hex: "#E7EAE5")
+    static let selectedBg    = Color.white
+    static let selectedShadow: (color: Color, radius: CGFloat, y: CGFloat) = (.black.opacity(0.04), 6, 2)
+}
+
+// MARK: - Tab Bar Styling (Floating Dock)
+
+enum NPTabBar {
+    static let background    = Color.white
+    static let shadow: (color: Color, radius: CGFloat, y: CGFloat) = (.black.opacity(0.08), 30, 12)
 }

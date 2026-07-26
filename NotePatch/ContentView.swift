@@ -53,7 +53,7 @@ private struct AuthScreen: View {
 
                         VStack(spacing: NPSpacing.small) {
                             Text("NotePatch")
-                                .npScreenTitle()
+                                .npTitle()
                             Text("Scan, organize, and process your study documents")
                                 .npCaption()
                                 .lineSpacing(2)
@@ -61,7 +61,7 @@ private struct AuthScreen: View {
                         .opacity(appear ? 1 : 0)
                         .offset(y: appear ? 0 : 12)
                     }
-                    .padding(.top, 20)
+                    .padding(.top, NPSpacing.large)
 
                     // Form card
                     VStack(spacing: NPSpacing.item) {
@@ -73,7 +73,7 @@ private struct AuthScreen: View {
                                     .accessibilityIdentifier("apiAddressField")
                             }
 
-                            Divider().background(NPColors.divider)
+                            Divider().background(NPColors.interactive.opacity(0.4))
 
                             AuthField(title: "Email", systemImage: "envelope") {
                                 TextField("name@example.com", text: $model.emailText)
@@ -83,7 +83,7 @@ private struct AuthScreen: View {
                                     .accessibilityIdentifier("emailField")
                             }
 
-                            Divider().background(NPColors.divider)
+                            Divider().background(NPColors.interactive.opacity(0.4))
 
                             AuthField(title: "Password", systemImage: "lock") {
                                 SecureField("Enter password", text: $model.passwordText)
@@ -91,7 +91,7 @@ private struct AuthScreen: View {
                                     .accessibilityIdentifier("passwordField")
                             }
 
-                            Divider().background(NPColors.divider)
+                            Divider().background(NPColors.interactive.opacity(0.4))
 
                             AuthField(title: "Full Name", systemImage: "person") {
                                 TextField("Enter when registering", text: $model.fullNameText)
@@ -110,7 +110,7 @@ private struct AuthScreen: View {
                             Spacer()
                             if model.isBusy {
                                 ProgressView()
-                                    .tint(.white)
+                                    .tint(NPColors.surface)
                             } else {
                                 Label("Sign In", systemImage: "arrow.right")
                                     .font(.body.weight(.semibold))
@@ -123,7 +123,7 @@ private struct AuthScreen: View {
                     .accessibilityIdentifier("loginButton")
 
                     // Secondary buttons
-                    HStack(spacing: 12) {
+                    HStack(spacing: NPSpacing.medium) {
                         Button {
                             model.authenticate(register: true)
                         } label: {
@@ -149,7 +149,7 @@ private struct AuthScreen: View {
                 .opacity(appear ? 1 : 0)
                 .offset(y: appear ? 0 : 16)
                 .padding(.horizontal, NPSpacing.outer)
-                .padding(.bottom, 40)
+                .padding(.bottom, NPSpacing.xxxl)
             }
         }
         .disabled(model.isBusy)
@@ -165,17 +165,17 @@ private struct AuthField<Field: View>: View {
     @ViewBuilder let field: Field
 
     var body: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: NPSpacing.medium) {
             Image(systemName: systemImage)
                 .font(.system(size: 16, weight: .medium))
                 .foregroundStyle(NPColors.textSecondary)
                 .frame(width: 22)
             VStack(alignment: .leading, spacing: 2) {
                 Text(localized(title))
-                    .font(.caption)
+                    .npCaption()
                     .foregroundStyle(NPColors.textSecondary)
                 field
-                    .font(.body)
+                    .npBody()
             }
         }
         .frame(minHeight: 48)
@@ -230,19 +230,22 @@ private struct WorkbenchScreen: View {
                     }
             }
             .tint(NPColors.brandDark)
-            .animation(.spring(response: 0.35, dampingFraction: 0.85), value: model.selectedTab)
+            .animation(Animation.npCardEntry, value: model.selectedTab)
             .onAppear {
                 let appearance = UITabBarAppearance()
                 appearance.configureWithTransparentBackground()
-                appearance.backgroundColor = UIColor(NPColors.surface)
-                // 去掉选中态背景胶囊
+                appearance.backgroundColor = UIColor(NPTabBar.background)
+                appearance.backgroundEffect = nil
+                appearance.shadowColor = .clear
                 appearance.stackedLayoutAppearance.selected.iconColor = UIColor(NPColors.brandDark)
                 appearance.stackedLayoutAppearance.selected.titleTextAttributes = [.foregroundColor: UIColor(NPColors.brandDark)]
-                appearance.stackedLayoutAppearance.normal.iconColor = UIColor(NPColors.textSecondary).withAlphaComponent(0.65)
-                appearance.stackedLayoutAppearance.normal.titleTextAttributes = [.foregroundColor: UIColor(NPColors.textSecondary).withAlphaComponent(0.65)]
+                appearance.stackedLayoutAppearance.normal.iconColor = UIColor(NPColors.textSecondary)
+                appearance.stackedLayoutAppearance.normal.titleTextAttributes = [.foregroundColor: UIColor(NPColors.textSecondary)]
                 UITabBar.appearance().standardAppearance = appearance
                 UITabBar.appearance().scrollEdgeAppearance = appearance
             }
+            .toolbarBackground(NPTabBar.background, for: .tabBar)
+            .toolbarBackground(.visible, for: .tabBar)
             .onChange(of: model.selectedTab) { selectedTab in
                 if selectedTab != .openClaw {
                     dismissActiveKeyboard()
@@ -269,15 +272,15 @@ private struct NotesTab: View {
             NotePatchLogoImage(height: 64)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, NPSpacing.outer)
-                .padding(.top, 16)
-                .padding(.bottom, 4)
+                .padding(.top, NPSpacing.item)
+                .padding(.bottom, NPSpacing.xs)
 
             Text("Patch your knowledge together.")
                 .font(.system(size: 13, weight: .regular, design: .default))
                 .foregroundStyle(NPColors.textSecondary.opacity(0.7))
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, NPSpacing.outer)
-                .padding(.bottom, 16)
+                .padding(.bottom, NPSpacing.item)
 
             HStack {
                 if model.selectedNotesSection == .notes {
@@ -316,9 +319,10 @@ private struct NotesTab: View {
                 }
             }
         }
-        .sheet(item: $readerItem, onDismiss: model.closeStudyNoteReader) { _ in
-            NavigationView {
+        .sheet(item: $readerItem) { _ in
+            NavigationStack {
                 StudyNoteReader(model: model)
+                    .onDisappear { model.closeStudyNoteReader() }
                     .toolbar {
                         ToolbarItem(placement: .cancellationAction) {
                             Button(localized("common.done")) {
@@ -327,7 +331,6 @@ private struct NotesTab: View {
                         }
                     }
             }
-            .navigationViewStyle(StackNavigationViewStyle())
         }
         .onChange(of: model.selectedNotesSection) { _ in
             model.ensureContentForSelectedTabLoaded()
@@ -352,7 +355,7 @@ private struct NotesTab: View {
                     ForEach(model.studyNoteGroups) { group in
                         VStack(alignment: .leading, spacing: NPSpacing.small) {
                             Text(group.learningUnit.title)
-                                .npCardTitle()
+                                .npSubheading()
                             HStack(spacing: 6) {
                                 Image(systemName: noteStateIcon(group.generationState))
                                 Text(noteStateTitle(group.generationState))
@@ -368,21 +371,21 @@ private struct NotesTab: View {
                             if group.notes.isEmpty {
                                 Text(noteStateMessage(group.generationState))
                                     .npCaption()
-                                    .padding(.vertical, 8)
+                                    .padding(.vertical, NPSpacing.small)
                             }
                             ForEach(group.notes) { item in
                                 Button {
                                     model.openStudyNote(item)
                                     readerItem = item
                                 } label: {
-                                    HStack(spacing: 12) {
+                                    HStack(spacing: NPSpacing.medium) {
                                         Image(systemName: "note.text")
-                                            .font(.title3)
+                                            .npHeading()
                                             .foregroundStyle(NPColors.brand)
                                             .frame(width: 28)
                                         VStack(alignment: .leading, spacing: 3) {
                                             Text(item.note.title.isEmpty ? localized("Digital Notes") : item.note.title)
-                                                .font(.subheadline.weight(.medium))
+                                                .npBody().fontWeight(.medium)
                                                 .foregroundStyle(NPColors.textPrimary)
                                                 .lineLimit(2)
                                             Text(localizedFormat("note.version", String(item.note.versionNo)))
@@ -395,7 +398,7 @@ private struct NotesTab: View {
                                                     .lineLimit(1)
                                             }
                                         }
-                                        Spacer(minLength: 8)
+                                        Spacer(minLength: NPSpacing.small)
                                         Image(systemName: "chevron.right")
                                             .font(.caption.weight(.semibold))
                                             .foregroundStyle(NPColors.textSecondary.opacity(0.5))
@@ -447,7 +450,7 @@ private struct StudyNoteReader: View {
                             .font(.title2.weight(.bold))
                             .foregroundStyle(NPColors.textPrimary)
                         Text("\(item.learningUnit.title) · \(localizedFormat("note.version", String(item.note.versionNo)))")
-                            .font(.subheadline)
+                            .npBody()
                             .foregroundStyle(NPColors.textSecondary)
                         Text(item.note.revisionOriginLabel)
                             .npCaption()
@@ -508,11 +511,11 @@ private struct StudyNoteReader: View {
                 .accessibilityIdentifier("studyNoteReader")
             }
         }
-        .sheet(isPresented: $model.isStudyNoteEditorPresented, onDismiss: model.cancelStudyNoteEditing) {
-            NavigationView {
+        .sheet(isPresented: $model.isStudyNoteEditorPresented) {
+            NavigationStack {
                 StudyNoteEditor(model: model)
+                    .onDisappear { model.cancelStudyNoteEditing() }
             }
-            .navigationViewStyle(StackNavigationViewStyle())
         }
     }
 }
@@ -547,7 +550,7 @@ private struct StudyNoteEditor: View {
                     commandToken: editorCommandToken
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(NPColors.divider.opacity(0.35))
+                .background(NPColors.background)
                 .clipShape(RoundedRectangle(cornerRadius: NPRadius.input, style: .continuous))
                 .overlay(
                     RoundedRectangle(cornerRadius: NPRadius.input, style: .continuous)
@@ -571,7 +574,7 @@ private struct StudyNoteEditor: View {
 
                 if let error = model.studyNoteEditorError {
                     Text(error)
-                        .font(.subheadline)
+                        .npBody()
                         .foregroundStyle(NPColors.destructive)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(10)
@@ -643,7 +646,7 @@ private struct StudyNoteEditor: View {
         }
         .buttonStyle(.plain)
         .background(NPColors.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: NPRadius.xs, style: .continuous))
         .accessibilityLabel(localized(label))
     }
 }
@@ -661,15 +664,15 @@ private struct DocumentsTab: View {
             NotePatchLogoImage(height: 64)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, NPSpacing.outer)
-                .padding(.top, 16)
-                .padding(.bottom, 4)
+                .padding(.top, NPSpacing.item)
+                .padding(.bottom, NPSpacing.xs)
 
             Text("Patch your knowledge together.")
                 .font(.system(size: 13, weight: .regular, design: .default))
                 .foregroundStyle(NPColors.textSecondary.opacity(0.7))
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, NPSpacing.outer)
-                .padding(.bottom, 16)
+                .padding(.bottom, NPSpacing.item)
 
             // Segmented control — reduced visual weight
             Picker("Document view", selection: $model.selectedDocumentsSection) {
@@ -679,7 +682,7 @@ private struct DocumentsTab: View {
             }
             .pickerStyle(.segmented)
             .padding(.horizontal, NPSpacing.outer)
-            .padding(.bottom, 20)
+            .padding(.bottom, NPSpacing.large)
 
             if model.selectedDocumentsSection == .documents {
                 documentList
@@ -688,7 +691,7 @@ private struct DocumentsTab: View {
             }
         }
         .sheet(isPresented: $isUploadPresented) {
-            NavigationView {
+            NavigationStack {
                 UploadDocumentScreen(model: model)
                 .navigationTitle("Upload Files")
                 .navigationBarTitleDisplayMode(.inline)
@@ -733,7 +736,7 @@ private struct DocumentsTab: View {
                     .padding(.vertical, 9)
                     .background(NPColors.surface)
                     .clipShape(Capsule())
-                    .shadow(color: Color.black.opacity(0.03), radius: 6, x: 0, y: 1)
+                    .shadow(color: NPShadow.small.color, radius: NPShadow.small.radius, x: 0, y: NPShadow.small.y)
                 }
                 .buttonStyle(.plain)
 
@@ -752,9 +755,9 @@ private struct DocumentsTab: View {
                     Text("\(model.documents.count)")
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(NPColors.textSecondary)
-                        .padding(.horizontal, 8)
+                        .padding(.horizontal, NPSpacing.small)
                         .padding(.vertical, 2)
-                        .background(NPColors.divider)
+                        .background(NPColors.interactive.opacity(0.4))
                         .clipShape(Capsule())
                 }
                 .padding(.top, 6)
@@ -762,7 +765,7 @@ private struct DocumentsTab: View {
                 if model.documents.isEmpty {
                     NPEmptyState(systemImage: "doc", title: "No documents", message: "No documents yet. Upload an image, PDF, or file to get started.")
                 } else {
-                    LazyVStack(spacing: 12) {
+                    LazyVStack(spacing: NPSpacing.medium) {
                         ForEach(model.documents) { document in
                             DocumentRow(
                                 document: document,
@@ -814,7 +817,7 @@ private struct UploadDocumentScreen: View {
                     VStack(alignment: .leading, spacing: 12) {
                         HStack {
                             Label("Pending", systemImage: "tray.and.arrow.up")
-                                .npCardTitle()
+                                .npSubheading()
                             Spacer()
                             Text(localizedFormat("upload.items_count", String(model.queuedUploadItems.count)))
                                 .npCaption()
@@ -902,7 +905,7 @@ private struct QueuedUploadRow: View {
         HStack(alignment: .top, spacing: 10) {
             Button(action: onToggle) {
                 Image(systemName: item.isSelected ? "checkmark.circle.fill" : "circle")
-                    .font(.title3)
+                    .npHeading()
                     .foregroundStyle(item.isSelected ? NPColors.brand : NPColors.textSecondary)
             }
             .buttonStyle(.plain)
@@ -917,7 +920,7 @@ private struct QueuedUploadRow: View {
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(item.file.filename)
-                    .font(.subheadline.weight(.medium))
+                    .npBody().fontWeight(.medium)
                     .foregroundStyle(NPColors.textPrimary)
                     .lineLimit(2)
                 Text("\(documentKindLabel(item.documentKind)) · \(formatBytes(item.file.fileSize))")
@@ -959,7 +962,7 @@ private struct QueuedUploadRow: View {
             EmptyView()
         case .uploading:
             Label("Uploading", systemImage: "arrow.up.circle")
-                .font(.caption)
+                .npCaption()
                 .foregroundStyle(NPColors.brand)
         case .failed(let message):
             Text(message)
@@ -1037,7 +1040,7 @@ private struct UploadPanel: View {
                 }
                 .padding(.top, NPSpacing.small)
             }
-            .font(.subheadline.weight(.medium))
+            .npBody().fontWeight(.medium)
             .foregroundStyle(NPColors.textPrimary)
         }
     }
@@ -1161,7 +1164,7 @@ private struct DocumentRow: View {
                 HStack(alignment: .top, spacing: 10) {
                     VStack(alignment: .leading, spacing: 4) {
                         Text(document.title ?? document.originalFilename)
-                            .npCardTitle()
+                            .npSubheading()
                             .lineLimit(2)
                         Text("\(documentKindLabel(document.documentKind)) · \(fileTypeLabel(document.fileType))")
                             .npCaption()
@@ -1215,7 +1218,7 @@ private struct DocumentRow: View {
                 }
 
                 if detailsExpanded {
-                    Divider().background(NPColors.divider)
+                    Divider().background(NPColors.interactive.opacity(0.4))
                     DetailText("mime: \(document.mimeType ?? "unknown")")
                     if let sha256 = document.sha256 {
                         DetailText("sha256: \(sha256)")
@@ -1224,7 +1227,7 @@ private struct DocumentRow: View {
                 }
 
                 if !artifacts.isEmpty {
-                    Divider().background(NPColors.divider)
+                    Divider().background(NPColors.interactive.opacity(0.4))
                     SectionLabel("Artifacts")
                     ForEach(artifacts) { artifact in
                         HStack(alignment: .firstTextBaseline, spacing: NPSpacing.small) {
@@ -1248,7 +1251,7 @@ private struct DocumentRow: View {
                 }
 
                 if !ocrArtifacts.isEmpty {
-                    Divider().background(NPColors.divider)
+                    Divider().background(NPColors.interactive.opacity(0.4))
                     VStack(alignment: .leading, spacing: NPSpacing.small) {
                         SectionLabel("OCR Results")
                         ForEach(ocrArtifacts) { artifact in
@@ -1313,7 +1316,7 @@ private struct TaskPanel: View {
             VStack(alignment: .leading, spacing: 14) {
                 HStack {
                     Label("Active task", systemImage: "clock.arrow.circlepath")
-                        .font(.headline)
+                        .npSubheading()
                         .foregroundStyle(NPColors.textPrimary)
                     Spacer()
                     if let activeTask {
@@ -1325,7 +1328,7 @@ private struct TaskPanel: View {
                     VStack(alignment: .leading, spacing: NPSpacing.small) {
                         HStack {
                             Text(taskTypeLabel(activeTask.taskType))
-                                .font(.subheadline.weight(.medium))
+                                .npBody().fontWeight(.medium)
                                 .foregroundStyle(NPColors.textPrimary)
                                 .lineLimit(1)
                             Spacer()
@@ -1350,7 +1353,7 @@ private struct TaskPanel: View {
                         let isCancelled = activeTask.status == "cancelled"
                         let msgColor: Color = isCancelled ? NPColors.warning : NPColors.destructive
                         Label(taskMessage, systemImage: "exclamationmark.triangle.fill")
-                            .font(.subheadline)
+                            .npBody()
                             .foregroundStyle(msgColor)
                             .padding(10)
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -1362,7 +1365,7 @@ private struct TaskPanel: View {
                             DetailText(resultText, lineLimit: nil)
                                 .padding(.top, 6)
                         }
-                        .font(.subheadline.weight(.medium))
+                        .npBody().fontWeight(.medium)
                     }
                     if canRetryDocumentPurge {
                         Button(action: onRetryDocumentPurge) {
@@ -1381,14 +1384,14 @@ private struct TaskPanel: View {
                 }
 
                 if !events.isEmpty {
-                    Divider().background(NPColors.divider)
+                    Divider().background(NPColors.interactive.opacity(0.4))
                     HStack {
                         SectionLabel("Event log")
                         Spacer()
                         Button(eventsExpanded ? "Collapse" : "View all") {
                             eventsExpanded.toggle()
                         }
-                        .font(.caption)
+                        .npCaption()
                     }
 
                     ForEach(visibleEvents) { event in
@@ -1399,7 +1402,7 @@ private struct TaskPanel: View {
                                 .padding(.top, 5)
                             VStack(alignment: .leading, spacing: 3) {
                                 Text("\(event.progress.map { "\($0)% · " } ?? "")\(event.message)")
-                                    .font(.caption)
+                                    .npCaption()
                                     .foregroundStyle(event.level == "error" ? NPColors.destructive : NPColors.textPrimary)
                                     .lineLimit(eventsExpanded ? 3 : 1)
                                 if eventsExpanded, let dataText = event.dataText {
@@ -1444,10 +1447,10 @@ private struct TaskTime: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(label)
-                .font(.caption2)
+                .npCaption()
                 .foregroundStyle(NPColors.textSecondary)
             Text(value)
-                .font(.caption)
+                .npCaption()
                 .foregroundStyle(NPColors.textPrimary)
                 .lineLimit(1)
         }
@@ -1474,15 +1477,15 @@ private struct OpenClawChatTab: View {
                     NotePatchLogoImage(height: 64)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, NPSpacing.outer)
-                        .padding(.top, 16)
-                        .padding(.bottom, 4)
+                        .padding(.top, NPSpacing.item)
+                        .padding(.bottom, NPSpacing.xs)
 
                     Text("Patch your knowledge together.")
                         .font(.system(size: 13, weight: .regular, design: .default))
                         .foregroundStyle(NPColors.textSecondary.opacity(0.7))
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, NPSpacing.outer)
-                        .padding(.bottom, 16)
+                        .padding(.bottom, NPSpacing.item)
 
                     // ——— Conversation header ———
                     HStack(spacing: 10) {
@@ -1538,7 +1541,7 @@ private struct OpenClawChatTab: View {
                                 .font(.system(size: 18, weight: .medium))
                                 .foregroundStyle(NPColors.textSecondary)
                                 .frame(width: 40, height: 40)
-                                .background(NPColors.divider)
+                                .background(NPColors.interactive.opacity(0.4))
                                 .clipShape(Circle())
                         }
                         .disabled(chatState.isHistoryLoading || chatState.isConversationMutating)
@@ -1550,16 +1553,16 @@ private struct OpenClawChatTab: View {
                     .clipShape(RoundedRectangle(cornerRadius: NPRadius.card, style: .continuous))
                     .modifier(NPCardShadow())
                     .padding(.horizontal, NPSpacing.outer)
-                    .padding(.bottom, 20)
+                    .padding(.bottom, NPSpacing.large)
 
                     // ——— Welcome card ———
                     if chatState.messages.isEmpty {
                         NPSection {
-                            VStack(spacing: 8) {
+                            VStack(spacing: NPSpacing.small) {
                                 Image(systemName: "sparkles")
                                     .font(.system(size: 28, weight: .light))
                                     .foregroundStyle(NPColors.brand)
-                                    .padding(.bottom, 4)
+                                    .padding(.bottom, NPSpacing.xs)
                                 Text("How can NotePatch AI help today?")
                                     .font(.system(size: 16, weight: .semibold))
                                     .foregroundStyle(NPColors.textPrimary)
@@ -1569,14 +1572,14 @@ private struct OpenClawChatTab: View {
                                     .multilineTextAlignment(.center)
                             }
                             .frame(maxWidth: .infinity)
-                            .padding(.vertical, 4)
+                            .padding(.vertical, NPSpacing.xs)
                         }
                         .padding(.horizontal, NPSpacing.outer)
                     }
 
                     // ——— Messages ———
                     ScrollViewReader { proxy in
-                        LazyVStack(spacing: 12) {
+                        LazyVStack(spacing: NPSpacing.medium) {
                             ForEach(chatState.messages) { message in
                                 OpenClawMessageBubble(message: message)
                                     .id(message.id)
@@ -1598,13 +1601,13 @@ private struct OpenClawChatTab: View {
 
             // ——— Composer bar ———
             VStack(spacing: 0) {
-                Divider().background(NPColors.divider)
+                Divider().background(NPColors.interactive.opacity(0.4))
                 composer
                     .padding(.horizontal, NPSpacing.outer)
                     .padding(.vertical, 10)
                     .animation(.npInteractive, value: isComposerExpanded)
             }
-            .background(.ultraThinMaterial)
+            .background(.thinMaterial)
         }
         .onDisappear { dismissComposer() }
         .fileImporter(
@@ -1684,10 +1687,6 @@ private struct OpenClawChatTab: View {
                     if expanded {
                         RoundedRectangle(cornerRadius: NPRadius.sheet, style: .continuous)
                             .fill(NPColors.surface)
-                            .overlay {
-                                RoundedRectangle(cornerRadius: NPRadius.sheet, style: .continuous)
-                                    .stroke(NPColors.border, lineWidth: 1)
-                            }
                             .modifier(NPCardShadow())
                     }
 
@@ -1819,7 +1818,7 @@ private struct OpenClawChatTab: View {
                 .frame(width: 38, height: 38)
         }
         .buttonStyle(.plain)
-        .foregroundStyle(canSend ? .white : NPColors.textSecondary)
+        .foregroundStyle(canSend ? NPColors.surface : NPColors.textSecondary)
         .background {
             Circle()
                 .fill(canSend ? NPColors.brand : NPColors.textSecondary.opacity(0.18))
@@ -1876,12 +1875,11 @@ private struct AIComposerAttachmentChip: View {
 }
 
 private func dismissActiveKeyboard() {
-    UIApplication.shared.sendAction(
-        #selector(UIResponder.resignFirstResponder),
-        to: nil,
-        from: nil,
-        for: nil
-    )
+    UIApplication.shared.connectedScenes
+        .compactMap { $0 as? UIWindowScene }
+        .flatMap { $0.windows }
+        .first { $0.isKeyWindow }?
+        .endEditing(true)
 }
 
 // MARK: - Learning Tab
@@ -1899,7 +1897,7 @@ private struct LearningTab: View {
             }
             .pickerStyle(.segmented)
             .padding(.horizontal, NPSpacing.outer)
-            .padding(.top, 4)
+            .padding(.top, NPSpacing.xs)
             .padding(.bottom, 12)
             .accessibilityIdentifier("reviewSectionPicker")
 
@@ -1948,7 +1946,7 @@ private struct LearningUnitsSection: View {
                     Button { model.selectLearningUnit(unit.id) } label: {
                         VStack(alignment: .leading, spacing: 6) {
                             HStack {
-                                Text(unit.title).npCardTitle().lineLimit(2)
+                                Text(unit.title).npSubheading().lineLimit(2)
                                 Spacer()
                                 if unit.id == model.selectedLearningUnitId {
                                     Image(systemName: "checkmark.circle.fill").foregroundStyle(NPColors.brand)
@@ -1966,17 +1964,17 @@ private struct LearningUnitsSection: View {
                 }
             }
             if model.selectedLearningUnitId != nil {
-                Text(localized("Digital Notes")).npCardTitle().padding(.top, 6)
+                Text(localized("Digital Notes")).npSubheading().padding(.top, 6)
                 if model.studyNotes.isEmpty {
                     Text(localized("notes.unit.empty"))
-                        .font(.subheadline)
+                        .npBody()
                         .foregroundStyle(NPColors.textSecondary)
                 } else {
                     ForEach(model.studyNotes) { note in
-                        HStack(spacing: 12) {
+                        HStack(spacing: NPSpacing.medium) {
                             Image(systemName: "note.text").foregroundStyle(NPColors.brand)
                             VStack(alignment: .leading, spacing: 3) {
-                                Text(note.title.isEmpty ? localized("Digital Notes") : note.title).font(.subheadline.weight(.medium)).lineLimit(2)
+                                Text(note.title.isEmpty ? localized("Digital Notes") : note.title).npBody().fontWeight(.medium).lineLimit(2)
                                 Text(localizedFormat("note.version", String(note.versionNo))).npCaption()
                             }
                             Spacer()
@@ -2019,22 +2017,22 @@ private struct FlashcardsSection: View {
                     message: localized("flashcards.no_units.message")
                 )
             } else {
-                HStack(spacing: 12) {
+                HStack(spacing: NPSpacing.medium) {
                     HStack {
                         Text(localized("flashcards.learning_unit"))
                             .font(.system(size: 13, weight: .medium))
                             .foregroundStyle(NPColors.textSecondary)
                             .lineLimit(1)
-                        Spacer(minLength: 4)
+                        Spacer(minLength: NPSpacing.xs)
                         Image(systemName: "chevron.up.chevron.down")
                             .font(.system(size: 10, weight: .semibold))
                             .foregroundStyle(NPColors.textSecondary.opacity(0.6))
                     }
-                    .padding(.horizontal, 12)
+                    .padding(.horizontal, NPSpacing.medium)
                     .padding(.vertical, 9)
                     .background(NPColors.surface)
-                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                    .shadow(color: Color.black.opacity(0.03), radius: 4, x: 0, y: 1)
+                    .clipShape(RoundedRectangle(cornerRadius: NPRadius.small, style: .continuous))
+                    .shadow(color: NPShadow.small.color, radius: NPShadow.small.radius, x: 0, y: NPShadow.small.y)
                     .overlay {
                         Picker(
                             localized("flashcards.learning_unit"),
@@ -2057,16 +2055,16 @@ private struct FlashcardsSection: View {
                             .font(.system(size: 13, weight: .medium))
                             .foregroundStyle(NPColors.textSecondary)
                             .lineLimit(1)
-                        Spacer(minLength: 4)
+                        Spacer(minLength: NPSpacing.xs)
                         Image(systemName: "chevron.up.chevron.down")
                             .font(.system(size: 10, weight: .semibold))
                             .foregroundStyle(NPColors.textSecondary.opacity(0.6))
                     }
-                    .padding(.horizontal, 12)
+                    .padding(.horizontal, NPSpacing.medium)
                     .padding(.vertical, 9)
                     .background(NPColors.surface)
-                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                    .shadow(color: Color.black.opacity(0.03), radius: 4, x: 0, y: 1)
+                    .clipShape(RoundedRectangle(cornerRadius: NPRadius.small, style: .continuous))
+                    .shadow(color: NPShadow.small.color, radius: NPShadow.small.radius, x: 0, y: NPShadow.small.y)
                     .overlay {
                         Picker(
                             localized("flashcards.deck"),
@@ -2148,7 +2146,7 @@ private struct FlashcardsSection: View {
             HStack(spacing: NPSpacing.item) {
                 Button { model.showPreviousFlashcard() } label: {
                     Image(systemName: "chevron.left")
-                        .frame(width: 42, height: 36)
+                        .frame(width: 36, height: 36)
                 }
                 .buttonStyle(NPSecondaryButtonStyle())
                 .disabled(model.flashcardIndex == 0)
@@ -2165,7 +2163,7 @@ private struct FlashcardsSection: View {
 
                 Button { model.showNextFlashcard() } label: {
                     Image(systemName: "chevron.right")
-                        .frame(width: 42, height: 36)
+                        .frame(width: 36, height: 36)
                 }
                 .buttonStyle(NPSecondaryButtonStyle())
                 .disabled(model.flashcardIndex + 1 >= detail.cards.count)
@@ -2186,7 +2184,7 @@ private struct FlashcardsSection: View {
                             Text(value.displayString)
                                 .foregroundStyle(NPColors.textPrimary)
                         }
-                        .font(.subheadline)
+                        .npBody()
                     }
                 }
                 if let difficulty = card.difficulty?.trimmingCharacters(in: .whitespacesAndNewlines), !difficulty.isEmpty {
@@ -2196,13 +2194,13 @@ private struct FlashcardsSection: View {
                         Spacer()
                         Text(difficulty)
                     }
-                    .font(.subheadline)
+                    .npBody()
                 }
             }
             .padding(.top, 10)
         } label: {
             Text(localizedFormat("flashcards.priority", String(format: "%.4f", card.priorityScore)))
-                .font(.subheadline.weight(.medium))
+                .npBody().fontWeight(.medium)
                 .foregroundStyle(NPColors.textPrimary)
         }
         .modifier(NPCardModifier())
@@ -2228,7 +2226,7 @@ private struct LearningSectionHeader: View {
     var body: some View {
         HStack {
             VStack(alignment: .leading, spacing: 2) {
-                Text(localized(title)).npSectionTitle()
+                Text(localized(title)).npHeading()
                 Text(localized(subtitle)).npCaption()
             }
             Spacer()
@@ -2246,7 +2244,7 @@ private struct KnowledgeSearchSection: View {
     var body: some View {
         LazyVStack(alignment: .leading, spacing: NPSpacing.item) {
             VStack(alignment: .leading, spacing: 2) {
-                Text("Knowledge search").npSectionTitle()
+                Text("Knowledge search").npHeading()
                 Text("Search through your workspace materials").npCaption()
             }
 
@@ -2276,12 +2274,12 @@ private struct KnowledgeSearchSection: View {
             }
 
             if model.isKnowledgeSearching {
-                ProgressView("Searching knowledge base...").frame(maxWidth: .infinity).padding(.vertical, 20)
+                ProgressView("Searching knowledge base...").frame(maxWidth: .infinity).padding(.vertical, NPSpacing.large)
             } else if model.hasSearchedKnowledge && model.knowledgeResults.isEmpty {
                 NPEmptyState(systemImage: "magnifyingglass", title: "No matches found", message: "Try different keywords, unit, or subject.")
             } else if !model.knowledgeResults.isEmpty {
                 HStack {
-                    Text("Search results").npCardTitle()
+                    Text("Search results").npSubheading()
                     Spacer()
                     Text(localizedFormat("knowledge.results_count", String(model.knowledgeResults.count))).npCaption()
                 }
@@ -2290,7 +2288,7 @@ private struct KnowledgeSearchSection: View {
                         VStack(alignment: .leading, spacing: NPSpacing.small) {
                             HStack(alignment: .firstTextBaseline) {
                                 Text(item.metadataTitle ?? item.sourceType ?? localized("Knowledge snippet"))
-                                    .font(.subheadline.weight(.semibold))
+                                    .npSubheading()
                                     .foregroundStyle(NPColors.textPrimary)
                                     .lineLimit(2)
                                 Spacer()
@@ -2298,7 +2296,7 @@ private struct KnowledgeSearchSection: View {
                                     .font(.caption.monospacedDigit())
                                     .foregroundStyle(NPColors.textSecondary)
                             }
-                            Text(item.content).font(.subheadline).textSelection(.enabled).foregroundStyle(NPColors.textPrimary)
+                            Text(item.content).npBody().textSelection(.enabled).foregroundStyle(NPColors.textPrimary)
                             let details = [item.subject, item.gradeLevel, item.sourceType, item.pageReferences.map { "Page \($0)" }].compactMap { $0 }
                             if !details.isEmpty {
                                 Text(details.joined(separator: " · ")).npCaption()
@@ -2327,7 +2325,7 @@ private struct HomeworkGradingSection: View {
         LazyVStack(alignment: .leading, spacing: NPSpacing.item) {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Homework grading").npSectionTitle()
+                    Text("Homework grading").npHeading()
                     Text("Configure grading rules, references, and start grading").npCaption()
                 }
                 Spacer()
@@ -2342,7 +2340,7 @@ private struct HomeworkGradingSection: View {
             }
 
             if model.isHomeworkLoading && model.homeworks.isEmpty {
-                ProgressView("Loading homework...").frame(maxWidth: .infinity).padding(.vertical, 24)
+                ProgressView("Loading homework...").frame(maxWidth: .infinity).padding(.vertical, NPSpacing.xl)
             } else if model.homeworks.isEmpty {
                 NPEmptyState(systemImage: "checklist", title: "No homework yet", message: model.homeworkDocumentCandidates.isEmpty ? "Upload and process a homework document first." : "Tap + to create a linked homework.")
             } else {
@@ -2372,7 +2370,7 @@ private struct HomeworkGradingSection: View {
                 VStack(alignment: .leading, spacing: 10) {
                     HStack {
                         VStack(alignment: .leading, spacing: 3) {
-                            Text(homework.title).npCardTitle()
+                            Text(homework.title).npSubheading()
                             Text([statusLabel(homework.status), homework.dueAt.map(compactDateTime)].compactMap { $0 }.joined(separator: " · "))
                                 .npCaption()
                         }
@@ -2404,16 +2402,16 @@ private struct HomeworkGradingSection: View {
             }
 
             VStack(alignment: .leading, spacing: 10) {
-                Text("Grading references").npCardTitle()
+                Text("Grading references").npSubheading()
                 if model.homeworkReferences.isEmpty {
-                    Text("No answer key or rubric.").font(.subheadline).foregroundStyle(NPColors.textSecondary)
+                    Text("No answer key or rubric.").npBody().foregroundStyle(NPColors.textSecondary)
                 } else {
                     ForEach(model.homeworkReferences) { reference in
                         HStack(spacing: 10) {
                             Image(systemName: reference.referenceType == "answer_key" ? "checkmark.square" : "list.clipboard")
                                 .foregroundStyle(NPColors.brand)
                             VStack(alignment: .leading, spacing: 2) {
-                                Text(referenceDocumentName(reference.documentId)).font(.subheadline.weight(.medium)).lineLimit(2)
+                                Text(referenceDocumentName(reference.documentId)).npBody().fontWeight(.medium).lineLimit(2)
                                 Text(documentKindLabel(reference.referenceType)).npCaption()
                             }
                             Spacer()
@@ -2448,7 +2446,7 @@ private struct HomeworkGradingSection: View {
 
             if let mode = model.gradingModeLabel {
                 HStack {
-                    Text(mode).font(.subheadline.weight(.semibold)).foregroundStyle(NPColors.textPrimary)
+                    Text(mode).npSubheading().foregroundStyle(NPColors.textPrimary)
                     if let confidence = model.gradingConfidence {
                         Text(localizedFormat("grading.confidence", String(format: "%.4f", confidence))).npCaption()
                     }
@@ -2483,7 +2481,7 @@ private struct HomeworkCreateSheet: View {
     @State private var maxScoreText = "100"
 
     var body: some View {
-        NavigationView {
+        NavigationStack {
             Form {
                 Section(header: Text("Homework document")) {
                     Picker("Document", selection: $documentId) {
@@ -2530,7 +2528,6 @@ private struct HomeworkCreateSheet: View {
                 }
             }
         }
-        .navigationViewStyle(StackNavigationViewStyle())
         .onAppear {
             if documentId.isEmpty, let document = model.homeworkDocumentCandidates.first {
                 documentId = document.id
@@ -2548,13 +2545,13 @@ private struct LearningEmptyState: View {
                 .font(.system(size: 42, weight: .light))
                 .foregroundStyle(NPColors.textSecondary.opacity(0.5))
             Text("No learning units yet")
-                .npCardTitle()
+                .npSubheading()
             Text("Learning results will appear here after processing documents.")
                 .npCaption()
                 .multilineTextAlignment(.center)
                 .lineSpacing(3)
         }
-        .padding(.vertical, 40)
+        .padding(.vertical, NPSpacing.xxxl)
         .frame(maxWidth: .infinity)
     }
 }
@@ -2654,15 +2651,15 @@ private struct ProfileTab: View {
                 NotePatchLogoImage(height: 100)
                     .frame(maxWidth: .infinity, alignment: .center)
                     .padding(.horizontal, NPSpacing.outer)
-                    .padding(.top, 20)
-                    .padding(.bottom, 8)
+                    .padding(.top, NPSpacing.item)
+                    .padding(.bottom, NPSpacing.xs)
 
                 Text("Patch your knowledge together.")
-                    .font(.system(size: 14, weight: .regular, design: .default))
-                    .foregroundStyle(NPColors.textSecondary.opacity(0.85))
+                    .font(.system(size: 13, weight: .regular, design: .default))
+                    .foregroundStyle(NPColors.textSecondary.opacity(0.7))
                     .frame(maxWidth: .infinity, alignment: .center)
                     .padding(.horizontal, NPSpacing.outer)
-                    .padding(.bottom, 16)
+                    .padding(.bottom, NPSpacing.item)
 
                 // ——— Profile Card ———
                 NPSection {
@@ -2715,11 +2712,11 @@ private struct ProfileTab: View {
                 .buttonStyle(NPSecondaryButtonStyle())
                 .foregroundStyle(NPColors.destructive)
                 .disabled(model.isBusy)
-                .padding(.bottom, 24)
+                .padding(.bottom, NPSpacing.xl)
             }
             .padding(.horizontal, NPSpacing.outer)
-            .padding(.top, 8)
-            .padding(.bottom, 40)
+            .padding(.top, NPSpacing.small)
+            .padding(.bottom, NPSpacing.xxxl)
         }
     }
 
@@ -2732,7 +2729,7 @@ private struct ProfileTab: View {
         NPSection {
             VStack(alignment: .leading, spacing: NPSpacing.small) {
                 Label("Language", systemImage: "globe")
-                    .npCardTitle()
+                    .npSubheading()
                 Picker("Language", selection: Binding(
                     get: { localization.language },
                     set: { localization.select($0) }
@@ -2753,7 +2750,7 @@ private struct ProfileTab: View {
         NPSection {
             VStack(alignment: .leading, spacing: NPSpacing.small) {
                 Label("AI", systemImage: "sparkles")
-                    .npCardTitle()
+                    .npSubheading()
                 Toggle("AI history", isOn: Binding(
                     get: { model.aiHistoryEnabled },
                     set: { model.updateAIHistoryEnabled($0) }
@@ -2769,7 +2766,7 @@ private struct ProfileTab: View {
         NPSection {
             VStack(alignment: .leading, spacing: 14) {
                 Label("Server", systemImage: "server.rack")
-                    .npCardTitle()
+                    .npSubheading()
 
                 LabeledField(title: "API address") {
                     TextField("API address", text: $model.apiBaseURLText)
@@ -2824,7 +2821,7 @@ private struct WorkspaceManagementSection: View {
             VStack(alignment: .leading, spacing: 14) {
                 HStack {
                     Label("Workspace", systemImage: "person.crop.square")
-                        .npCardTitle()
+                        .npSubheading()
                     Spacer()
                     Button {
                         model.refreshCurrentWorkspace()
@@ -2844,7 +2841,7 @@ private struct WorkspaceManagementSection: View {
                             .clipShape(RoundedRectangle(cornerRadius: NPRadius.button, style: .continuous))
                         VStack(alignment: .leading, spacing: 2) {
                             Text(selected.name)
-                                .font(.subheadline.weight(.medium))
+                                .npBody().fontWeight(.medium)
                                 .foregroundStyle(NPColors.textPrimary)
                                 .lineLimit(1)
                             Text("Active workspace")
@@ -2907,11 +2904,11 @@ private struct LightweightMarkdownText: View {
                 case .code:
                     Text(block.text)
                         .font(.system(.caption, design: .monospaced))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(NPColors.surface)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(10)
                         .background(Color.black.opacity(0.65))
-                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                        .clipShape(RoundedRectangle(cornerRadius: NPRadius.xs))
                 case .paragraph:
                     MarkdownInlineText(tokens: block.inlineTokens, color: color)
                 }
@@ -2943,7 +2940,7 @@ private struct MarkdownInlineText: View {
         case .code:
             return Text(token.text).font(.system(.body, design: .monospaced))
         case .link:
-            return Text(token.text).underline().foregroundColor(NPColors.brand)
+            return Text(token.text).underline().foregroundStyle(NPColors.brand)
         }
     }
 }
@@ -2962,7 +2959,7 @@ private struct CollapsibleSection<Content: View>: View {
                 HStack {
                     VStack(alignment: .leading, spacing: 3) {
                         Text(localized(title))
-                            .npCardTitle()
+                            .npSubheading()
                         Text(summary.isEmpty ? localized("filter.all") : summary)
                             .npCaption()
                             .lineLimit(1)
@@ -3003,8 +3000,7 @@ private struct SectionLabel: View {
 
     var body: some View {
         Text(localized(text))
-            .font(.subheadline.weight(.semibold))
-            .foregroundStyle(NPColors.textPrimary)
+            .npSubheading()
     }
 }
 
@@ -3050,27 +3046,43 @@ private struct ChoiceButton: View {
     let action: () -> Void
 
     var body: some View {
-        if selected {
-            Button(action: action) {
-                label
-            }
-            .buttonStyle(NPPrimaryButtonStyle())
-            .disabled(!enabled)
-        } else {
-            Button(action: action) {
-                label
-            }
-            .buttonStyle(NPSecondaryButtonStyle())
-            .disabled(!enabled)
+        Button(action: action) {
+            label
         }
+        .buttonStyle(ChoiceChipButtonStyle(selected: selected))
+        .disabled(!enabled)
     }
 
     private var label: some View {
         Text(localized(text))
-            .font(.subheadline)
+            .npBody()
             .lineLimit(1)
             .minimumScaleFactor(0.82)
             .frame(maxWidth: .infinity)
+    }
+}
+
+private struct ChoiceChipButtonStyle: ButtonStyle {
+    let selected: Bool
+    @Environment(\.isEnabled) private var isEnabled
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 15, weight: .regular))
+            .foregroundStyle(selected ? NPColors.brandDark : NPColors.brandDark)
+            .frame(height: 38)
+            .padding(.horizontal, NPSpacing.medium)
+            .background {
+                Capsule(style: .continuous)
+                    .fill(selected ? NPColors.brandLight.opacity(0.6) : NPColors.interactive)
+            }
+            .overlay {
+                Capsule(style: .continuous)
+                    .stroke(selected ? NPColors.brand : NPColors.border, lineWidth: selected ? 1 : 0.5)
+            }
+            .scaleEffect(configuration.isPressed ? 0.97 : 1.0)
+            .opacity(isEnabled ? 1.0 : 0.5)
+            .animation(Animation.npInteractive, value: configuration.isPressed)
     }
 }
 
@@ -3158,11 +3170,12 @@ private struct StatusBanner: View {
                 }
             }
             .foregroundStyle(NPColors.textPrimary)
-            .padding(.horizontal, 12)
+            .padding(.horizontal, NPSpacing.medium)
             .padding(.vertical, NPSpacing.small)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(bannerBg)
             .clipShape(RoundedRectangle(cornerRadius: NPRadius.button, style: .continuous))
+            .shadow(color: NPShadow.small.color, radius: NPShadow.small.radius, x: 0, y: NPShadow.small.y)
             .padding(.horizontal, NPSpacing.outer)
             .padding(.top, NPSpacing.small)
             .accessibilityIdentifier("globalStatusBanner")
@@ -3192,7 +3205,7 @@ private struct StatusBanner: View {
         if errorMessage != nil {
             return NPColors.destructive.opacity(0.12)
         }
-        return isWarning ? NPColors.warning.opacity(0.15) : NPColors.brandLight.opacity(0.6)
+        return isWarning ? NPColors.warning.opacity(0.15) : NPColors.brandLight.opacity(0.5)
     }
 }
 
@@ -3208,7 +3221,7 @@ private struct StatusPanel: View {
                     HStack(spacing: NPSpacing.small) {
                         ProgressView()
                         Text("Processing...")
-                            .font(.subheadline)
+                            .npBody()
                             .foregroundStyle(NPColors.textSecondary)
                     }
                 }
@@ -3223,9 +3236,10 @@ private struct StatusPanel: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(12)
+            .padding(NPSpacing.medium)
             .background(errorMessage != nil ? NPColors.destructive.opacity(0.1) : NPColors.brandLight.opacity(0.5))
-            .clipShape(RoundedRectangle(cornerRadius: NPRadius.card, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: NPRadius.medium, style: .continuous))
+            .shadow(color: NPShadow.small.color, radius: NPShadow.small.radius, x: 0, y: NPShadow.small.y)
         }
     }
 
@@ -3881,7 +3895,7 @@ private struct ImagePreview: View {
                     .ignoresSafeArea()
             } else {
                 Text("Cannot preview image")
-                    .foregroundStyle(.white)
+                    .foregroundStyle(NPColors.surface)
             }
             Button {
                 dismiss()
@@ -3889,7 +3903,7 @@ private struct ImagePreview: View {
                 Label("Close", systemImage: "xmark.circle.fill")
                     .labelStyle(.iconOnly)
                     .font(.title)
-                    .foregroundStyle(.white)
+                    .foregroundStyle(NPColors.surface)
                     .padding(18)
             }
         }
