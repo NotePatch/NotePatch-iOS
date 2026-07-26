@@ -277,15 +277,11 @@ private struct NotesTab: View {
                 .foregroundStyle(NPColors.textSecondary.opacity(0.7))
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, NPSpacing.outer)
-                .padding(.bottom, 32)
+                .padding(.bottom, 16)
 
             HStack {
-                Text(model.selectedNotesSection.title)
-                    .font(.system(size: 44, weight: .bold, design: .default))
-                    .foregroundStyle(NPColors.textPrimary)
-                    .accessibilityIdentifier("notesTab")
-                Spacer()
                 if model.selectedNotesSection == .notes {
+                    Spacer()
                     Button {
                         model.loadNotesOverview(allowOfflineNetwork: true)
                     } label: {
@@ -671,14 +667,6 @@ private struct DocumentsTab: View {
             Text("Patch your knowledge together.")
                 .font(.system(size: 13, weight: .regular, design: .default))
                 .foregroundStyle(NPColors.textSecondary.opacity(0.7))
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, NPSpacing.outer)
-                .padding(.bottom, 32)
-
-            // Page title
-            Text("Documents")
-                .font(.system(size: 44, weight: .bold, design: .default))
-                .foregroundStyle(NPColors.textPrimary)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, NPSpacing.outer)
                 .padding(.bottom, 16)
@@ -1480,102 +1468,143 @@ private struct OpenClawChatTab: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 10) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(chatState.selectedConversation?.title ?? localized("New conversation"))
-                        .npCardTitle()
-                        .lineLimit(1)
-                        .accessibilityIdentifier("openClawTab")
-                    Text(chatState.selectedConversation == nil ? "Auto-saved after first message" : "Saved AI session")
-                        .npCaption()
-                        .lineLimit(1)
-                }
-                Spacer()
-                Menu {
-                    Button {
-                        dismissComposer()
-                        model.startNewConversation()
-                    } label: {
-                        Label("New conversation", systemImage: "square.and.pencil")
-                    }
-                    if let conversation = chatState.selectedConversation {
-                        Button {
-                            dismissComposer()
-                            titleDraft = conversation.title
-                            isRenaming = true
-                        } label: {
-                            Label("Rename", systemImage: "pencil")
+            // ——— Brand Hero ———
+            ScrollView {
+                VStack(spacing: 0) {
+                    NotePatchLogoImage(height: 64)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, NPSpacing.outer)
+                        .padding(.top, 16)
+                        .padding(.bottom, 4)
+
+                    Text("Patch your knowledge together.")
+                        .font(.system(size: 13, weight: .regular, design: .default))
+                        .foregroundStyle(NPColors.textSecondary.opacity(0.7))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, NPSpacing.outer)
+                        .padding(.bottom, 16)
+
+                    // ——— Conversation header ———
+                    HStack(spacing: 10) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(chatState.selectedConversation?.title ?? localized("New conversation"))
+                                .font(.system(size: 16, weight: .semibold))
+                                .foregroundStyle(NPColors.textPrimary)
+                                .lineLimit(1)
+                                .accessibilityIdentifier("openClawTab")
+                            Text(chatState.selectedConversation == nil
+                                 ? localized("chat.ai.auto_saved_after_first_message")
+                                 : localized("chat.ai.saved_session"))
+                                .font(.system(size: 12, weight: .regular))
+                                .foregroundStyle(NPColors.textSecondary)
+                                .lineLimit(1)
                         }
-                        Button(role: .destructive) {
-                            dismissComposer()
-                            model.deleteCurrentConversation()
-                        } label: {
-                            Label("Delete conversation", systemImage: "trash")
-                        }
-                    }
-                    if !chatState.conversations.isEmpty {
-                        Divider()
-                        ForEach(chatState.conversations) { conversation in
+                        Spacer()
+                        Menu {
                             Button {
                                 dismissComposer()
-                                model.selectConversation(conversation.id)
+                                model.startNewConversation()
                             } label: {
-                                Label(conversation.title, systemImage: conversation.id == chatState.selectedConversationId ? "checkmark" : "bubble.left")
+                                Label("New conversation", systemImage: "square.and.pencil")
                             }
+                            if let conversation = chatState.selectedConversation {
+                                Button {
+                                    dismissComposer()
+                                    titleDraft = conversation.title
+                                    isRenaming = true
+                                } label: {
+                                    Label("Rename", systemImage: "pencil")
+                                }
+                                Button(role: .destructive) {
+                                    dismissComposer()
+                                    model.deleteCurrentConversation()
+                                } label: {
+                                    Label("Delete conversation", systemImage: "trash")
+                                }
+                            }
+                            if !chatState.conversations.isEmpty {
+                                Divider()
+                                ForEach(chatState.conversations) { conversation in
+                                    Button {
+                                        dismissComposer()
+                                        model.selectConversation(conversation.id)
+                                    } label: {
+                                        Label(conversation.title, systemImage: conversation.id == chatState.selectedConversationId ? "checkmark" : "bubble.left")
+                                    }
+                                }
+                            }
+                        } label: {
+                            Image(systemName: "ellipsis.circle")
+                                .font(.system(size: 18, weight: .medium))
+                                .foregroundStyle(NPColors.textSecondary)
+                                .frame(width: 40, height: 40)
+                                .background(NPColors.divider)
+                                .clipShape(Circle())
                         }
-                    }
-                } label: {
-                    Image(systemName: "ellipsis.circle")
-                        .font(.title3)
-                        .foregroundStyle(NPColors.textSecondary)
-                        .frame(width: 36, height: 36)
-                }
-                .disabled(chatState.isHistoryLoading || chatState.isConversationMutating)
-                .accessibilityLabel("Conversation actions")
-            }
-            .padding(.horizontal, NPSpacing.outer)
-            .padding(.vertical, 12)
-            .background(NPColors.surface)
-            .modifier(NPCardShadow())
-
-            ScrollViewReader { proxy in
-                ScrollView {
-                    ChatScrollPanObserver { value in
-                        dismissKeyboardIfNeeded(
-                            startLocation: value.startLocation,
-                            location: value.location,
-                            translation: value.translation,
-                            scrollBottomY: value.scrollBottomY
-                        )
-                    }
-                    .frame(height: 0)
-
-                    LazyVStack(spacing: 12) {
-                        ForEach(chatState.messages) { message in
-                            OpenClawMessageBubble(message: message)
-                                .id(message.id)
-                        }
+                        .disabled(chatState.isHistoryLoading || chatState.isConversationMutating)
+                        .accessibilityLabel("Conversation actions")
                     }
                     .padding(.horizontal, NPSpacing.outer)
                     .padding(.vertical, 14)
-                }
-                .onChange(of: chatState.messages.count) { _ in
-                    if let last = chatState.messages.last {
-                        withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
-                            proxy.scrollTo(last.id, anchor: .bottom)
+                    .background(NPColors.surface)
+                    .clipShape(RoundedRectangle(cornerRadius: NPRadius.card, style: .continuous))
+                    .modifier(NPCardShadow())
+                    .padding(.horizontal, NPSpacing.outer)
+                    .padding(.bottom, 20)
+
+                    // ——— Welcome card ———
+                    if chatState.messages.isEmpty {
+                        NPSection {
+                            VStack(spacing: 8) {
+                                Image(systemName: "sparkles")
+                                    .font(.system(size: 28, weight: .light))
+                                    .foregroundStyle(NPColors.brand)
+                                    .padding(.bottom, 4)
+                                Text("How can NotePatch AI help today?")
+                                    .font(.system(size: 16, weight: .semibold))
+                                    .foregroundStyle(NPColors.textPrimary)
+                                Text("Organize ideas, summarize notes, and analyze your documents with Markdown support.")
+                                    .font(.system(size: 13, weight: .regular))
+                                    .foregroundStyle(NPColors.textSecondary)
+                                    .multilineTextAlignment(.center)
+                            }
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 4)
+                        }
+                        .padding(.horizontal, NPSpacing.outer)
+                    }
+
+                    // ——— Messages ———
+                    ScrollViewReader { proxy in
+                        LazyVStack(spacing: 12) {
+                            ForEach(chatState.messages) { message in
+                                OpenClawMessageBubble(message: message)
+                                    .id(message.id)
+                            }
+                        }
+                        .padding(.horizontal, NPSpacing.outer)
+                        .padding(.vertical, 14)
+                        .onChange(of: chatState.messages.count) { _ in
+                            if let last = chatState.messages.last {
+                                withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+                                    proxy.scrollTo(last.id, anchor: .bottom)
+                                }
+                            }
                         }
                     }
+                    .accessibilityIdentifier("openClawMessages")
                 }
-                .accessibilityIdentifier("openClawMessages")
             }
 
+            // ——— Composer bar ———
             VStack(spacing: 0) {
                 Divider().background(NPColors.divider)
                 composer
-                .padding(.horizontal, NPSpacing.outer)
-                .padding(.vertical, 10)
-                .animation(.npInteractive, value: isComposerExpanded)
+                    .padding(.horizontal, NPSpacing.outer)
+                    .padding(.vertical, 10)
+                    .animation(.npInteractive, value: isComposerExpanded)
             }
+            .background(.ultraThinMaterial)
         }
         .onDisappear { dismissComposer() }
         .fileImporter(
@@ -1863,27 +1892,6 @@ private struct LearningTab: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            NotePatchLogoImage(height: 64)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, NPSpacing.outer)
-                .padding(.top, 16)
-                .padding(.bottom, 4)
-
-            Text("Patch your knowledge together.")
-                .font(.system(size: 13, weight: .regular, design: .default))
-                .foregroundStyle(NPColors.textSecondary.opacity(0.7))
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, NPSpacing.outer)
-                .padding(.bottom, 32)
-
-            Text("Review")
-                .font(.system(size: 44, weight: .bold, design: .default))
-                .foregroundStyle(NPColors.textPrimary)
-                .frame(height: 48, alignment: .center)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, NPSpacing.outer)
-                .padding(.bottom, 2)
-
             Picker("Learning view", selection: $model.selectedLearningSection) {
                 ForEach(LearningSection.allCases) { section in
                     Text(section.title).tag(section)
@@ -1891,7 +1899,8 @@ private struct LearningTab: View {
             }
             .pickerStyle(.segmented)
             .padding(.horizontal, NPSpacing.outer)
-            .padding(.vertical, 10)
+            .padding(.top, 4)
+            .padding(.bottom, 12)
             .accessibilityIdentifier("reviewSectionPicker")
 
             ScrollView {
@@ -2010,24 +2019,55 @@ private struct FlashcardsSection: View {
                     message: localized("flashcards.no_units.message")
                 )
             } else {
-                LabeledField(title: localized("flashcards.learning_unit")) {
-                    Picker(
-                        localized("flashcards.learning_unit"),
-                        selection: Binding(
-                            get: { model.selectedFlashcardLearningUnitId },
-                            set: { model.selectFlashcardLearningUnit($0) }
-                        )
-                    ) {
-                        ForEach(model.learningUnits) { unit in
-                            Text(unit.title).tag(unit.id)
-                        }
+                HStack(spacing: 12) {
+                    HStack {
+                        Text(localized("flashcards.learning_unit"))
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(NPColors.textSecondary)
+                            .lineLimit(1)
+                        Spacer(minLength: 4)
+                        Image(systemName: "chevron.up.chevron.down")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(NPColors.textSecondary.opacity(0.6))
                     }
-                    .pickerStyle(.menu)
-                    .accessibilityIdentifier("flashcardLearningUnitPicker")
-                }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 9)
+                    .background(NPColors.surface)
+                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .shadow(color: Color.black.opacity(0.03), radius: 4, x: 0, y: 1)
+                    .overlay {
+                        Picker(
+                            localized("flashcards.learning_unit"),
+                            selection: Binding(
+                                get: { model.selectedFlashcardLearningUnitId },
+                                set: { model.selectFlashcardLearningUnit($0) }
+                            )
+                        ) {
+                            ForEach(model.learningUnits) { unit in
+                                Text(unit.title).tag(unit.id)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                        .opacity(0.02)
+                        .accessibilityIdentifier("flashcardLearningUnitPicker")
+                    }
 
-                if !model.flashcardDecks.isEmpty {
-                    LabeledField(title: localized("flashcards.deck")) {
+                    HStack {
+                        Text(localized("flashcards.deck"))
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(NPColors.textSecondary)
+                            .lineLimit(1)
+                        Spacer(minLength: 4)
+                        Image(systemName: "chevron.up.chevron.down")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(NPColors.textSecondary.opacity(0.6))
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 9)
+                    .background(NPColors.surface)
+                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .shadow(color: Color.black.opacity(0.03), radius: 4, x: 0, y: 1)
+                    .overlay {
                         Picker(
                             localized("flashcards.deck"),
                             selection: Binding(
@@ -2041,6 +2081,7 @@ private struct FlashcardsSection: View {
                             }
                         }
                         .pickerStyle(.menu)
+                        .opacity(0.02)
                         .accessibilityIdentifier("flashcardDeckPicker")
                     }
                 }
@@ -2192,7 +2233,7 @@ private struct LearningSectionHeader: View {
             }
             Spacer()
             Button(action: onRefresh) { Image(systemName: "arrow.clockwise") }
-                .buttonStyle(NPSecondaryButtonStyle())
+                .buttonStyle(NPToolbarIconButtonStyle())
                 .disabled(isLoading)
                 .accessibilityLabel(localizedFormat("accessibility.refresh_named", localized(title)))
         }
@@ -2610,18 +2651,18 @@ private struct ProfileTab: View {
         ScrollView {
             VStack(spacing: 24) {
                 // ——— Brand Hero ———
-                NotePatchLogoImage(height: 64)
+                NotePatchLogoImage(height: 100)
                     .frame(maxWidth: .infinity, alignment: .center)
                     .padding(.horizontal, NPSpacing.outer)
-                    .padding(.top, 16)
-                    .padding(.bottom, 4)
+                    .padding(.top, 20)
+                    .padding(.bottom, 8)
 
                 Text("Patch your knowledge together.")
-                    .font(.system(size: 13, weight: .regular, design: .default))
-                    .foregroundStyle(NPColors.textSecondary.opacity(0.7))
+                    .font(.system(size: 14, weight: .regular, design: .default))
+                    .foregroundStyle(NPColors.textSecondary.opacity(0.85))
                     .frame(maxWidth: .infinity, alignment: .center)
                     .padding(.horizontal, NPSpacing.outer)
-                    .padding(.bottom, 24)
+                    .padding(.bottom, 16)
 
                 // ——— Profile Card ———
                 NPSection {

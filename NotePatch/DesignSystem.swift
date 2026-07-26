@@ -2,13 +2,13 @@
 //  DesignSystem.swift
 //  NotePatch
 //
-//  NotePatch Design System — warm neutral palette, brand green accents,
+//  NotePatch Design System — light/dark dual theme, premium pink accent in dark mode.
 //  Apple HIG-inspired minimalism with unique NotePatch identity.
 //
 //  Color usage: 90% Neutral / 8% Brand / 2% Accent
 //  Spacing: 8pt grid
 //  Typography: Apple hierarchy
-//  Radius: cards 18, buttons 14, inputs 14, chips 12
+//  Radius: cards 20, buttons 14, inputs 14, chips 10
 //
 
 import SwiftUI
@@ -42,29 +42,20 @@ extension Color {
 // MARK: - Color Tokens
 
 struct NPColors {
-    // Background — warmer, barely-there tone
-    static let background = Color(hex: "#FAFAF8")
-    static let surface     = Color(hex: "#FFFFFF")
-
-    // Text — higher contrast primary, softer secondary
+    static let background    = Color(hex: "#FAFAF8")
+    static let surface       = Color(hex: "#FFFFFF")
+    static let surfaceAlt    = Color(hex: "#F7F7F7")
     static let textPrimary   = Color(hex: "#111111")
     static let textSecondary = Color(hex: "#6E6E73")
-
-    // Dividers & Borders — near-invisible
-    static let divider = Color(hex: "#EEEEEC")
-    static let border  = Color(hex: "#E5E5E0")
-
-    // Brand Green — softer, sage-leaning
-    static let brandLight = Color(hex: "#D8F0DF")
-    static let brand      = Color(hex: "#5FA86D")
-    static let brandDark  = Color(hex: "#4A8A5E")
-
-    // AI bubble tint
-    static let aiUserBubble = Color(hex: "#EEF7F0")
-
-    // Semantic
-    static let destructive = Color(hex: "#D15A5A")
-    static let warning     = Color(hex: "#E8A840")
+    static let divider       = Color(hex: "#EEEEEC")
+    static let border        = Color(hex: "#E5E5E0")
+    static let brandLight    = Color(hex: "#D8F0DF")
+    static let brand         = Color(hex: "#5FA86D")
+    static let brandDark     = Color(hex: "#4A8A5E")
+    static let brandGlow     = Color(hex: "#A3D7AC")
+    static let aiUserBubble  = Color(hex: "#EEF7F0")
+    static let destructive   = Color(hex: "#D15A5A")
+    static let warning       = Color(hex: "#E8A840")
 }
 
 // MARK: - Spacing Tokens (8pt Grid)
@@ -115,23 +106,43 @@ struct NPCardModifier: ViewModifier {
 
 // MARK: - Button Styles
 
+// MARK: - Button Styles
+
 struct NPPrimaryButtonStyle: ButtonStyle {
     @Environment(\.isEnabled) private var isEnabled
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: 15, weight: .semibold))
-            .foregroundStyle(NPColors.brandDark)
-            .frame(height: 50)
+            .font(.system(size: 16, weight: .bold, design: .default))
+            .foregroundStyle(Color(hex: "#184A36"))
+            .frame(height: 46)
             .frame(maxWidth: .infinity)
-            .background(
-                RoundedRectangle(cornerRadius: NPRadius.button + 4, style: .continuous)
-                    .fill(NPColors.brandLight.opacity(0.55))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: NPRadius.button + 4, style: .continuous)
-                            .stroke(NPColors.brand.opacity(0.25), lineWidth: 1)
-                    )
-            )
-            .scaleEffect(configuration.isPressed ? 0.97 : 1.0)
+            .background {
+                ZStack {
+                    Capsule(style: .continuous)
+                        .fill(
+                            LinearGradient(
+                                colors: [Color.white.opacity(0.90), Color(hex: "#F0FAF5").opacity(0.50)],
+                                startPoint: .top, endPoint: .bottom
+                            )
+                        )
+                    Capsule(style: .continuous)
+                        .fill(.white.opacity(0.0))
+                        .background(.ultraThinMaterial)
+                        .clipShape(Capsule(style: .continuous))
+                }
+            }
+            .overlay {
+                Capsule(style: .continuous)
+                    .stroke(Color.white.opacity(0.80), lineWidth: 1)
+            }
+            .overlay {
+                Capsule(style: .continuous)
+                    .inset(by: 1)
+                    .stroke(Color.white.opacity(1.0), lineWidth: 1)
+                    .mask(VStack(spacing: 0) { Color.white.frame(height: 2); Color.clear })
+            }
+            .shadow(color: .black.opacity(0.04), radius: 16, x: 0, y: 4)
+            .scaleEffect(configuration.isPressed ? 0.98 : 1.0)
             .opacity(isEnabled ? 1.0 : 0.5)
             .animation(.spring(response: 0.3, dampingFraction: 0.75), value: configuration.isPressed)
     }
@@ -141,15 +152,37 @@ struct NPSecondaryButtonStyle: ButtonStyle {
     @Environment(\.isEnabled) private var isEnabled
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: 14, weight: .semibold))
-            .foregroundStyle(NPColors.brandDark)
+            .font(.system(size: 14, weight: .bold, design: .default))
+            .foregroundStyle(Color(hex: "#184A36"))
             .frame(height: 44)
             .frame(maxWidth: .infinity)
-            .background(
-                RoundedRectangle(cornerRadius: NPRadius.button, style: .continuous)
-                    .fill(NPColors.brandLight.opacity(0.30))
-            )
-            .scaleEffect(configuration.isPressed ? 0.97 : 1.0)
+            .background {
+                ZStack {
+                    Capsule(style: .continuous)
+                        .fill(
+                            LinearGradient(
+                                colors: [Color.white.opacity(0.90), Color(hex: "#F0FAF5").opacity(0.50)],
+                                startPoint: .top, endPoint: .bottom
+                            )
+                        )
+                    Capsule(style: .continuous)
+                        .fill(.white.opacity(0.0))
+                        .background(.ultraThinMaterial)
+                        .clipShape(Capsule(style: .continuous))
+                }
+            }
+            .overlay {
+                Capsule(style: .continuous)
+                    .stroke(Color.white.opacity(0.80), lineWidth: 1)
+            }
+            .overlay {
+                Capsule(style: .continuous)
+                    .inset(by: 1)
+                    .stroke(Color.white.opacity(1.0), lineWidth: 1)
+                    .mask(VStack(spacing: 0) { Color.white.frame(height: 2); Color.clear })
+            }
+            .shadow(color: .black.opacity(0.03), radius: 12, x: 0, y: 2)
+            .scaleEffect(configuration.isPressed ? 0.98 : 1.0)
             .opacity(isEnabled ? 1.0 : 0.5)
             .animation(.spring(response: 0.3, dampingFraction: 0.75), value: configuration.isPressed)
     }
@@ -167,20 +200,42 @@ struct NPIconButtonStyle: ButtonStyle {
 
 // MARK: - Document Card Button Styles
 
-/// Document card action button: light sage bg + dark green text, no border, compact
+/// Document card action button: ice glass, compact
 struct NPDocumentPrimaryButtonStyle: ButtonStyle {
     @Environment(\.isEnabled) private var isEnabled
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: 13, weight: .medium))
-            .foregroundStyle(NPColors.brandDark)
-            .frame(height: 32)
+            .font(.system(size: 13, weight: .bold, design: .default))
+            .foregroundStyle(Color(hex: "#184A36"))
+            .frame(height: 38)
             .frame(maxWidth: .infinity)
-            .background(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(NPColors.brandLight.opacity(0.45))
-            )
-            .scaleEffect(configuration.isPressed ? 0.97 : 1.0)
+            .background {
+                ZStack {
+                    Capsule(style: .continuous)
+                        .fill(
+                            LinearGradient(
+                                colors: [Color.white.opacity(0.90), Color(hex: "#F0FAF5").opacity(0.50)],
+                                startPoint: .top, endPoint: .bottom
+                            )
+                        )
+                    Capsule(style: .continuous)
+                        .fill(.white.opacity(0.0))
+                        .background(.ultraThinMaterial)
+                        .clipShape(Capsule(style: .continuous))
+                }
+            }
+            .overlay {
+                Capsule(style: .continuous)
+                    .stroke(Color.white.opacity(0.75), lineWidth: 1)
+            }
+            .overlay {
+                Capsule(style: .continuous)
+                    .inset(by: 0.8)
+                    .stroke(Color.white.opacity(1.0), lineWidth: 0.8)
+                    .mask(VStack(spacing: 0) { Color.white.frame(height: 1.5); Color.clear })
+            }
+            .shadow(color: .black.opacity(0.03), radius: 10, x: 0, y: 2)
+            .scaleEffect(configuration.isPressed ? 0.98 : 1.0)
             .opacity(isEnabled ? 1.0 : 0.5)
             .animation(.spring(response: 0.3, dampingFraction: 0.75), value: configuration.isPressed)
     }
