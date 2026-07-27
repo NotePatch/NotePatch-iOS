@@ -449,3 +449,15 @@
 "note.error.conflict_during_save" = "保存期间服务器生成了更新版本。已刷新最新内容并保留草稿。";
 "note.error.conflict_available" = "服务器已有更新的笔记版本。已刷新最新内容并保留草稿。";
 "note.error.conflict_refresh_failed" = "版本冲突后刷新失败：%@";
+"ai.model.title" = "AI 模型";
+"ai.model.picker" = "模型";
+"ai.model.deployment_default" = "使用部署默认模型";
+"ai.model.current" = "当前：%@";
+"ai.model.default" = "部署默认：%@";
+"ai.model.cached_warning" = "模型服务暂时不可用，正在使用缓存目录。";
+"ai.model.fetched_at" = "更新于 %@";
+"ai.model.empty" = "暂无可选模型。";
+"ai.model.loading" = "正在加载模型目录…";
+"ai.model.refresh" = "刷新模型";
+"operation.ai_model_saved" = "AI 模型设置已保存。";
+"chat.model_used" = "模型：%@";

@@ -1,7 +1,7 @@
 import Foundation
 
-let defaultServiceRootURL = "https://5mbps.me:8443/notepatch/1"
-let defaultTUSDServiceRootURL = "https://5mbps.me:8443/notepatch/2"
+let defaultServiceRootURL = "https://api.ls-jl.cn:8443/notepatch/1"
+let defaultTUSDServiceRootURL = "https://api.ls-jl.cn:8443/notepatch/2"
 let defaultLearningBackendBaseURL = defaultServiceRootURL
 let defaultTUSDBaseURL = "\(defaultTUSDServiceRootURL)/files/"
 
@@ -540,6 +540,61 @@ struct OcrArtifactsResponse: Decodable, Equatable {
     }
 }
 
+struct AiModel: Decodable, Equatable, Identifiable {
+    let id: String
+    let upstreamId: String
+    let ownedBy: String?
+    let created: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case upstreamId = "upstream_id"
+        case ownedBy = "owned_by"
+        case created
+    }
+}
+
+struct AiModelCatalog: Decodable, Equatable {
+    let provider: String
+    let defaultModel: String
+    let selectedModel: String
+    let items: [AiModel]
+    let fetchedAt: String
+    let stale: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case provider
+        case defaultModel = "default_model"
+        case selectedModel = "selected_model"
+        case items
+        case fetchedAt = "fetched_at"
+        case stale
+    }
+
+    func applying(_ selection: AiModelSelectionResponse) -> AiModelCatalog {
+        AiModelCatalog(
+            provider: provider,
+            defaultModel: selection.defaultModel,
+            selectedModel: selection.selectedModel,
+            items: items,
+            fetchedAt: fetchedAt,
+            stale: stale
+        )
+    }
+}
+
+struct AiModelSelectionResponse: Decodable, Equatable {
+    let selectedModel: String
+    let preferredModel: String?
+    let defaultModel: String
+
+    enum CodingKeys: String, CodingKey {
+        case selectedModel = "selected_model"
+        case preferredModel = "preferred_model"
+        case defaultModel = "default_model"
+    }
+}
+
 struct ChatConversation: Decodable, Equatable, Identifiable {
     let id: String
     let workspaceId: String
@@ -568,6 +623,7 @@ struct ChatMessage: Decodable, Equatable, Identifiable {
     let errorMessage: String?
     let citations: [ChatCitation]?
     let sourceStatus: String?
+    let modelId: String?
     let createdAt: String
 
     enum CodingKeys: String, CodingKey {
@@ -580,6 +636,7 @@ struct ChatMessage: Decodable, Equatable, Identifiable {
         case errorMessage = "error_message"
         case citations
         case sourceStatus = "source_status"
+        case modelId = "model_id"
         case createdAt = "created_at"
     }
 }

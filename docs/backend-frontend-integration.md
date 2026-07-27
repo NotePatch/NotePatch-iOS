@@ -726,7 +726,44 @@ UI 建议：
 
 `POST /workspaces/{workspace_id}/ai/chat` 是唯一的 AI 对话入口。它创建后端异步 OpenClaw 任务，前端不直接调用 OpenClaw Gateway，也不要启动/停止容器。请求体使用 `{ "prompt": string, "conversation_id"?: string, "input": object, "options": object }`，响应是 `TaskRead`；随后轮询 task 与 events 获取 `task.result.answer` 或失败原因。会话历史由后端保存，是否注入 OpenClaw 由用户全局 `ai_history_enabled` 控制。后端会为每个用户维护独立 OpenClaw gateway 配置和用户数据目录；用户在线时 supervisor 保持 gateway 运行，worker 在任务前把该用户 personal workspace 的文档镜像到 OpenClaw workspace，再把 OpenClaw 输出上传回 SeaweedFS。
 
-OpenClaw 模型凭据和 provider base URL 由后端部署级 `.env` 管理。当前 MVP 使用共享 `OPENAI_API_KEY` 注入每个用户 gateway 容器，`OPENAI_BASE_URL` 可由后端配置为 OpenAI-compatible 代理地址；前端不提交、不保存、不展示模型 provider key 或 base URL。若后端未配置 key，task 会失败并在 `task.error_message` 中出现 `OPENAI_API_KEY` 配置提示；若 gateway 返回 HTTP 500，前端只展示失败原因，排查应看 task events 和后端 OpenClaw gateway/worker 日志。
+OpenClaw 模型凭据和 provider base URL 由后端部署级 `.env` 管理。前端不提交、不保存、不展示 provider key 或 base URL，只使用以下 workspace 隔离接口：
+
+```http
+GET /workspaces/{workspace_id}/ai/models
+PUT /workspaces/{workspace_id}/ai/model
+Content-Type: application/json
+
+{"model_id":"openai/model-id"}
+```
+
+`GET /ai/models` 返回 `items/default_model/selected_model/fetched_at/stale`。列表项的 `id` 是可回传的规范化模型 ID，前端不要自行拼接 provider 前缀。选择是用户全局偏好，会影响之后启动的聊天、知识库、题目提取、笔记、批改、高亮和闪卡任务；传 `{"model_id":null}` 恢复部署默认模型。已开始或正在重试的任务使用 `task.payload.ai_model` 快照，不会随选择变化。`stale=true` 表示 provider 暂时不可达，当前展示的是最后一次成功缓存，仍可使用其中模型。
+
+```ts
+type AiModel = {
+  id: string;
+  upstream_id: string;
+  owned_by?: string | null;
+  created?: number | null;
+};
+
+type AiModelCatalog = {
+  provider: "openai";
+  default_model: string;
+  selected_model: string;
+  items: AiModel[];
+  fetched_at: string;
+  stale: boolean;
+};
+
+async function selectAiModel(workspaceId: string, modelId: string | null) {
+  return apiFetch(`/workspaces/${workspaceId}/ai/model`, {
+    method: "PUT",
+    body: JSON.stringify({ model_id: modelId }),
+  });
+}
+```
+
+后端向 OpenClaw 发送时，请求体仍使用 `model=openclaw`，provider 模型通过内部 `x-openclaw-model` header 传递。若后端未配置 key，task 会失败并在 `task.error_message` 中出现 `OPENAI_API_KEY` 配置提示；若 gateway 返回 HTTP 500，前端只展示失败原因，排查应看 task events 和后端 OpenClaw gateway/worker 日志。
 
 任务成功后 `task.result` 常见字段：
 
@@ -734,6 +771,8 @@ OpenClaw 模型凭据和 provider base URL 由后端部署级 `.env` 管理。�
 type OpenClawTaskResult = {
   runner: "gateway";
   answer?: string;
+  gateway_model?: string;
+  provider_model?: string;
   output_key?: string;
   output_keys?: string[];
   citations?: Array<{
