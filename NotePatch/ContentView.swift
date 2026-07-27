@@ -19,7 +19,7 @@ struct ContentView: View {
         .task {
             await model.restoreIfNeeded()
         }
-        .onChange(of: scenePhase) { newPhase in
+        .onChange(of: scenePhase, initial: true) { _, newPhase in
             model.handleScenePhase(newPhase)
         }
         .sheet(item: $model.downloadedPreview) { preview in
@@ -186,75 +186,108 @@ private struct AuthField<Field: View>: View {
 
 private struct WorkbenchScreen: View {
     @ObservedObject var model: NotePatchViewModel
+    @State private var isUploadPresented = false
 
     var body: some View {
-        VStack(spacing: 0) {
-            StatusBanner(
-                isBusy: model.isBusy || model.isConversationMutating || model.isAIPreferenceUpdating || model.isHomeworkLoading || model.isStudyNoteSaving,
-                statusMessage: model.statusMessage,
-                errorMessage: model.errorMessage,
-                onDismiss: model.dismissStatusBanner
-            )
-
-            TabView(selection: $model.selectedTab) {
-                DocumentsTab(model: model)
-                    .tag(WorkbenchTab.documents)
-                    .tabItem {
-                        Label(WorkbenchTab.documents.title, systemImage: WorkbenchTab.documents.iconName)
-                            .accessibilityIdentifier("tab.documents")
-                    }
-
-                NotesTab(model: model)
-                    .tag(WorkbenchTab.notes)
-                    .tabItem {
-                        Label(WorkbenchTab.notes.title, systemImage: WorkbenchTab.notes.iconName)
-                            .accessibilityIdentifier("tab.notes")
-                    }
-
-                OpenClawChatTab(
-                    model: model,
-                    chatState: model.openClawState,
-                    composerState: model.openClawComposerState
+        ZStack(alignment: .bottom) {
+            VStack(spacing: 0) {
+                StatusBanner(
+                    isBusy: model.isBusy || model.isConversationMutating || model.isAIPreferenceUpdating || model.isHomeworkLoading || model.isStudyNoteSaving,
+                    statusMessage: model.statusMessage,
+                    errorMessage: model.errorMessage,
+                    onDismiss: model.dismissStatusBanner
                 )
-                    .tag(WorkbenchTab.openClaw)
-                    .tabItem {
-                        Label(WorkbenchTab.openClaw.title, systemImage: WorkbenchTab.openClaw.iconName)
-                            .accessibilityIdentifier("tab.ai")
-                    }
 
-                ProfileTab(model: model)
-                    .tag(WorkbenchTab.profile)
-                    .tabItem {
-                        Label(WorkbenchTab.profile.title, systemImage: WorkbenchTab.profile.iconName)
-                            .accessibilityIdentifier("tab.me")
-                    }
-            }
-            .tint(NPColors.brandDark)
-            .animation(Animation.npCardEntry, value: model.selectedTab)
-            .onAppear {
-                let appearance = UITabBarAppearance()
-                appearance.configureWithTransparentBackground()
-                appearance.backgroundColor = UIColor(NPTabBar.background)
-                appearance.backgroundEffect = nil
-                appearance.shadowColor = .clear
-                appearance.stackedLayoutAppearance.selected.iconColor = UIColor(NPColors.brandDark)
-                appearance.stackedLayoutAppearance.selected.titleTextAttributes = [.foregroundColor: UIColor(NPColors.brandDark)]
-                appearance.stackedLayoutAppearance.normal.iconColor = UIColor(NPColors.textSecondary)
-                appearance.stackedLayoutAppearance.normal.titleTextAttributes = [.foregroundColor: UIColor(NPColors.textSecondary)]
-                UITabBar.appearance().standardAppearance = appearance
-                UITabBar.appearance().scrollEdgeAppearance = appearance
-            }
-            .toolbarBackground(NPTabBar.background, for: .tabBar)
-            .toolbarBackground(.visible, for: .tabBar)
-            .onChange(of: model.selectedTab) { selectedTab in
-                if selectedTab != .openClaw {
-                    dismissActiveKeyboard()
+                TabView(selection: $model.selectedTab) {
+                    DocumentsTab(model: model)
+                        .tag(WorkbenchTab.documents)
+                        .tabItem {
+                            Label(WorkbenchTab.documents.title, systemImage: WorkbenchTab.documents.iconName)
+                                .accessibilityIdentifier("tab.documents")
+                        }
+
+                    NotesTab(model: model)
+                        .tag(WorkbenchTab.notes)
+                        .tabItem {
+                            Label(WorkbenchTab.notes.title, systemImage: WorkbenchTab.notes.iconName)
+                                .accessibilityIdentifier("tab.notes")
+                        }
+
+                    OpenClawChatTab(
+                        model: model,
+                        chatState: model.openClawState,
+                        composerState: model.openClawComposerState
+                    )
+                        .tag(WorkbenchTab.openClaw)
+                        .tabItem {
+                            Label(WorkbenchTab.openClaw.title, systemImage: WorkbenchTab.openClaw.iconName)
+                                .accessibilityIdentifier("tab.ai")
+                        }
+
+                    ProfileTab(model: model)
+                        .tag(WorkbenchTab.profile)
+                        .tabItem {
+                            Label(WorkbenchTab.profile.title, systemImage: WorkbenchTab.profile.iconName)
+                                .accessibilityIdentifier("tab.me")
+                        }
                 }
-                model.ensureContentForSelectedTabLoaded()
+                .tint(NPColors.brandDark)
+                .animation(Animation.npCardEntry, value: model.selectedTab)
+                .onAppear {
+                    let appearance = UITabBarAppearance()
+                    appearance.configureWithTransparentBackground()
+                    appearance.backgroundColor = UIColor(NPTabBar.background)
+                    appearance.backgroundEffect = nil
+                    appearance.shadowColor = .clear
+                    appearance.stackedLayoutAppearance.selected.iconColor = UIColor(NPColors.brandDark)
+                    appearance.stackedLayoutAppearance.selected.titleTextAttributes = [.foregroundColor: UIColor(NPColors.brandDark)]
+                    appearance.stackedLayoutAppearance.normal.iconColor = UIColor(NPColors.textSecondary)
+                    appearance.stackedLayoutAppearance.normal.titleTextAttributes = [.foregroundColor: UIColor(NPColors.textSecondary)]
+                    UITabBar.appearance().standardAppearance = appearance
+                    UITabBar.appearance().scrollEdgeAppearance = appearance
+                }
+                .toolbarBackground(NPTabBar.background, for: .tabBar)
+                .toolbarBackground(.visible, for: .tabBar)
+                .onChange(of: model.selectedTab) { _, selectedTab in
+                    if selectedTab != .openClaw {
+                        dismissActiveKeyboard()
+                    }
+                    model.ensureContentForSelectedTabLoaded()
+                }
+                .accessibilityIdentifier("workbenchTabs")
             }
-            .accessibilityIdentifier("workbenchTabs")
+
+            // Floating Action Button — light, elegant, integrated
+            Button {
+                isUploadPresented = true
+            } label: {
+                Image(systemName: "plus")
+                    .font(.system(size: 22, weight: .medium, design: .rounded))
+                    .foregroundStyle(NPColors.brand)
+                    .frame(width: 56, height: 56)
+                    .background(
+                        Circle()
+                            .fill(NPColors.surfaceCard)
+                    )
+                    .overlay {
+                        Circle()
+                            .stroke(NPColors.brand.opacity(0.12), lineWidth: 1)
+                    }
+                    .shadow(
+                        color: .black.opacity(0.06),
+                        radius: 12,
+                        x: 0,
+                        y: 4
+                    )
+            }
+            .accessibilityLabel("Upload")
+            .accessibilityIdentifier("uploadFAB")
+            .offset(y: -6)
         }
         .background(NPColors.background)
+        .fullScreenCover(isPresented: $isUploadPresented) {
+            UploadScreen(model: model, isPresented: $isUploadPresented)
+        }
         .onAppear {
             model.ensureContentForSelectedTabLoaded()
         }
@@ -332,7 +365,7 @@ private struct NotesTab: View {
                     }
             }
         }
-        .onChange(of: model.selectedNotesSection) { _ in
+        .onChange(of: model.selectedNotesSection) { _, _ in
             model.ensureContentForSelectedTabLoaded()
         }
     }
@@ -655,7 +688,6 @@ private struct StudyNoteEditor: View {
 
 private struct DocumentsTab: View {
     @ObservedObject var model: NotePatchViewModel
-    @State private var isUploadPresented = false
     @State private var filtersExpanded = false
 
     var body: some View {
@@ -674,7 +706,7 @@ private struct DocumentsTab: View {
                 .padding(.horizontal, NPSpacing.outer)
                 .padding(.bottom, NPSpacing.item)
 
-            // Segmented control — reduced visual weight
+            // Segmented control
             Picker("Document view", selection: $model.selectedDocumentsSection) {
                 ForEach(DocumentsSection.allCases) { section in
                     Text(section.title).tag(section)
@@ -690,34 +722,11 @@ private struct DocumentsTab: View {
                 TaskTab(model: model)
             }
         }
-        .sheet(isPresented: $isUploadPresented) {
-            NavigationStack {
-                UploadDocumentScreen(model: model)
-                .navigationTitle("Upload Files")
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .cancellationAction) {
-                        Button("Close") {
-                            isUploadPresented = false
-                        }
-                    }
-                }
-            }
-        }
     }
 
     private var documentList: some View {
         ScrollView {
             VStack(spacing: NPSpacing.section) {
-                Button {
-                    isUploadPresented = true
-                } label: {
-                    Label("Upload Files", systemImage: "arrow.up.doc")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(NPPrimaryButtonStyle())
-                .accessibilityIdentifier("showUploadPageButton")
-
                 // Filter —
                 Button {
                     withAnimation(.npInteractive) { filtersExpanded.toggle() }
@@ -790,6 +799,179 @@ private struct DocumentsTab: View {
         }
     }
 
+}
+
+// MARK: - Upload Screen (FAB entry point)
+
+private struct UploadScreen: View {
+    @ObservedObject var model: NotePatchViewModel
+    @Binding var isPresented: Bool
+    @State private var isShowingCamera = false
+    @State private var isShowingPhotoLibrary = false
+    @State private var isShowingFileImporter = false
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: NPSpacing.xxxl) {
+                    // Hero
+                    VStack(alignment: .leading, spacing: NPSpacing.small) {
+                        Text("Upload")
+                            .npTitle()
+                        Text("Import your study materials.")
+                            .npBody()
+                            .foregroundStyle(NPColors.textSecondary)
+                    }
+                    .padding(.top, NPSpacing.xl)
+
+                    // Upload options
+                    VStack(spacing: NPSpacing.medium) {
+                        UploadOptionCard(
+                            icon: "doc.text.fill",
+                            iconColor: NPColors.brand,
+                            title: "Import PDF",
+                            description: "Import PDF notes and worksheets."
+                        ) {
+                            isPresented = false
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                                isShowingFileImporter = true
+                            }
+                        }
+
+                        UploadOptionCard(
+                            icon: "camera.fill",
+                            iconColor: NPColors.brandDark,
+                            title: "Scan Document",
+                            description: "Use the camera to scan handwritten notes."
+                        ) {
+                            isPresented = false
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                                isShowingCamera = true
+                            }
+                        }
+
+                        UploadOptionCard(
+                            icon: "photo.on.rectangle.fill",
+                            iconColor: NPColors.brand,
+                            title: "Import Photos",
+                            description: "Choose images from the photo library."
+                        ) {
+                            isPresented = false
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                                isShowingPhotoLibrary = true
+                            }
+                        }
+
+                        UploadOptionCard(
+                            icon: "folder.fill",
+                            iconColor: NPColors.brandDark,
+                            title: "Import Files",
+                            description: "Browse Files and Cloud Storage."
+                        ) {
+                            isPresented = false
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                                isShowingFileImporter = true
+                            }
+                        }
+                    }
+                }
+                .padding(.horizontal, NPSpacing.outer)
+                .padding(.bottom, NPSpacing.xxxl)
+            }
+            .background(NPColors.background)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Close") {
+                        isPresented = false
+                    }
+                }
+            }
+        }
+        .fileImporter(
+            isPresented: $isShowingFileImporter,
+            allowedContentTypes: [.item],
+            allowsMultipleSelection: true
+        ) { result in
+            if case .success(let urls) = result {
+                model.uploadPickedFiles(from: urls)
+            }
+        }
+        .sheet(isPresented: $isShowingCamera) {
+            CameraPicker { image in
+                model.uploadCameraImage(image)
+            }
+            .ignoresSafeArea()
+        }
+        .sheet(isPresented: $isShowingPhotoLibrary) {
+            PhotoLibraryPicker(cacheDirectory: model.uploadCacheDirectory) { result in
+                isShowingPhotoLibrary = false
+                guard let result else { return }
+                switch result {
+                case .success(let files):
+                    model.stageImportedUploadFiles(files)
+                case .failure(let error):
+                    model.errorMessage = friendlyError(error)
+                }
+            }
+            .ignoresSafeArea()
+        }
+    }
+}
+
+private struct UploadOptionCard: View {
+    let icon: String
+    let iconColor: Color
+    let title: String
+    let description: String
+    let action: () -> Void
+    @State private var isPressed = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: NPSpacing.large) {
+                Image(systemName: icon)
+                    .font(.system(size: 28, weight: .regular))
+                    .foregroundStyle(iconColor)
+                    .frame(width: 48, height: 48)
+                    .background(iconColor.opacity(0.10))
+                    .clipShape(RoundedRectangle(cornerRadius: NPRadius.medium, style: .continuous))
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(localized(title))
+                        .npSubheading()
+                    Text(localized(description))
+                        .npCallout()
+                        .lineLimit(2)
+                }
+
+                Spacer()
+
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(NPColors.textTertiary)
+            }
+            .padding(NPSpacing.large)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(NPColors.surfaceCard)
+            .clipShape(RoundedRectangle(cornerRadius: NPRadius.card, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: NPRadius.card, style: .continuous)
+                    .stroke(Color.white.opacity(0.70), lineWidth: 0.5)
+            }
+            .shadow(
+                color: NPShadow.medium.color,
+                radius: NPShadow.medium.radius,
+                x: 0,
+                y: NPShadow.medium.y
+            )
+            .scaleEffect(isPressed ? 0.985 : 1.0)
+        }
+        .buttonStyle(.plain)
+        .onLongPressGesture(minimumDuration: .infinity, pressing: { pressing in
+            withAnimation(Animation.npButton) { isPressed = pressing }
+        }, perform: {})
+    }
 }
 
 // MARK: - Upload Document Screen
@@ -1587,7 +1769,7 @@ private struct OpenClawChatTab: View {
                         }
                         .padding(.horizontal, NPSpacing.outer)
                         .padding(.vertical, 14)
-                        .onChange(of: chatState.messages.count) { _ in
+                        .onChange(of: chatState.messages.count) { _, _ in
                             if let last = chatState.messages.last {
                                 withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
                                     proxy.scrollTo(last.id, anchor: .bottom)
@@ -1918,7 +2100,7 @@ private struct LearningTab: View {
                 .padding(.bottom, NPSpacing.section)
             }
         }
-        .onChange(of: model.selectedLearningSection) { section in
+        .onChange(of: model.selectedLearningSection) { _, section in
             if section == .flashcards {
                 model.ensureFlashcardsLoaded()
             }
@@ -2490,7 +2672,7 @@ private struct HomeworkCreateSheet: View {
                             Text(document.title ?? document.originalFilename).tag(document.id)
                         }
                     }
-                    .onChange(of: documentId) { newValue in
+                    .onChange(of: documentId) { _, newValue in
                         if title.isEmpty, let document = model.homeworkDocumentCandidates.first(where: { $0.id == newValue }) {
                             title = document.title ?? document.originalFilename
                         }
