@@ -449,3 +449,15 @@
 "note.error.conflict_during_save" = "儲存期間伺服器產生了更新版本。已重新整理最新內容並保留草稿。";
 "note.error.conflict_available" = "伺服器已有更新的筆記版本。已重新整理最新內容並保留草稿。";
 "note.error.conflict_refresh_failed" = "版本衝突後重新整理失敗：%@";
+"ai.model.title" = "AI 模型";
+"ai.model.picker" = "模型";
+"ai.model.deployment_default" = "使用部署預設模型";
+"ai.model.current" = "目前：%@";
+"ai.model.default" = "部署預設：%@";
+"ai.model.cached_warning" = "模型服務暫時無法使用，正在使用快取目錄。";
+"ai.model.fetched_at" = "更新於 %@";
+"ai.model.empty" = "暫無可選模型。";
+"ai.model.loading" = "正在載入模型目錄…";
+"ai.model.refresh" = "重新整理模型";
+"operation.ai_model_saved" = "AI 模型設定已儲存。";
+"chat.model_used" = "模型：%@";

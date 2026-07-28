@@ -23,13 +23,13 @@ struct NotePatchTests {
     @Test func normalizeBaseURLs_defaultAndAddScheme() {
         #expect(normalizeLearningBackendBaseURL("") == defaultLearningBackendBaseURL)
         #expect(normalizeLearningBackendBaseURL("192.168.100.123:8001/") == "http://192.168.100.123:8001")
-        #expect(normalizeLearningBackendBaseURL("https://5mbps.me:8443/notepatch/1/") == defaultLearningBackendBaseURL)
+        #expect(normalizeLearningBackendBaseURL("https://api.ls-jl.cn:8443/notepatch/1/") == defaultLearningBackendBaseURL)
         #expect(normalizeLearningBackendBaseURL("https://example.test/api/v1/") == "https://example.test/api/v1")
         #expect(normalizeLearningBackendBaseURL("https://example.test/api/") == "https://example.test/api")
 
         #expect(normalizeTUSBaseURL("") == defaultTUSDBaseURL)
         #expect(normalizeTUSBaseURL("192.168.100.123:1080/files") == "http://192.168.100.123:1080/files/")
-        #expect(normalizeTUSBaseURL("https://5mbps.me:8443/notepatch/2/") == defaultTUSDBaseURL)
+        #expect(normalizeTUSBaseURL("https://api.ls-jl.cn:8443/notepatch/2/") == defaultTUSDBaseURL)
         #expect(normalizeTUSBaseURL("https://example.test/files/") == "https://example.test/files/")
     }
 
@@ -85,6 +85,14 @@ struct NotePatchTests {
 
         defaults.set("https://5mbps.me:8443/notepatch/1/files/", forKey: "tusd_base_url")
         #expect(store.loadTUSBaseURL() == defaultTUSDBaseURL)
+        #expect(defaults.string(forKey: "tusd_base_url") == defaultTUSDBaseURL)
+
+        defaults.set("https://5mbps.me:8443/notepatch/1", forKey: "learning_base_url")
+        defaults.set(2, forKey: "api_base_url_contract_version")
+        defaults.set("https://5mbps.me:8443/notepatch/2/files/", forKey: "tusd_base_url")
+        #expect(store.loadBaseURL() == defaultLearningBackendBaseURL)
+        #expect(store.loadTUSBaseURL() == defaultTUSDBaseURL)
+        #expect(defaults.string(forKey: "learning_base_url") == defaultLearningBackendBaseURL)
         #expect(defaults.string(forKey: "tusd_base_url") == defaultTUSDBaseURL)
 
         defaults.set("https://api.example.test/notepatch/api/v1", forKey: "learning_base_url")
@@ -223,6 +231,8 @@ struct NotePatchTests {
                 return Self.response(request, status: 200, body: #"[{"id":"unit-1","title":"比例","subject":"数学","grade_level":"七年级","topic":""}]"#)
             case "/api/v1/workspaces/ws-1/learning-units/unit-1/notes":
                 return Self.response(request, status: 200, body: #"[{"id":"note-1","learning_unit_id":"unit-1","version_no":1,"title":"笔记","html_object_key":"h","json_object_key":"j","download_urls":{}}]"#)
+            case "/api/v1/workspaces/ws-1/ai/models":
+                return Self.response(request, status: 200, body: #"{"provider":"openai","default_model":"model-default","selected_model":"model-default","items":[],"fetched_at":"","stale":false}"#)
             default:
                 return Self.response(request, status: 500, body: #"{"detail":"unexpected request"}"#)
             }
@@ -267,8 +277,12 @@ struct NotePatchTests {
         let requestsBeforeProfile = paths.count
         model.selectedTab = .profile
         model.ensureContentForSelectedTabLoaded()
+        try await Self.waitUntil { model.aiModelCatalog != nil && !model.isAIModelsLoading }
+        #expect(paths.count == requestsBeforeProfile + 1)
+        #expect(paths.filter { $0 == "/api/v1/workspaces/ws-1/ai/models" }.count == 1)
+        model.ensureContentForSelectedTabLoaded()
         try await Task.sleep(nanoseconds: 50_000_000)
-        #expect(paths.count == requestsBeforeProfile)
+        #expect(paths.filter { $0 == "/api/v1/workspaces/ws-1/ai/models" }.count == 1)
 
         model.selectedTab = .notes
         model.selectedNotesSection = .review
@@ -587,17 +601,17 @@ struct NotePatchTests {
         let relative = try TusUploader.resolveUploadURL(endpoint: "http://192.168.100.123:1080/files/", location: "abc")
         let absolutePath = try TusUploader.resolveUploadURL(endpoint: "http://192.168.100.123:1080/files/", location: "/files/abc")
         let proxiedPath = try TusUploader.resolveUploadURL(
-            endpoint: "https://5mbps.me:8443/notepatch/2/files/",
+            endpoint: "https://api.ls-jl.cn:8443/notepatch/2/files/",
             location: "/files/abc"
         )
         let otherHost = try TusUploader.resolveUploadURL(endpoint: "http://192.168.100.123:1080/files/", location: "http://other.test/upload/xyz")
         #expect(relative == "http://192.168.100.123:1080/files/abc")
         #expect(absolutePath == "http://192.168.100.123:1080/files/abc")
-        #expect(proxiedPath == "https://5mbps.me:8443/notepatch/2/files/abc")
+        #expect(proxiedPath == "https://api.ls-jl.cn:8443/notepatch/2/files/abc")
         #expect(otherHost == "http://other.test/upload/xyz")
         #expect(
             TusUploader.preferredEndpoint(
-                configuredEndpoint: "https://5mbps.me:8443/notepatch/2/files/",
+                configuredEndpoint: "https://api.ls-jl.cn:8443/notepatch/2/files/",
                 serverEndpoint: "http://192.168.100.123:1080/files/"
             ) == defaultTUSDBaseURL
         )
@@ -1222,7 +1236,7 @@ struct NotePatchTests {
                 }
                 return Self.response(request, status: 200, body: #"{"id":"c-1","workspace_id":"ws-1","title":"新标题","created_at":"","updated_at":""}"#)
             case "/api/v1/workspaces/ws-1/ai/conversations/c-1/messages":
-                return Self.response(request, status: 200, body: #"{"items":[{"id":"m-1","conversation_id":"c-1","role":"assistant","content":"完成","status":"succeeded","created_at":"","citations":[{"chunk_id":"chunk-1","document_id":"doc-1","score":0.72,"metadata":{"page":2}}],"source_status":"partially_unavailable"}],"page":1,"page_size":100,"total":1}"#)
+                return Self.response(request, status: 200, body: #"{"items":[{"id":"m-1","conversation_id":"c-1","role":"assistant","content":"完成","status":"succeeded","model_id":"openai/gpt-4.1-mini","created_at":"","citations":[{"chunk_id":"chunk-1","document_id":"doc-1","score":0.72,"metadata":{"page":2}}],"source_status":"partially_unavailable"}],"page":1,"page_size":100,"total":1}"#)
             case "/api/v1/workspaces/ws-1/learning-units":
                 return Self.response(request, status: 200, body: #"[{"id":"u-1","title":"分数","subject":"数学","grade_level":"七年级","topic":"比例"}]"#)
             case "/api/v1/workspaces/ws-1/learning-units/u-1/notes":
@@ -1244,9 +1258,150 @@ struct NotePatchTests {
         #expect(messages.items.first?.citations?.first?.documentId == "doc-1")
         #expect(messages.items.first?.citations?.first?.metadata?["page"] == .number(2))
         #expect(messages.items.first?.sourceStatus == "partially_unavailable")
+        #expect(messages.items.first?.modelId == "openai/gpt-4.1-mini")
         #expect(units.first?.gradeLevel == "七年级")
         #expect(notes.first?.preferredDownloadURL == "https://download.test/highlighted.html")
         #expect(requests.contains { $0.url?.query == "include_download_url=true" })
+    }
+
+    @Test @MainActor func aiModelCatalogAndSelection_useDocumentedContract() async throws {
+        var requests: [URLRequest] = []
+        var selectedPayload: String?
+        var resetWasNull = false
+        let catalogJSON =
+            """
+            {
+              "provider": "openai",
+              "default_model": "openai/gpt-4.1-mini",
+              "selected_model": "openai/gpt-4.1",
+              "items": [
+                {
+                  "id": "openai/gpt-4.1-mini",
+                  "upstream_id": "gpt-4.1-mini",
+                  "owned_by": null,
+                  "created": null
+                },
+                {
+                  "id": "openai/gpt-4.1",
+                  "upstream_id": "gpt-4.1",
+                  "owned_by": "openai",
+                  "created": 1
+                }
+              ],
+              "fetched_at": "2026-07-28T08:00:00Z",
+              "stale": true
+            }
+            """
+        let session = Self.mockSession { request in
+            requests.append(request)
+            let absoluteURL = request.url?.absoluteString ?? ""
+            if request.httpMethod == "GET",
+               absoluteURL.contains("/api/v1/workspaces/ws%2F1/ai/models") {
+                return Self.response(request, status: 200, body: catalogJSON)
+            }
+            if request.httpMethod == "PUT",
+               absoluteURL.contains("/api/v1/workspaces/ws%2F1/ai/model") {
+                let body = Self.requestBodyData(request).flatMap {
+                    try? JSONSerialization.jsonObject(with: $0) as? [String: Any]
+                }
+                let preferred: String
+                if let modelId = body?["model_id"], !(modelId is NSNull) {
+                    selectedPayload = modelId as? String
+                    preferred = #""openai/gpt-4.1""#
+                } else {
+                    resetWasNull = true
+                    preferred = "null"
+                }
+                return Self.response(
+                    request,
+                    status: 200,
+                    body: #"{"selected_model":"openai/gpt-4.1","preferred_model":\#(preferred),"default_model":"openai/gpt-4.1-mini"}"#
+                )
+            }
+            return Self.response(request, status: 500, body: #"{"detail":"unexpected request"}"#)
+        }
+        let client = LearningBackendClient(
+            baseURL: "https://api.test",
+            accessToken: "access",
+            refreshToken: "refresh",
+            session: session
+        )
+
+        let catalog = try await client.listAIModels(workspaceId: "ws/1")
+        let selection = try await client.selectAIModel(workspaceId: "ws/1", modelId: "openai/gpt-4.1")
+        let reset = try await client.selectAIModel(
+            workspaceId: "ws/1",
+            modelId: Optional<String>.none
+        )
+
+        #expect(catalog.provider == "openai")
+        #expect(catalog.items.count == 2)
+        #expect(catalog.items.first?.ownedBy == nil)
+        #expect(catalog.stale)
+        #expect(selection.preferredModel == "openai/gpt-4.1")
+        #expect(reset.preferredModel == nil)
+        #expect(requests.map(\.httpMethod) == ["GET", "PUT", "PUT"])
+        #expect(selectedPayload == "openai/gpt-4.1")
+        #expect(resetWasNull)
+    }
+
+    @Test @MainActor func aiModels_loadOnceRefreshAndRollbackFailedSelection() async throws {
+        let suiteName = "NotePatchAIModelTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        var getCount = 0
+        var putCount = 0
+        let session = Self.mockSession { request in
+            switch (request.httpMethod, request.url?.path) {
+            case ("GET", "/api/v1/workspaces/ws-1/ai/models"):
+                getCount += 1
+                return Self.response(
+                    request,
+                    status: 200,
+                    body: #"{"provider":"openai","default_model":"model-default","selected_model":"model-default","items":[{"id":"model-default","upstream_id":"default","owned_by":null,"created":null},{"id":"model-alt","upstream_id":"alternate","owned_by":"openai","created":1}],"fetched_at":"","stale":false}"#
+                )
+            case ("PUT", "/api/v1/workspaces/ws-1/ai/model"):
+                putCount += 1
+                return Self.response(request, status: 500, body: #"{"detail":"selection failed"}"#)
+            default:
+                return Self.response(request, status: 500, body: #"{"detail":"unexpected request"}"#)
+            }
+        }
+        let model = NotePatchViewModel(
+            settings: SettingsStore(defaults: defaults, keychain: KeychainStore(service: suiteName)),
+            backendSession: session,
+            tusSession: session
+        )
+        model.session = SavedSession(
+            baseURL: "https://api.test",
+            tusBaseURL: "https://tus.test/",
+            accessToken: "access",
+            refreshToken: "refresh",
+            expiresAt: "",
+            userId: "user",
+            email: "user@example.test",
+            fullName: nil,
+            selectedWorkspaceId: "ws-1",
+            aiHistoryEnabled: true
+        )
+        model.selectedWorkspaceId = "ws-1"
+        model.selectedTab = .profile
+
+        model.ensureContentForSelectedTabLoaded()
+        model.ensureContentForSelectedTabLoaded()
+        try await Self.waitUntil { model.aiModelCatalog != nil && !model.isAIModelsLoading }
+        #expect(getCount == 1)
+        #expect(model.selectedAIModelId == nil)
+
+        model.loadAIModels(force: true)
+        try await Self.waitUntil { getCount == 2 && !model.isAIModelsLoading }
+        #expect(getCount == 2)
+
+        model.selectAIModel("model-alt")
+        try await Self.waitUntil { !model.isAIModelUpdating }
+        #expect(putCount == 1)
+        #expect(model.selectedAIModelId == nil)
+        #expect(model.aiModelsError?.contains("selection failed") == true)
     }
 
     @Test @MainActor func notesOverview_groupsVersionsAndLoadsHTMLOnDemand() async throws {

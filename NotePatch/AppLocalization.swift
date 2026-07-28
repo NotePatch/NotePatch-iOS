@@ -68,10 +68,10 @@ enum AppLanguage: String, CaseIterable, Identifiable {
     static func resolvedSystemLanguage(preferredLanguages: [String] = Locale.preferredLanguages) -> AppLanguage {
         guard let identifier = preferredLanguages.first else { return .english }
         let locale = Locale(identifier: identifier)
-        guard locale.language.languageCode?.identifier.lowercased() == "zh" else { return .english }
+        guard locale.languageCode?.lowercased() == "zh" else { return .english }
 
-        let script = locale.language.script?.identifier.lowercased()
-        let region = locale.region?.identifier.uppercased()
+        let script = locale.scriptCode?.lowercased()
+        let region = locale.regionCode?.uppercased()
         if script == "hant" || ["TW", "HK", "MO"].contains(region ?? "") {
             return .traditionalChinese
         }
@@ -97,7 +97,11 @@ final class AppLocalization: ObservableObject {
         "accessibility.preview_file", "accessibility.remove_file", "accessibility.refresh_named",
         "accessibility.refresh_homework", "accessibility.remove_reference",
         "knowledge.results_count", "grading.confidence",
-        "chat.error_event", "chat.citing_sources",
+        "chat.error_event", "chat.citing_sources", "chat.model_used",
+        "ai.model.title", "ai.model.picker", "ai.model.deployment_default",
+        "ai.model.current", "ai.model.default", "ai.model.cached_warning",
+        "ai.model.fetched_at", "ai.model.empty", "ai.model.loading",
+        "ai.model.refresh", "operation.ai_model_saved",
         "task.status.cancelling", "task.type.document_cleanup", "task.type.document_processing",
         "grading.mode.official", "grading.mode.diagnostic", "account.default_user",
         "note.version", "account.session_valid_until",

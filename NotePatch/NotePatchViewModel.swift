@@ -114,6 +114,7 @@ struct OpenClawChatMessage: Identifiable, Equatable {
     var events: [TaskEventItem]
     var citations: [ChatCitation]
     var sourceStatus: String?
+    var modelId: String?
 
     init(
         id: String,
@@ -124,7 +125,8 @@ struct OpenClawChatMessage: Identifiable, Equatable {
         progress: Int?,
         events: [TaskEventItem],
         citations: [ChatCitation] = [],
-        sourceStatus: String? = nil
+        sourceStatus: String? = nil,
+        modelId: String? = nil
     ) {
         self.id = id
         self.role = role
@@ -135,6 +137,7 @@ struct OpenClawChatMessage: Identifiable, Equatable {
         self.events = events
         self.citations = citations
         self.sourceStatus = sourceStatus
+        self.modelId = modelId
     }
 }
 
@@ -174,6 +177,11 @@ final class NotePatchViewModel: ObservableObject {
     let openClawComposerState: OpenClawComposerState
     @Published var aiHistoryEnabled = true
     @Published private(set) var isAIPreferenceUpdating = false
+    @Published private(set) var aiModelCatalog: AiModelCatalog?
+    @Published var selectedAIModelId: String?
+    @Published private(set) var isAIModelsLoading = false
+    @Published private(set) var isAIModelUpdating = false
+    @Published private(set) var aiModelsError: String?
     @Published var learningUnits: [LearningUnit] = []
     @Published var selectedLearningUnitId: String?
     @Published var studyNotes: [StudyNoteVersion] = []
@@ -232,6 +240,11 @@ final class NotePatchViewModel: ObservableObject {
     private var nextOpenClawMessageId: Int64 = 1
     private var presenceTask: Task<Void, Never>?
     private var studyNoteGenerationPollingTask: Task<Void, Never>?
+    private var aiModelLoadTask: Task<Void, Never>?
+    private var aiModelLoadGeneration = UUID()
+    private var aiModelCatalogWorkspaceId: String?
+    private var aiModelSelectionTask: Task<Void, Never>?
+    private var aiModelSelectionGeneration = UUID()
     private var isAppActive = true
     private var didRestoreSession = false
     private var pendingUITestUploadFile: LocalUploadFile?
@@ -401,7 +414,10 @@ final class NotePatchViewModel: ObservableObject {
         case .openClaw:
             stopStudyNoteGenerationPolling()
             loadChatHistory(force: false)
-        case .documents, .profile:
+        case .profile:
+            stopStudyNoteGenerationPolling()
+            loadAIModels()
+        case .documents:
             stopStudyNoteGenerationPolling()
             break
         }
@@ -939,6 +955,7 @@ final class NotePatchViewModel: ObservableObject {
                 updateOpenClawMessage(assistantMessageId) {
                     $0.taskId = task.id
                     $0.progress = task.progress.clamped(to: 0...100)
+                    $0.modelId = task.payload?.objectStringValue(for: "ai_model")
                 }
                 let finishedTask = try await pollTask(activeSession: activeSession, workspaceId: workspaceId, taskId: task.id) { [weak self] updatedTask, events in
                     latestEvents = events
@@ -947,6 +964,9 @@ final class NotePatchViewModel: ObservableObject {
                         $0.taskId = updatedTask.id
                         $0.progress = updatedTask.progress.clamped(to: 0...100)
                         $0.events = events
+                        if let modelId = updatedTask.payload?.objectStringValue(for: "ai_model") {
+                            $0.modelId = modelId
+                        }
                     }
                 }
                 if let conversationId = selectedConversationId {
@@ -959,6 +979,7 @@ final class NotePatchViewModel: ObservableObject {
                         $0.status = .done
                         $0.progress = finishedTask.progress.clamped(to: 0...100)
                         $0.events = latestEvents
+                        $0.modelId = taskProviderModelId(finishedTask)
                     }
                 }
             } catch {
@@ -979,6 +1000,11 @@ final class NotePatchViewModel: ObservableObject {
             isOpenClawSending = false
         }
         return true
+    }
+
+    private func taskProviderModelId(_ task: TaskItem) -> String? {
+        task.result?.objectStringValue(for: "provider_model")
+            ?? task.payload?.objectStringValue(for: "ai_model")
     }
 
     var selectedConversation: ChatConversation? {
@@ -1117,6 +1143,122 @@ final class NotePatchViewModel: ObservableObject {
             } catch {
                 aiHistoryEnabled = previous
                 showError(error)
+            }
+        }
+    }
+
+    func loadAIModels(force: Bool = false) {
+        if isOfflineTestMode {
+            installOfflineAIModelFixtureIfNeeded()
+            return
+        }
+        guard let activeSession = currentSessionOrError(), let workspaceId = selectedWorkspaceId else {
+            return
+        }
+        if !force {
+            if aiModelCatalogWorkspaceId == workspaceId, aiModelCatalog != nil {
+                return
+            }
+            if aiModelLoadTask != nil {
+                return
+            }
+        }
+
+        aiModelLoadTask?.cancel()
+        let generation = UUID()
+        aiModelLoadGeneration = generation
+        isAIModelsLoading = true
+        aiModelsError = nil
+
+        aiModelLoadTask = Task { [weak self] in
+            guard let self else { return }
+            defer {
+                if self.aiModelLoadGeneration == generation {
+                    self.isAIModelsLoading = false
+                    self.aiModelLoadTask = nil
+                }
+            }
+            do {
+                let catalog = try await self.clientFor(activeSession).listAIModels(workspaceId: workspaceId)
+                try Task.checkCancellation()
+                guard self.aiModelLoadGeneration == generation,
+                      self.selectedWorkspaceId == workspaceId,
+                      self.session != nil else {
+                    return
+                }
+                self.aiModelCatalog = catalog
+                self.aiModelCatalogWorkspaceId = workspaceId
+                self.selectedAIModelId = catalog.selectedModel == catalog.defaultModel
+                    ? nil
+                    : catalog.selectedModel
+            } catch is CancellationError {
+                return
+            } catch {
+                guard self.aiModelLoadGeneration == generation else { return }
+                self.aiModelsError = friendlyError(error)
+                if let backendError = error as? LearningBackendError,
+                   backendError.shouldClearSession || backendError.statusCode == 403 {
+                    self.showError(error)
+                }
+            }
+        }
+    }
+
+    func selectAIModel(_ modelId: String?) {
+        guard let activeSession = currentSessionOrError(),
+              let workspaceId = selectedWorkspaceId,
+              !isAIModelUpdating else {
+            return
+        }
+        let previousSelection = selectedAIModelId
+        let previousCatalog = aiModelCatalog
+        let generation = UUID()
+        aiModelSelectionGeneration = generation
+        selectedAIModelId = modelId
+        isAIModelUpdating = true
+        aiModelsError = nil
+
+        aiModelSelectionTask = Task { [weak self] in
+            guard let self else { return }
+            defer {
+                if self.aiModelSelectionGeneration == generation {
+                    self.isAIModelUpdating = false
+                    self.aiModelSelectionTask = nil
+                }
+            }
+            do {
+                let response = try await self.clientFor(activeSession).selectAIModel(
+                    workspaceId: workspaceId,
+                    modelId: modelId
+                )
+                try Task.checkCancellation()
+                guard self.aiModelSelectionGeneration == generation,
+                      self.selectedWorkspaceId == workspaceId,
+                      self.session != nil else {
+                    return
+                }
+                self.selectedAIModelId = response.selectedModel == response.defaultModel
+                    ? nil
+                    : response.preferredModel
+                if let catalog = self.aiModelCatalog {
+                    self.aiModelCatalog = catalog.applying(response)
+                    self.aiModelCatalogWorkspaceId = workspaceId
+                }
+                self.setStatus("operation.ai_model_saved")
+            } catch is CancellationError {
+                return
+            } catch {
+                guard self.aiModelSelectionGeneration == generation,
+                      self.selectedWorkspaceId == workspaceId else {
+                    return
+                }
+                self.selectedAIModelId = previousSelection
+                self.aiModelCatalog = previousCatalog
+                self.aiModelsError = friendlyError(error)
+                if let backendError = error as? LearningBackendError,
+                   backendError.shouldClearSession || backendError.statusCode == 403 {
+                    self.showError(error)
+                }
             }
         }
     }
@@ -2117,6 +2259,7 @@ final class NotePatchViewModel: ObservableObject {
 
     private func recoverFromWorkspaceAccessDenied() {
         invalidateDeferredContentLoads()
+        clearAIModelState()
         selectedWorkspaceId = nil
         settings.saveSelectedWorkspaceId(nil)
         documents = []
@@ -2234,6 +2377,7 @@ final class NotePatchViewModel: ObservableObject {
         flashcardDeckDetail = FlashcardDeckDetail(deck: sampleDeck, cards: sampleCards)
         flashcardIndex = 0
         isFlashcardShowingBack = false
+        installOfflineAIModelFixtureIfNeeded()
         conversations = []
         selectedConversationId = nil
         isOpenClawSending = false
@@ -2249,7 +2393,8 @@ final class NotePatchViewModel: ObservableObject {
                     status: .done,
                     taskId: nil,
                     progress: nil,
-                    events: []
+                    events: [],
+                    modelId: index.isMultiple(of: 2) ? nil : "openai/gpt-4.1-mini"
                 )
             }
         } else {
@@ -2303,6 +2448,7 @@ final class NotePatchViewModel: ObservableObject {
         isChatHistoryLoading = false
         isConversationMutating = false
         isAIPreferenceUpdating = false
+        clearAIModelState()
         learningUnits = []
         selectedLearningUnitId = nil
         studyNotes = []
@@ -2346,6 +2492,7 @@ final class NotePatchViewModel: ObservableObject {
     private func saveSelectedWorkspace(_ workspaceId: String?) {
         if selectedWorkspaceId != workspaceId {
             invalidateDeferredContentLoads()
+            clearAIModelState()
         }
         selectedWorkspaceId = workspaceId
         if !isOfflineTestMode {
@@ -2914,10 +3061,55 @@ final class NotePatchViewModel: ObservableObject {
                 progress: nil,
                 events: [],
                 citations: chatMessage.citations ?? [],
-                sourceStatus: chatMessage.sourceStatus
+                sourceStatus: chatMessage.sourceStatus,
+                modelId: chatMessage.modelId
             )
         }
         openClawMessages = messages.isEmpty ? [welcomeChatMessage] : messages
+    }
+
+    private func installOfflineAIModelFixtureIfNeeded() {
+        guard aiModelCatalog == nil else { return }
+        let items = [
+            AiModel(
+                id: "openai/gpt-4.1-mini",
+                upstreamId: "gpt-4.1-mini",
+                ownedBy: "openai",
+                created: nil
+            ),
+            AiModel(
+                id: "openai/gpt-4.1",
+                upstreamId: "gpt-4.1",
+                ownedBy: "openai",
+                created: nil
+            )
+        ]
+        aiModelCatalog = AiModelCatalog(
+            provider: "openai",
+            defaultModel: items[0].id,
+            selectedModel: items[0].id,
+            items: items,
+            fetchedAt: "2026-07-28T00:00:00Z",
+            stale: true
+        )
+        selectedAIModelId = nil
+        aiModelCatalogWorkspaceId = selectedWorkspaceId
+        aiModelsError = nil
+    }
+
+    private func clearAIModelState() {
+        aiModelLoadGeneration = UUID()
+        aiModelLoadTask?.cancel()
+        aiModelLoadTask = nil
+        aiModelSelectionGeneration = UUID()
+        aiModelSelectionTask?.cancel()
+        aiModelSelectionTask = nil
+        aiModelCatalogWorkspaceId = nil
+        aiModelCatalog = nil
+        selectedAIModelId = nil
+        isAIModelsLoading = false
+        isAIModelUpdating = false
+        aiModelsError = nil
     }
 
     private func refreshLearningUnits(activeSession: SavedSession, workspaceId: String) async throws {

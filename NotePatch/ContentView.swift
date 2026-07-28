@@ -19,6 +19,9 @@ struct ContentView: View {
         .task {
             await model.restoreIfNeeded()
         }
+        .onAppear {
+            model.handleScenePhase(scenePhase)
+        }
         .onChange(of: scenePhase, initial: true) { _, newPhase in
             model.handleScenePhase(newPhase)
         }
@@ -67,7 +70,7 @@ private struct AuthScreen: View {
                     VStack(spacing: NPSpacing.item) {
                         VStack(spacing: 10) {
                             AuthField(title: "API Address", systemImage: "network") {
-                                TextField("https://5mbps.me:8443/notepatch/1", text: $model.apiBaseURLText)
+                                TextField("https://api.ls-jl.cn:8443/notepatch/1", text: $model.apiBaseURLText)
                                     .textInputAutocapitalization(.never)
                                     .keyboardType(.URL)
                                     .accessibilityIdentifier("apiAddressField")
@@ -99,7 +102,6 @@ private struct AuthScreen: View {
                             }
                         }
                         .modifier(NPCardModifier())
-                        .accessibilityIdentifier("authFormCard")
                     }
 
                     // Login button
@@ -392,7 +394,7 @@ private struct NotesTab: View {
             }
         }
         .sheet(item: $readerItem) { _ in
-            NavigationStack {
+            NavigationView {
                 StudyNoteReader(model: model)
                     .onDisappear { model.closeStudyNoteReader() }
                     .toolbar {
@@ -457,7 +459,7 @@ private struct NotesTab: View {
                                             .frame(width: 28)
                                         VStack(alignment: .leading, spacing: 3) {
                                             Text(item.note.title.isEmpty ? localized("Digital Notes") : item.note.title)
-                                                .npBody().fontWeight(.medium)
+                                                .font(.body.weight(.medium))
                                                 .foregroundStyle(NPColors.textPrimary)
                                                 .lineLimit(2)
                                             Text(localizedFormat("note.version", String(item.note.versionNo)))
@@ -584,7 +586,7 @@ private struct StudyNoteReader: View {
             }
         }
         .sheet(isPresented: $model.isStudyNoteEditorPresented) {
-            NavigationStack {
+            NavigationView {
                 StudyNoteEditor(model: model)
                     .onDisappear { model.cancelStudyNoteEditing() }
             }
@@ -752,6 +754,7 @@ private struct DocumentsTab: View {
                 }
             }
             .pickerStyle(.segmented)
+            .accessibilityIdentifier("documentsSectionPicker")
             .padding(.horizontal, NPSpacing.outer)
             .padding(.bottom, NPSpacing.large)
 
@@ -845,79 +848,11 @@ private struct DocumentsTab: View {
 private struct UploadScreen: View {
     @ObservedObject var model: NotePatchViewModel
     @Binding var isPresented: Bool
-    @State private var isShowingCamera = false
-    @State private var isShowingPhotoLibrary = false
-    @State private var isShowingFileImporter = false
 
     var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: NPSpacing.xxxl) {
-                    // Hero
-                    VStack(alignment: .leading, spacing: NPSpacing.small) {
-                        Text("Upload")
-                            .npTitle()
-                        Text("Import your study materials.")
-                            .npBody()
-                            .foregroundStyle(NPColors.textSecondary)
-                    }
-                    .padding(.top, NPSpacing.xl)
-
-                    // Upload options
-                    VStack(spacing: NPSpacing.medium) {
-                        UploadOptionCard(
-                            icon: "doc.text.fill",
-                            iconColor: NPColors.brand,
-                            title: "Import PDF",
-                            description: "Import PDF notes and worksheets."
-                        ) {
-                            isPresented = false
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                                isShowingFileImporter = true
-                            }
-                        }
-
-                        UploadOptionCard(
-                            icon: "camera.fill",
-                            iconColor: NPColors.brandDark,
-                            title: "Scan Document",
-                            description: "Use the camera to scan handwritten notes."
-                        ) {
-                            isPresented = false
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                                isShowingCamera = true
-                            }
-                        }
-
-                        UploadOptionCard(
-                            icon: "photo.on.rectangle.fill",
-                            iconColor: NPColors.brand,
-                            title: "Import Photos",
-                            description: "Choose images from the photo library."
-                        ) {
-                            isPresented = false
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                                isShowingPhotoLibrary = true
-                            }
-                        }
-
-                        UploadOptionCard(
-                            icon: "folder.fill",
-                            iconColor: NPColors.brandDark,
-                            title: "Import Files",
-                            description: "Browse Files and Cloud Storage."
-                        ) {
-                            isPresented = false
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                                isShowingFileImporter = true
-                            }
-                        }
-                    }
-                }
-                .padding(.horizontal, NPSpacing.outer)
-                .padding(.bottom, NPSpacing.xxxl)
-            }
-            .background(NPColors.background)
+        NavigationView {
+            UploadDocumentScreen(model: model)
+                .navigationTitle(localized("Upload"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -926,34 +861,6 @@ private struct UploadScreen: View {
                     }
                 }
             }
-        }
-        .fileImporter(
-            isPresented: $isShowingFileImporter,
-            allowedContentTypes: [.item],
-            allowsMultipleSelection: true
-        ) { result in
-            if case .success(let urls) = result {
-                model.uploadPickedFiles(from: urls)
-            }
-        }
-        .sheet(isPresented: $isShowingCamera) {
-            CameraPicker { image in
-                model.uploadCameraImage(image)
-            }
-            .ignoresSafeArea()
-        }
-        .sheet(isPresented: $isShowingPhotoLibrary) {
-            PhotoLibraryPicker(cacheDirectory: model.uploadCacheDirectory) { result in
-                isShowingPhotoLibrary = false
-                guard let result else { return }
-                switch result {
-                case .success(let files):
-                    model.stageImportedUploadFiles(files)
-                case .failure(let error):
-                    model.errorMessage = friendlyError(error)
-                }
-            }
-            .ignoresSafeArea()
         }
     }
 }
@@ -1141,7 +1048,7 @@ private struct QueuedUploadRow: View {
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(item.file.filename)
-                    .npBody().fontWeight(.medium)
+                    .font(.body.weight(.medium))
                     .foregroundStyle(NPColors.textPrimary)
                     .lineLimit(2)
                 Text("\(documentKindLabel(item.documentKind)) · \(formatBytes(item.file.fileSize))")
@@ -1261,7 +1168,7 @@ private struct UploadPanel: View {
                 }
                 .padding(.top, NPSpacing.small)
             }
-            .npBody().fontWeight(.medium)
+            .font(.body.weight(.medium))
             .foregroundStyle(NPColors.textPrimary)
         }
     }
@@ -1549,7 +1456,7 @@ private struct TaskPanel: View {
                     VStack(alignment: .leading, spacing: NPSpacing.small) {
                         HStack {
                             Text(taskTypeLabel(activeTask.taskType))
-                                .npBody().fontWeight(.medium)
+                                .font(.body.weight(.medium))
                                 .foregroundStyle(NPColors.textPrimary)
                                 .lineLimit(1)
                             Spacer()
@@ -1586,7 +1493,7 @@ private struct TaskPanel: View {
                             DetailText(resultText, lineLimit: nil)
                                 .padding(.top, 6)
                         }
-                        .npBody().fontWeight(.medium)
+                        .font(.body.weight(.medium))
                     }
                     if canRetryDocumentPurge {
                         Button(action: onRetryDocumentPurge) {
@@ -1695,6 +1602,16 @@ private struct OpenClawChatTab: View {
             // ——— Brand Hero ———
             ScrollView {
                 VStack(spacing: 0) {
+                    ChatScrollPanObserver { value in
+                        dismissKeyboardIfNeeded(
+                            startLocation: value.startLocation,
+                            location: value.location,
+                            translation: value.translation,
+                            scrollBottomY: value.scrollBottomY
+                        )
+                    }
+                    .frame(height: 0)
+
                     NotePatchLogoImage(height: 64)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, NPSpacing.outer)
@@ -1819,7 +1736,6 @@ private struct OpenClawChatTab: View {
                     .accessibilityIdentifier("openClawMessages")
                 }
             }
-
             // ——— Composer bar ———
             VStack(spacing: 0) {
                 Divider().background(NPColors.interactive.opacity(0.4))
@@ -1878,7 +1794,8 @@ private struct OpenClawChatTab: View {
         translation: CGSize,
         scrollBottomY: CGFloat
     ) {
-        guard translation.height > 12,
+        guard isComposerFocused,
+              translation.height > 12,
               translation.height > abs(translation.width),
               startLocation.y < scrollBottomY,
               location.y >= scrollBottomY + composerState.measuredTextHeight else {
@@ -2195,7 +2112,9 @@ private struct LearningUnitsSection: View {
                         HStack(spacing: NPSpacing.medium) {
                             Image(systemName: "note.text").foregroundStyle(NPColors.brand)
                             VStack(alignment: .leading, spacing: 3) {
-                                Text(note.title.isEmpty ? localized("Digital Notes") : note.title).npBody().fontWeight(.medium).lineLimit(2)
+                                Text(note.title.isEmpty ? localized("Digital Notes") : note.title)
+                                    .font(.body.weight(.medium))
+                                    .lineLimit(2)
                                 Text(localizedFormat("note.version", String(note.versionNo))).npCaption()
                             }
                             Spacer()
@@ -2421,7 +2340,7 @@ private struct FlashcardsSection: View {
             .padding(.top, 10)
         } label: {
             Text(localizedFormat("flashcards.priority", String(format: "%.4f", card.priorityScore)))
-                .npBody().fontWeight(.medium)
+                .font(.body.weight(.medium))
                 .foregroundStyle(NPColors.textPrimary)
         }
         .modifier(NPCardModifier())
@@ -2632,7 +2551,9 @@ private struct HomeworkGradingSection: View {
                             Image(systemName: reference.referenceType == "answer_key" ? "checkmark.square" : "list.clipboard")
                                 .foregroundStyle(NPColors.brand)
                             VStack(alignment: .leading, spacing: 2) {
-                                Text(referenceDocumentName(reference.documentId)).npBody().fontWeight(.medium).lineLimit(2)
+                                Text(referenceDocumentName(reference.documentId))
+                                    .font(.body.weight(.medium))
+                                    .lineLimit(2)
                                 Text(documentKindLabel(reference.referenceType)).npCaption()
                             }
                             Spacer()
@@ -2702,7 +2623,7 @@ private struct HomeworkCreateSheet: View {
     @State private var maxScoreText = "100"
 
     var body: some View {
-        NavigationStack {
+        NavigationView {
             Form {
                 Section(header: Text("Homework document")) {
                     Picker("Document", selection: $documentId) {
@@ -2821,6 +2742,14 @@ private struct OpenClawMessageBubble: View {
                 } else if !message.citations.isEmpty {
                     Text(localizedFormat("chat.citing_sources", String(message.citations.count)))
                         .npCaption()
+                }
+                if message.role == .assistant,
+                   let modelId = message.modelId?.trimmingCharacters(in: .whitespacesAndNewlines),
+                   !modelId.isEmpty {
+                    Text(localizedFormat("chat.model_used", modelId))
+                        .npCaption()
+                        .foregroundStyle(NPColors.textSecondary)
+                        .accessibilityIdentifier("chatModelLabel")
                 }
             }
             .padding(NPSpacing.card)
@@ -2969,7 +2898,7 @@ private struct ProfileTab: View {
 
     private var aiSection: some View {
         NPSection {
-            VStack(alignment: .leading, spacing: NPSpacing.small) {
+            VStack(alignment: .leading, spacing: NPSpacing.medium) {
                 Label("AI", systemImage: "sparkles")
                     .npSubheading()
                 Toggle("AI history", isOn: Binding(
@@ -2979,6 +2908,88 @@ private struct ProfileTab: View {
                 .disabled(model.isBusy || model.isAIPreferenceUpdating)
                 Text("Session records are retained, but future requests won't include history context.")
                     .npCaption()
+
+                Divider()
+
+                HStack(spacing: NPSpacing.small) {
+                    Text(localized("ai.model.title"))
+                        .font(.body.weight(.semibold))
+                    Spacer()
+                    Button {
+                        model.loadAIModels(force: true)
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                            .frame(width: 36, height: 36)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(model.isAIModelsLoading || model.isAIModelUpdating)
+                    .accessibilityLabel(localized("ai.model.refresh"))
+                    .accessibilityIdentifier("refreshAIModelsButton")
+                }
+
+                if model.isAIModelsLoading && model.aiModelCatalog == nil {
+                    HStack(spacing: NPSpacing.small) {
+                        ProgressView()
+                        Text(localized("ai.model.loading"))
+                            .npCaption()
+                    }
+                } else if let catalog = model.aiModelCatalog {
+                    Picker(
+                        localized("ai.model.picker"),
+                        selection: Binding<String?>(
+                            get: { model.selectedAIModelId },
+                            set: { model.selectAIModel($0) }
+                        )
+                    ) {
+                        Text(localized("ai.model.deployment_default"))
+                            .tag(String?.none)
+                        ForEach(catalog.items) { item in
+                            Text(item.upstreamId)
+                                .tag(Optional(item.id))
+                        }
+                        if let selectedModelId = model.selectedAIModelId,
+                           !catalog.items.contains(where: { $0.id == selectedModelId }) {
+                            Text(selectedModelId)
+                                .tag(Optional(selectedModelId))
+                        }
+                    }
+                    .pickerStyle(MenuPickerStyle())
+                    .disabled(model.isAIModelUpdating)
+                    .accessibilityIdentifier("aiModelPicker")
+
+                    VStack(alignment: .leading, spacing: NPSpacing.xxs) {
+                        Text(localizedFormat("ai.model.current", catalog.selectedModel))
+                        Text(localizedFormat("ai.model.default", catalog.defaultModel))
+                        if !catalog.fetchedAt.isEmpty {
+                            Text(localizedFormat("ai.model.fetched_at", compactDateTime(catalog.fetchedAt)))
+                        }
+                    }
+                    .npCaption()
+
+                    if catalog.items.isEmpty {
+                        Text(localized("ai.model.empty"))
+                            .npCaption()
+                    }
+                    if catalog.stale {
+                        Label(localized("ai.model.cached_warning"), systemImage: "exclamationmark.triangle")
+                            .npCaption()
+                            .foregroundStyle(NPColors.warning)
+                            .accessibilityIdentifier("aiModelStaleWarning")
+                    }
+                }
+
+                if let error = model.aiModelsError {
+                    HStack(alignment: .firstTextBaseline, spacing: NPSpacing.small) {
+                        Text(error)
+                            .npCaption()
+                            .foregroundStyle(NPColors.destructive)
+                        Spacer()
+                        Button(localized("common.retry")) {
+                            model.loadAIModels(force: true)
+                        }
+                        .disabled(model.isAIModelsLoading)
+                    }
+                }
             }
         }
     }
@@ -3062,7 +3073,7 @@ private struct WorkspaceManagementSection: View {
                             .clipShape(RoundedRectangle(cornerRadius: NPRadius.button, style: .continuous))
                         VStack(alignment: .leading, spacing: 2) {
                             Text(selected.name)
-                                .npBody().fontWeight(.medium)
+                                .font(.body.weight(.medium))
                                 .foregroundStyle(NPColors.textPrimary)
                                 .lineLimit(1)
                             Text("Active workspace")
@@ -3161,7 +3172,7 @@ private struct MarkdownInlineText: View {
         case .code:
             return Text(token.text).font(.system(.body, design: .monospaced))
         case .link:
-            return Text(token.text).underline().foregroundStyle(NPColors.brand)
+            return Text(token.text).underline().foregroundColor(NPColors.brand)
         }
     }
 }

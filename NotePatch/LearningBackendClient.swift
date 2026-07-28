@@ -96,6 +96,24 @@ final class LearningBackendClient {
         )
     }
 
+    func listAIModels(workspaceId: String) async throws -> AiModelCatalog {
+        try await authedJSON(
+            "GET",
+            "/workspaces/\(workspaceId.pathSegment)/ai/models",
+            payload: nil,
+            as: AiModelCatalog.self
+        )
+    }
+
+    func selectAIModel(workspaceId: String, modelId: String?) async throws -> AiModelSelectionResponse {
+        try await authedJSON(
+            "PUT",
+            "/workspaces/\(workspaceId.pathSegment)/ai/model",
+            payload: ["model_id": modelId ?? NSNull()],
+            as: AiModelSelectionResponse.self
+        )
+    }
+
     func logout(refreshToken: String) async throws {
         _ = try await postJSON(
             "/auth/logout",

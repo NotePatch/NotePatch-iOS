@@ -71,11 +71,24 @@ final class NotePatchUITests: XCTestCase {
         XCTAssertTrue(reviewSections.waitForExistence(timeout: 3))
         XCTAssertTrue(reviewSections.buttons["闪卡"].exists)
         app.tabBars.buttons["我的"].tap()
-        XCTAssertTrue(app.descendants(matching: .any)["profileTab"].waitForExistence(timeout: 3))
-        XCTAssertTrue(app.staticTexts["My Workspace"].exists)
+        XCTAssertTrue(app.staticTexts["My Workspace"].waitForExistence(timeout: 3))
         XCTAssertFalse(app.staticTexts["family"].exists)
         XCTAssertFalse(app.staticTexts["class"].exists)
         XCTAssertFalse(app.staticTexts["school"].exists)
+    }
+
+    @MainActor
+    func testOfflineAIModelCatalogAndAssistantModelLabel() throws {
+        let app = makeApp(["-NotePatchUITestWorkbench", "-NotePatchUITestLongChat"])
+        app.launch()
+
+        XCTAssertTrue(app.otherElements["workbenchTabs"].waitForExistence(timeout: 5))
+        app.tabBars.buttons["我的"].tap()
+        XCTAssertTrue(app.descendants(matching: .any)["aiModelPicker"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.descendants(matching: .any)["aiModelStaleWarning"].exists)
+
+        app.tabBars.buttons["AI"].tap()
+        XCTAssertTrue(app.descendants(matching: .any)["chatModelLabel"].waitForExistence(timeout: 3))
     }
 
     @MainActor
@@ -139,14 +152,18 @@ final class NotePatchUITests: XCTestCase {
 
         XCTAssertTrue(app.otherElements["workbenchTabs"].waitForExistence(timeout: 5))
         app.tabBars.buttons["文档"].tap()
-        app.buttons["showUploadPageButton"].tap()
+        app.buttons["uploadFAB"].tap()
         XCTAssertTrue(app.staticTexts["待上传"].waitForExistence(timeout: 3))
         XCTAssertTrue(app.buttons["uploadQueueThumbnail"].waitForExistence(timeout: 3))
         XCTAssertTrue(app.buttons["uploadSelectedQueueButton"].exists)
         let removeButton = app.buttons.matching(NSPredicate(format: "label BEGINSWITH '移除 '")).firstMatch
         XCTAssertTrue(removeButton.exists)
         removeButton.tap()
-        XCTAssertTrue(app.staticTexts["暂无待上传文件"].waitForExistence(timeout: 3))
+        let thumbnailRemoved = expectation(
+            for: NSPredicate(format: "exists == false"),
+            evaluatedWith: app.buttons["uploadQueueThumbnail"]
+        )
+        wait(for: [thumbnailRemoved], timeout: 3)
     }
 
     @MainActor
@@ -223,10 +240,13 @@ final class NotePatchUITests: XCTestCase {
             )
         XCTAssertTrue(keyboard.exists)
 
+        let belowTextFieldY = min(0.95, (editor.frame.maxY + 28) / app.frame.height)
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: startY))
             .press(
                 forDuration: 0.05,
-                thenDragTo: app.buttons["openClawSendButton"].coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.9))
+                thenDragTo: app.coordinate(
+                    withNormalizedOffset: CGVector(dx: 0.5, dy: belowTextFieldY)
+                )
             )
 
         let keyboardDismissed = expectation(
