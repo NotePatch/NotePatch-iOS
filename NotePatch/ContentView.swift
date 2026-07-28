@@ -189,108 +189,147 @@ private struct WorkbenchScreen: View {
     @State private var isUploadPresented = false
 
     var body: some View {
-        ZStack(alignment: .bottom) {
-            VStack(spacing: 0) {
-                StatusBanner(
-                    isBusy: model.isBusy || model.isConversationMutating || model.isAIPreferenceUpdating || model.isHomeworkLoading || model.isStudyNoteSaving,
-                    statusMessage: model.statusMessage,
-                    errorMessage: model.errorMessage,
-                    onDismiss: model.dismissStatusBanner
+        VStack(spacing: 0) {
+            StatusBanner(
+                isBusy: model.isBusy || model.isConversationMutating || model.isAIPreferenceUpdating || model.isHomeworkLoading || model.isStudyNoteSaving,
+                statusMessage: model.statusMessage,
+                errorMessage: model.errorMessage,
+                onDismiss: model.dismissStatusBanner
+            )
+
+            // Content area — all tabs kept alive, only selected one visible
+            ZStack {
+                DocumentsTab(model: model)
+                    .opacity(model.selectedTab == .documents ? 1 : 0)
+                    .disabled(model.selectedTab != .documents)
+
+                NotesTab(model: model)
+                    .opacity(model.selectedTab == .notes ? 1 : 0)
+                    .disabled(model.selectedTab != .notes)
+
+                OpenClawChatTab(
+                    model: model,
+                    chatState: model.openClawState,
+                    composerState: model.openClawComposerState
                 )
+                    .opacity(model.selectedTab == .openClaw ? 1 : 0)
+                    .disabled(model.selectedTab != .openClaw)
 
-                TabView(selection: $model.selectedTab) {
-                    DocumentsTab(model: model)
-                        .tag(WorkbenchTab.documents)
-                        .tabItem {
-                            Label(WorkbenchTab.documents.title, systemImage: WorkbenchTab.documents.iconName)
-                                .accessibilityIdentifier("tab.documents")
-                        }
-
-                    NotesTab(model: model)
-                        .tag(WorkbenchTab.notes)
-                        .tabItem {
-                            Label(WorkbenchTab.notes.title, systemImage: WorkbenchTab.notes.iconName)
-                                .accessibilityIdentifier("tab.notes")
-                        }
-
-                    OpenClawChatTab(
-                        model: model,
-                        chatState: model.openClawState,
-                        composerState: model.openClawComposerState
-                    )
-                        .tag(WorkbenchTab.openClaw)
-                        .tabItem {
-                            Label(WorkbenchTab.openClaw.title, systemImage: WorkbenchTab.openClaw.iconName)
-                                .accessibilityIdentifier("tab.ai")
-                        }
-
-                    ProfileTab(model: model)
-                        .tag(WorkbenchTab.profile)
-                        .tabItem {
-                            Label(WorkbenchTab.profile.title, systemImage: WorkbenchTab.profile.iconName)
-                                .accessibilityIdentifier("tab.me")
-                        }
-                }
-                .tint(NPColors.brandDark)
-                .animation(Animation.npCardEntry, value: model.selectedTab)
-                .onAppear {
-                    let appearance = UITabBarAppearance()
-                    appearance.configureWithTransparentBackground()
-                    appearance.backgroundColor = UIColor(NPTabBar.background)
-                    appearance.backgroundEffect = nil
-                    appearance.shadowColor = .clear
-                    appearance.stackedLayoutAppearance.selected.iconColor = UIColor(NPColors.brandDark)
-                    appearance.stackedLayoutAppearance.selected.titleTextAttributes = [.foregroundColor: UIColor(NPColors.brandDark)]
-                    appearance.stackedLayoutAppearance.normal.iconColor = UIColor(NPColors.textSecondary)
-                    appearance.stackedLayoutAppearance.normal.titleTextAttributes = [.foregroundColor: UIColor(NPColors.textSecondary)]
-                    UITabBar.appearance().standardAppearance = appearance
-                    UITabBar.appearance().scrollEdgeAppearance = appearance
-                }
-                .toolbarBackground(NPTabBar.background, for: .tabBar)
-                .toolbarBackground(.visible, for: .tabBar)
-                .onChange(of: model.selectedTab) { _, selectedTab in
-                    if selectedTab != .openClaw {
-                        dismissActiveKeyboard()
-                    }
-                    model.ensureContentForSelectedTabLoaded()
-                }
-                .accessibilityIdentifier("workbenchTabs")
+                ProfileTab(model: model)
+                    .opacity(model.selectedTab == .profile ? 1 : 0)
+                    .disabled(model.selectedTab != .profile)
             }
-
-            // Floating Action Button — light, elegant, integrated
-            Button {
-                isUploadPresented = true
-            } label: {
-                Image(systemName: "plus")
-                    .font(.system(size: 22, weight: .medium, design: .rounded))
-                    .foregroundStyle(NPColors.brand)
-                    .frame(width: 56, height: 56)
-                    .background(
-                        Circle()
-                            .fill(NPColors.surfaceCard)
-                    )
-                    .overlay {
-                        Circle()
-                            .stroke(NPColors.brand.opacity(0.12), lineWidth: 1)
-                    }
-                    .shadow(
-                        color: .black.opacity(0.06),
-                        radius: 12,
-                        x: 0,
-                        y: 4
-                    )
-            }
-            .accessibilityLabel("Upload")
-            .accessibilityIdentifier("uploadFAB")
-            .offset(y: -6)
         }
         .background(NPColors.background)
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            FloatingTabBar(
+                selectedTab: $model.selectedTab,
+                onUpload: { isUploadPresented = true }
+            )
+            .onChange(of: model.selectedTab) { _, newTab in
+                if newTab != .openClaw { dismissActiveKeyboard() }
+            }
+        }
         .fullScreenCover(isPresented: $isUploadPresented) {
             UploadScreen(model: model, isPresented: $isUploadPresented)
         }
         .onAppear {
             model.ensureContentForSelectedTabLoaded()
         }
+    }
+}
+
+// MARK: - Floating Tab Bar (Liquid Glass)
+
+private struct FloatingTabBar: View {
+    @Binding var selectedTab: WorkbenchTab
+    let onUpload: () -> Void
+
+    var body: some View {
+        HStack(spacing: 0) {
+            ForEach(WorkbenchTab.allCases) { tab in
+                TabBarButton(
+                    icon: tab.iconName,
+                    label: tab.title,
+                    isSelected: selectedTab == tab,
+                    action: {
+                        selectedTab = tab
+                    }
+                )
+                .frame(maxWidth: .infinity)
+            }
+
+            Spacer().frame(width: 6)
+
+            // Upload action
+            UploadFloatingButton(action: onUpload)
+        }
+        .frame(height: 64)
+        .padding(.horizontal, 10)
+        .background(.regularMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 32, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 32, style: .continuous)
+                .stroke(.white.opacity(0.25), lineWidth: 0.5)
+        }
+        .shadow(color: .black.opacity(0.04), radius: 16, x: 0, y: 2)
+        .padding(.horizontal, 20)
+        .padding(.bottom, 6)
+    }
+}
+
+private struct TabBarButton: View {
+    let icon: String
+    let label: String
+    let isSelected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 3) {
+                Image(systemName: icon)
+                    .font(.system(size: 22, weight: .regular))
+                Text(label)
+                    .font(.system(size: 10, weight: .medium))
+            }
+            .foregroundStyle(isSelected ? NPColors.brand : NPColors.textTertiary)
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+private struct UploadFloatingButton: View {
+    let action: () -> Void
+    @State private var isPressed = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "plus")
+                .font(.system(size: 18, weight: .medium, design: .rounded))
+                .foregroundStyle(NPColors.brand)
+                .frame(width: 52, height: 52)
+                .background(
+                    Circle()
+                        .fill(.ultraThinMaterial)
+                )
+                .overlay {
+                    Circle()
+                        .stroke(.white.opacity(0.3), lineWidth: 0.5)
+                }
+                .shadow(
+                    color: .black.opacity(0.04),
+                    radius: 8,
+                    x: 0,
+                    y: 2
+                )
+                .scaleEffect(isPressed ? 0.96 : 1.0)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Upload")
+        .accessibilityIdentifier("uploadFAB")
+        .onLongPressGesture(minimumDuration: .infinity, pressing: { pressing in
+            withAnimation(Animation.npButton) { isPressed = pressing }
+        }, perform: {})
     }
 }
 
@@ -3431,14 +3470,15 @@ private struct StatusPanel: View {
 }
 
 // MARK: - Helper: NotePatch Brand Logo Image
-// Renders the yarn-textured wordmark with 2.25:1 aspect ratio.
-// White background of the source image blends naturally with NPColors.surface (or any white surface).
+// Renders the embroidered wordmark on a fully transparent background.
+// Blends naturally with any page color (paper warm tones or surface whites).
 
 private struct NotePatchLogoImage: View {
     var height: CGFloat
     var body: some View {
         Image("NotePatchLogo")
             .resizable()
+            .renderingMode(.original)
             .interpolation(.high)
             .aspectRatio(contentMode: .fit)
             .frame(height: height)
