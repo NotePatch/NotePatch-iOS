@@ -203,11 +203,13 @@ private struct WorkbenchScreen: View {
         }
         .background(NPColors.background, ignoresSafeAreaEdges: .all)
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            HStack(spacing: 10) {
-                WorkbenchBottomNavigation(selection: $model.selectedTab)
+            WorkbenchBottomGlassGroup(spacing: 10) {
+                HStack(spacing: 10) {
+                    WorkbenchBottomNavigation(selection: $model.selectedTab)
 
-                UploadActionButton {
-                    isUploadPresented = true
+                    UploadActionButton {
+                        isUploadPresented = true
+                    }
                 }
             }
             .padding(.horizontal, 16)
@@ -245,10 +247,59 @@ private struct WorkbenchScreen: View {
     }
 }
 
+private struct WorkbenchBottomGlassGroup<Content: View>: View {
+    let spacing: CGFloat
+    let content: Content
+
+    init(spacing: CGFloat, @ViewBuilder content: () -> Content) {
+        self.spacing = spacing
+        self.content = content()
+    }
+
+    @ViewBuilder
+    var body: some View {
+        if #available(iOS 26.0, *) {
+            WorkbenchBottomGlassGroup26(spacing: spacing, content: content)
+        } else {
+            content
+        }
+    }
+}
+
+@available(iOS 26.0, *)
+private struct WorkbenchBottomGlassGroup26<Content: View>: View {
+    let spacing: CGFloat
+    let content: Content
+
+    var body: some View {
+        GlassEffectContainer(spacing: spacing) {
+            content
+        }
+    }
+}
+
 private struct WorkbenchBottomNavigation: View {
     @Binding var selection: WorkbenchTab
 
+    @ViewBuilder
     var body: some View {
+        if #available(iOS 26.0, *) {
+            navigationItems
+                .glassEffect(.regular, in: Capsule(style: .continuous))
+                .navigationCapsuleChrome()
+        } else {
+            navigationItems
+                .background {
+                    Capsule(style: .continuous)
+                        .fill(.ultraThinMaterial)
+                    Capsule(style: .continuous)
+                        .fill(.white.opacity(0.01))
+                }
+                .navigationCapsuleChrome()
+        }
+    }
+
+    private var navigationItems: some View {
         HStack(spacing: 0) {
             ForEach(WorkbenchTab.allCases) { tab in
                 Button {
@@ -256,9 +307,15 @@ private struct WorkbenchBottomNavigation: View {
                         selection = tab
                     }
                 } label: {
-                    Image(systemName: tab.iconName)
-                        .font(.system(size: 19, weight: selection == tab ? .semibold : .regular))
-                        .foregroundStyle(selection == tab ? NPColors.brandDark : NPColors.textPrimary)
+                    VStack(spacing: 3) {
+                        Image(systemName: tab.iconName)
+                            .font(.system(size: 18, weight: selection == tab ? .semibold : .regular))
+                        Text(tab.title)
+                            .font(.system(size: 10, weight: selection == tab ? .semibold : .regular))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.8)
+                    }
+                        .foregroundStyle(selection == tab ? NPColors.brandDark : NPColors.textSecondary)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .contentShape(Rectangle())
                 }
@@ -269,13 +326,7 @@ private struct WorkbenchBottomNavigation: View {
             }
         }
         .frame(maxWidth: .infinity)
-        .frame(height: 56)
-        .background(.ultraThinMaterial, in: Capsule(style: .continuous))
-        .overlay(
-            Capsule(style: .continuous)
-                .stroke(NPColors.border.opacity(0.75), lineWidth: 0.75)
-        )
-        .shadow(color: .black.opacity(0.08), radius: 14, x: 0, y: 5)
+        .frame(height: 58)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("workbenchTabs")
     }
@@ -300,17 +351,8 @@ private struct UploadActionButton: View {
 
     var body: some View {
         Button(action: action) {
-            Image(systemName: "plus")
-                .font(.system(size: 20, weight: .medium, design: .rounded))
-                .foregroundStyle(NPColors.textPrimary)
-                .frame(width: 56, height: 56)
-                .background(.ultraThinMaterial, in: Circle())
-                .overlay(
-                    Circle()
-                        .stroke(NPColors.border.opacity(0.75), lineWidth: 0.75)
-                )
-                .shadow(color: .black.opacity(0.08), radius: 14, x: 0, y: 5)
-            .scaleEffect(isPressed ? 0.96 : 1.0)
+            uploadLabel
+                .scaleEffect(isPressed ? 0.96 : 1.0)
         }
         .buttonStyle(.plain)
         .accessibilityLabel(localized("Upload"))
@@ -320,6 +362,75 @@ private struct UploadActionButton: View {
                 isPressed = pressing
             }
         }, perform: {})
+    }
+
+    @ViewBuilder
+    private var uploadLabel: some View {
+        if #available(iOS 26.0, *) {
+            uploadIcon
+                .glassEffect(.regular, in: Circle())
+                .navigationCircleChrome()
+        } else {
+            uploadIcon
+                .background {
+                    Circle()
+                        .fill(.ultraThinMaterial)
+                    Circle()
+                        .fill(.white.opacity(0.01))
+                }
+                .navigationCircleChrome()
+        }
+    }
+
+    private var uploadIcon: some View {
+        Image(systemName: "plus")
+            .font(.system(size: 19, weight: .medium, design: .rounded))
+            .foregroundStyle(NPColors.brand)
+            .frame(width: 58, height: 58)
+    }
+}
+
+private extension View {
+    func navigationCapsuleChrome() -> some View {
+        overlay {
+            Capsule(style: .continuous)
+                .fill(navigationTopHighlight)
+                .allowsHitTesting(false)
+        }
+        .overlay {
+            Capsule(style: .continuous)
+                .stroke(.white.opacity(0.30), lineWidth: 1)
+                .allowsHitTesting(false)
+        }
+        .shadow(color: .black.opacity(0.04), radius: 16, x: 0, y: 4)
+        .shadow(color: .black.opacity(0.02), radius: 32, x: 0, y: 8)
+    }
+
+    func navigationCircleChrome() -> some View {
+        overlay {
+            Circle()
+                .fill(navigationTopHighlight)
+                .allowsHitTesting(false)
+        }
+        .overlay {
+            Circle()
+                .stroke(.white.opacity(0.30), lineWidth: 1)
+                .allowsHitTesting(false)
+        }
+        .shadow(color: .black.opacity(0.04), radius: 16, x: 0, y: 4)
+        .shadow(color: .black.opacity(0.02), radius: 32, x: 0, y: 8)
+    }
+
+    private var navigationTopHighlight: LinearGradient {
+        LinearGradient(
+            stops: [
+                .init(color: .white.opacity(0.45), location: 0),
+                .init(color: .white.opacity(0.05), location: 0.35),
+                .init(color: .clear, location: 0.5),
+            ],
+            startPoint: .top,
+            endPoint: .bottom
+        )
     }
 }
 
