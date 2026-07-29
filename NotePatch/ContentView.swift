@@ -191,51 +191,63 @@ private struct WorkbenchScreen: View {
     @State private var isUploadPresented = false
 
     var body: some View {
-        VStack(spacing: 0) {
-            StatusBanner(
-                isBusy: model.isBusy || model.isConversationMutating || model.isAIPreferenceUpdating || model.isHomeworkLoading || model.isStudyNoteSaving,
-                statusMessage: model.statusMessage,
-                errorMessage: model.errorMessage,
-                onDismiss: model.dismissStatusBanner
-            )
+        ZStack(alignment: .bottomTrailing) {
+            VStack(spacing: 0) {
+                StatusBanner(
+                    isBusy: model.isBusy || model.isConversationMutating || model.isAIPreferenceUpdating || model.isHomeworkLoading || model.isStudyNoteSaving,
+                    statusMessage: model.statusMessage,
+                    errorMessage: model.errorMessage,
+                    onDismiss: model.dismissStatusBanner
+                )
 
-            // Content area — Upload button overlays content for real glass blur
-            ZStack(alignment: .bottomTrailing) {
-                ZStack {
+                TabView(selection: $model.selectedTab) {
                     DocumentsTab(model: model)
-                        .opacity(model.selectedTab == .documents ? 1 : 0)
-                        .disabled(model.selectedTab != .documents)
+                        .tag(WorkbenchTab.documents)
+                        .tabItem {
+                            Label(WorkbenchTab.documents.title, systemImage: WorkbenchTab.documents.iconName)
+                                .accessibilityIdentifier("tab.documents")
+                        }
+
                     NotesTab(model: model)
-                        .opacity(model.selectedTab == .notes ? 1 : 0)
-                        .disabled(model.selectedTab != .notes)
+                        .tag(WorkbenchTab.notes)
+                        .tabItem {
+                            Label(WorkbenchTab.notes.title, systemImage: WorkbenchTab.notes.iconName)
+                                .accessibilityIdentifier("tab.notes")
+                        }
+
                     OpenClawChatTab(
                         model: model,
                         chatState: model.openClawState,
                         composerState: model.openClawComposerState
                     )
-                        .opacity(model.selectedTab == .openClaw ? 1 : 0)
-                        .disabled(model.selectedTab != .openClaw)
-                    ProfileTab(model: model)
-                        .opacity(model.selectedTab == .profile ? 1 : 0)
-                        .disabled(model.selectedTab != .profile)
-                }
-                .padding(.bottom, 64)
+                        .tag(WorkbenchTab.openClaw)
+                        .tabItem {
+                            Label(WorkbenchTab.openClaw.title, systemImage: WorkbenchTab.openClaw.iconName)
+                                .accessibilityIdentifier("tab.ai")
+                        }
 
-                // Upload — overlaps content for real backdrop blur
-                UploadActionButton {
-                    isUploadPresented = true
+                    ProfileTab(model: model)
+                        .tag(WorkbenchTab.profile)
+                        .tabItem {
+                            Label(WorkbenchTab.profile.title, systemImage: WorkbenchTab.profile.iconName)
+                                .accessibilityIdentifier("tab.me")
+                        }
                 }
-                .padding(.trailing, 20)
-                .padding(.bottom, 6)
-            }
-        }
-        .background(NPColors.background)
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            FloatingTabBar(selectedTab: $model.selectedTab)
+                .tint(NPColors.brandDark)
+                .background(NPColors.background)
                 .onChange(of: model.selectedTab) { _, newTab in
                     if newTab != .openClaw { dismissActiveKeyboard() }
                 }
+            }
+
+            // Upload — independent global action, floating above tab bar
+            UploadActionButton {
+                isUploadPresented = true
+            }
+            .padding(.trailing, 22)
+            .padding(.bottom, 80)
         }
+        .background(NPColors.background, ignoresSafeAreaEdges: .all)
         .fullScreenCover(isPresented: $isUploadPresented) {
             UploadScreen(model: model, isPresented: $isUploadPresented)
         }
@@ -263,15 +275,34 @@ private struct UploadActionButton: View {
             }
             .padding(.horizontal, 20)
             .frame(width: 152, height: 50)
-            .background(
+            .background {
                 Capsule(style: .continuous)
                     .fill(.ultraThinMaterial)
-            )
-            .overlay {
                 Capsule(style: .continuous)
-                    .stroke(.white.opacity(0.20), lineWidth: 1)
+                    .fill(.white.opacity(0.01))
             }
-            .shadow(color: .black.opacity(0.02), radius: 10, x: 0, y: 1)
+            .overlay {
+                // Top edge highlight
+                Capsule(style: .continuous)
+                    .fill(
+                        LinearGradient(
+                            stops: [
+                                .init(color: .white.opacity(0.45), location: 0),
+                                .init(color: .white.opacity(0.05), location: 0.35),
+                                .init(color: .clear, location: 0.5),
+                            ],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    )
+            }
+            .overlay {
+                // Hairline border
+                Capsule(style: .continuous)
+                    .stroke(.white.opacity(0.30), lineWidth: 1)
+            }
+            .shadow(color: .black.opacity(0.04), radius: 16, x: 0, y: 4)
+            .shadow(color: .black.opacity(0.02), radius: 32, x: 0, y: 8)
             .scaleEffect(isPressed ? 0.96 : 1.0)
         }
         .buttonStyle(.plain)
@@ -282,59 +313,6 @@ private struct UploadActionButton: View {
                 isPressed = pressing
             }
         }, perform: {})
-    }
-}
-
-// MARK: - Floating Tab Bar (Liquid Glass)
-
-private struct FloatingTabBar: View {
-    @Binding var selectedTab: WorkbenchTab
-
-    var body: some View {
-        HStack(spacing: 0) {
-            ForEach(WorkbenchTab.allCases) { tab in
-                TabBarButton(
-                    icon: tab.iconName,
-                    label: tab.title,
-                    isSelected: selectedTab == tab,
-                    action: {
-                        selectedTab = tab
-                    }
-                )
-                .frame(maxWidth: .infinity)
-            }
-        }
-        .frame(height: 64)
-        .padding(.horizontal, 10)
-        .background(.regularMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 32, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 32, style: .continuous)
-                .stroke(.white.opacity(0.25), lineWidth: 0.5)
-        }
-        .shadow(color: .black.opacity(0.04), radius: 16, x: 0, y: 2)
-        .padding(.horizontal, 20)
-        .padding(.bottom, 6)
-    }
-}
-
-private struct TabBarButton: View {
-    let icon: String
-    let label: String
-    let isSelected: Bool
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            VStack(spacing: 3) {
-                Image(systemName: icon)
-                    .font(.system(size: 22, weight: .regular))
-                Text(label)
-                    .font(.system(size: 10, weight: .medium))
-            }
-            .foregroundStyle(isSelected ? NPColors.brand : NPColors.textTertiary)
-        }
-        .buttonStyle(.plain)
     }
 }
 
@@ -349,7 +327,7 @@ private struct NotesTab: View {
             NotePatchLogoImage(height: 90)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, NPSpacing.outer)
-                .padding(.top, NPSpacing.large)
+                .padding(.top, NPSpacing.medium)
                 .padding(.bottom, NPSpacing.small)
 
             Text("Patch your knowledge together.")
@@ -357,7 +335,7 @@ private struct NotesTab: View {
                 .foregroundStyle(NPColors.textTertiary)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, NPSpacing.outer)
-                .padding(.bottom, NPSpacing.xl)
+                .padding(.bottom, NPSpacing.large)
 
             // ── 2. Controls ──
             HStack {
@@ -407,6 +385,7 @@ private struct NotesTab: View {
                     }
             }
         }
+        .background(NPColors.background)
         .onChange(of: model.selectedNotesSection) { _, _ in
             model.ensureContentForSelectedTabLoaded()
         }
@@ -738,7 +717,7 @@ private struct DocumentsTab: View {
             NotePatchLogoImage(height: 90)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, NPSpacing.outer)
-                .padding(.top, NPSpacing.large)
+                .padding(.top, NPSpacing.medium)
                 .padding(.bottom, NPSpacing.small)
 
             Text("Patch your knowledge together.")
@@ -746,7 +725,7 @@ private struct DocumentsTab: View {
                 .foregroundStyle(NPColors.textTertiary)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, NPSpacing.outer)
-                .padding(.bottom, NPSpacing.xl)
+                .padding(.bottom, NPSpacing.large)
 
             // ── 2. Page Header ──
             HStack {
@@ -773,7 +752,7 @@ private struct DocumentsTab: View {
             .pickerStyle(.segmented)
             .accessibilityIdentifier("documentsSectionPicker")
             .padding(.horizontal, NPSpacing.outer)
-            .padding(.bottom, NPSpacing.item)
+            .padding(.bottom, NPSpacing.small)
 
             // ── 4. Content ──
             if model.selectedDocumentsSection == .documents {
@@ -782,6 +761,7 @@ private struct DocumentsTab: View {
                 TaskTab(model: model)
             }
         }
+        .background(NPColors.background)
     }
 
     private var documentList: some View {
@@ -1620,7 +1600,7 @@ private struct OpenClawChatTab: View {
                     NotePatchLogoImage(height: 90)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, NPSpacing.outer)
-                        .padding(.top, NPSpacing.large)
+                        .padding(.top, NPSpacing.medium)
                 .padding(.bottom, NPSpacing.small)
 
                     Text("Patch your knowledge together.")
@@ -1786,6 +1766,7 @@ private struct OpenClawChatTab: View {
                     titleDraft.trimmingCharacters(in: .whitespacesAndNewlines).count > 160
                 )
         }
+        .background(NPColors.background)
     }
 
     private func dismissComposer() {
@@ -2804,17 +2785,17 @@ private struct ProfileTab: View {
             VStack(spacing: 24) {
                 // ——— Brand Hero ———
                 NotePatchLogoImage(height: 90)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .frame(maxWidth: .infinity, alignment: .center)
                     .padding(.horizontal, NPSpacing.outer)
                     .padding(.top, NPSpacing.large)
                     .padding(.bottom, NPSpacing.small)
 
                 Text("Patch your knowledge together.")
                     .font(.system(size: 13, weight: .regular, design: .default))
-                    .foregroundStyle(NPColors.textTertiary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .foregroundStyle(NPColors.textSecondary)
+                    .frame(maxWidth: .infinity, alignment: .center)
                     .padding(.horizontal, NPSpacing.outer)
-                    .padding(.bottom, NPSpacing.xl)
+                    .padding(.bottom, NPSpacing.large)
 
                 // ——— Profile Card ———
                 NPSection {
@@ -2839,9 +2820,9 @@ private struct ProfileTab: View {
                                     .lineLimit(1)
                             }
                         }
-                        Text(localizedFormat("account.session_valid_until", compactDateTime(model.session?.expiresAt ?? "")))
+                        Text("Pro Plan · Sync Enabled")
                             .font(.system(size: 12, weight: .regular))
-                            .foregroundStyle(NPColors.textSecondary.opacity(0.75))
+                            .foregroundStyle(NPColors.textTertiary)
                     }
                 }
 
@@ -2871,8 +2852,9 @@ private struct ProfileTab: View {
             }
             .padding(.horizontal, NPSpacing.outer)
             .padding(.top, NPSpacing.small)
-            .padding(.bottom, NPSpacing.xxxl)
+            .padding(.bottom, 100)
         }
+        .background(NPColors.background)
     }
 
     private var accountInitial: String {
@@ -2894,6 +2876,7 @@ private struct ProfileTab: View {
                     }
                 }
                 .pickerStyle(MenuPickerStyle())
+                .tint(NPColors.brandDark)
                 .accessibilityIdentifier("appLanguagePicker")
                 Text("Changes apply immediately throughout NotePatch.")
                     .npCaption()
@@ -2927,6 +2910,7 @@ private struct ProfileTab: View {
                             .frame(width: 36, height: 36)
                     }
                     .buttonStyle(.plain)
+                    .foregroundStyle(NPColors.brandDark)
                     .disabled(model.isAIModelsLoading || model.isAIModelUpdating)
                     .accessibilityLabel(localized("ai.model.refresh"))
                     .accessibilityIdentifier("refreshAIModelsButton")
@@ -2959,6 +2943,7 @@ private struct ProfileTab: View {
                         }
                     }
                     .pickerStyle(MenuPickerStyle())
+                    .tint(NPColors.brandDark)
                     .disabled(model.isAIModelUpdating)
                     .accessibilityIdentifier("aiModelPicker")
 
@@ -3065,7 +3050,8 @@ private struct WorkspaceManagementSection: View {
                     } label: {
                         Image(systemName: "arrow.clockwise")
                     }
-                    .buttonStyle(.borderless)
+                    .buttonStyle(.plain)
+                    .foregroundStyle(NPColors.brandDark)
                     .disabled(model.isBusy || model.selectedWorkspaceId == nil)
                     .accessibilityLabel("Refresh workspace")
                 }
