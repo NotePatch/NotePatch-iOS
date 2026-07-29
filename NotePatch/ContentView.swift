@@ -22,7 +22,7 @@ struct ContentView: View {
         .onAppear {
             model.handleScenePhase(scenePhase)
         }
-        .onChange(of: scenePhase, initial: true) { _, newPhase in
+        .onChange(of: scenePhase) { newPhase in
             model.handleScenePhase(newPhase)
         }
         .sheet(item: $model.downloadedPreview) { preview in
@@ -191,73 +191,108 @@ private struct WorkbenchScreen: View {
     @State private var isUploadPresented = false
 
     var body: some View {
-        ZStack(alignment: .bottomTrailing) {
-            VStack(spacing: 0) {
-                StatusBanner(
-                    isBusy: model.isBusy || model.isConversationMutating || model.isAIPreferenceUpdating || model.isHomeworkLoading || model.isStudyNoteSaving,
-                    statusMessage: model.statusMessage,
-                    errorMessage: model.errorMessage,
-                    onDismiss: model.dismissStatusBanner
-                )
+        VStack(spacing: 0) {
+            StatusBanner(
+                isBusy: model.isBusy || model.isConversationMutating || model.isAIPreferenceUpdating || model.isHomeworkLoading || model.isStudyNoteSaving,
+                statusMessage: model.statusMessage,
+                errorMessage: model.errorMessage,
+                onDismiss: model.dismissStatusBanner
+            )
 
-                TabView(selection: $model.selectedTab) {
-                    DocumentsTab(model: model)
-                        .tag(WorkbenchTab.documents)
-                        .tabItem {
-                            Label(WorkbenchTab.documents.title, systemImage: WorkbenchTab.documents.iconName)
-                                .accessibilityIdentifier("tab.documents")
-                        }
-
-                    NotesTab(model: model)
-                        .tag(WorkbenchTab.notes)
-                        .tabItem {
-                            Label(WorkbenchTab.notes.title, systemImage: WorkbenchTab.notes.iconName)
-                                .accessibilityIdentifier("tab.notes")
-                        }
-
-                    OpenClawChatTab(
-                        model: model,
-                        chatState: model.openClawState,
-                        composerState: model.openClawComposerState
-                    )
-                        .tag(WorkbenchTab.openClaw)
-                        .tabItem {
-                            Label(WorkbenchTab.openClaw.title, systemImage: WorkbenchTab.openClaw.iconName)
-                                .accessibilityIdentifier("tab.ai")
-                        }
-
-                    ProfileTab(model: model)
-                        .tag(WorkbenchTab.profile)
-                        .tabItem {
-                            Label(WorkbenchTab.profile.title, systemImage: WorkbenchTab.profile.iconName)
-                                .accessibilityIdentifier("tab.me")
-                        }
-                }
-                .tint(NPColors.brandDark)
-                .background(NPColors.background)
-                .onChange(of: model.selectedTab) { _, newTab in
-                    if newTab != .openClaw { dismissActiveKeyboard() }
-                }
-            }
-
-            // Upload — independent global action, floating above tab bar
-            UploadActionButton {
-                isUploadPresented = true
-            }
-            .padding(.trailing, 22)
-            .padding(.bottom, 80)
+            selectedContent
         }
         .background(NPColors.background, ignoresSafeAreaEdges: .all)
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            HStack(spacing: 10) {
+                WorkbenchBottomNavigation(selection: $model.selectedTab)
+
+                UploadActionButton {
+                    isUploadPresented = true
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 8)
+            .padding(.bottom, 8)
+        }
         .fullScreenCover(isPresented: $isUploadPresented) {
             UploadScreen(model: model, isPresented: $isUploadPresented)
+        }
+        .onChange(of: model.selectedTab) { newTab in
+            if newTab != .openClaw { dismissActiveKeyboard() }
+            model.ensureContentForSelectedTabLoaded()
         }
         .onAppear {
             model.ensureContentForSelectedTabLoaded()
         }
     }
+
+    @ViewBuilder
+    private var selectedContent: some View {
+        switch model.selectedTab {
+        case .documents:
+            DocumentsTab(model: model)
+        case .notes:
+            NotesTab(model: model)
+        case .openClaw:
+            OpenClawChatTab(
+                model: model,
+                chatState: model.openClawState,
+                composerState: model.openClawComposerState
+            )
+        case .profile:
+            ProfileTab(model: model)
+        }
+    }
 }
 
-// MARK: - Upload Action Button (Liquid Glass, overlays content for real blur)
+private struct WorkbenchBottomNavigation: View {
+    @Binding var selection: WorkbenchTab
+
+    var body: some View {
+        HStack(spacing: 0) {
+            ForEach(WorkbenchTab.allCases) { tab in
+                Button {
+                    withAnimation(.npInteractive) {
+                        selection = tab
+                    }
+                } label: {
+                    Image(systemName: tab.iconName)
+                        .font(.system(size: 19, weight: selection == tab ? .semibold : .regular))
+                        .foregroundStyle(selection == tab ? NPColors.brandDark : NPColors.textPrimary)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(tab.title)
+                .accessibilityIdentifier(tab.accessibilityIdentifier)
+                .accessibilityAddTraits(selection == tab ? .isSelected : [])
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: 56)
+        .background(.ultraThinMaterial, in: Capsule(style: .continuous))
+        .overlay(
+            Capsule(style: .continuous)
+                .stroke(NPColors.border.opacity(0.75), lineWidth: 0.75)
+        )
+        .shadow(color: .black.opacity(0.08), radius: 14, x: 0, y: 5)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("workbenchTabs")
+    }
+}
+
+private extension WorkbenchTab {
+    var accessibilityIdentifier: String {
+        switch self {
+        case .documents: return "tab.documents"
+        case .notes: return "tab.notes"
+        case .openClaw: return "tab.ai"
+        case .profile: return "tab.me"
+        }
+    }
+}
+
+// MARK: - Upload Action Button
 
 private struct UploadActionButton: View {
     let action: () -> Void
@@ -265,49 +300,21 @@ private struct UploadActionButton: View {
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 8) {
-                Image(systemName: "plus")
-                    .font(.system(size: 15, weight: .medium, design: .rounded))
-                    .foregroundStyle(NPColors.brand)
-                Text("Upload")
-                    .font(.system(size: 14, weight: .medium, design: .default))
-                    .foregroundStyle(NPColors.textPrimary)
-            }
-            .padding(.horizontal, 20)
-            .frame(width: 152, height: 50)
-            .background {
-                Capsule(style: .continuous)
-                    .fill(.ultraThinMaterial)
-                Capsule(style: .continuous)
-                    .fill(.white.opacity(0.01))
-            }
-            .overlay {
-                // Top edge highlight
-                Capsule(style: .continuous)
-                    .fill(
-                        LinearGradient(
-                            stops: [
-                                .init(color: .white.opacity(0.45), location: 0),
-                                .init(color: .white.opacity(0.05), location: 0.35),
-                                .init(color: .clear, location: 0.5),
-                            ],
-                            startPoint: .top,
-                            endPoint: .bottom
-                        )
-                    )
-            }
-            .overlay {
-                // Hairline border
-                Capsule(style: .continuous)
-                    .stroke(.white.opacity(0.30), lineWidth: 1)
-            }
-            .shadow(color: .black.opacity(0.04), radius: 16, x: 0, y: 4)
-            .shadow(color: .black.opacity(0.02), radius: 32, x: 0, y: 8)
+            Image(systemName: "plus")
+                .font(.system(size: 20, weight: .medium, design: .rounded))
+                .foregroundStyle(NPColors.textPrimary)
+                .frame(width: 56, height: 56)
+                .background(.ultraThinMaterial, in: Circle())
+                .overlay(
+                    Circle()
+                        .stroke(NPColors.border.opacity(0.75), lineWidth: 0.75)
+                )
+                .shadow(color: .black.opacity(0.08), radius: 14, x: 0, y: 5)
             .scaleEffect(isPressed ? 0.96 : 1.0)
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("Upload")
-        .accessibilityIdentifier("globalUploadButton")
+        .accessibilityLabel(localized("Upload"))
+        .accessibilityIdentifier("uploadFAB")
         .onLongPressGesture(minimumDuration: .infinity, pressing: { pressing in
             withAnimation(.spring(response: 0.28, dampingFraction: 0.78)) {
                 isPressed = pressing
@@ -373,7 +380,7 @@ private struct NotesTab: View {
             }
         }
         .sheet(item: $readerItem) { _ in
-            NavigationStack {
+            NavigationView {
                 StudyNoteReader(model: model)
                     .onDisappear { model.closeStudyNoteReader() }
                     .toolbar {
@@ -384,9 +391,10 @@ private struct NotesTab: View {
                         }
                     }
             }
+            .navigationViewStyle(.stack)
         }
         .background(NPColors.background)
-        .onChange(of: model.selectedNotesSection) { _, _ in
+        .onChange(of: model.selectedNotesSection) { _ in
             model.ensureContentForSelectedTabLoaded()
         }
     }
@@ -566,10 +574,11 @@ private struct StudyNoteReader: View {
             }
         }
         .sheet(isPresented: $model.isStudyNoteEditorPresented) {
-            NavigationStack {
+            NavigationView {
                 StudyNoteEditor(model: model)
                     .onDisappear { model.cancelStudyNoteEditing() }
             }
+            .navigationViewStyle(.stack)
         }
     }
 }
@@ -835,7 +844,7 @@ private struct UploadScreen: View {
     @Binding var isPresented: Bool
 
     var body: some View {
-        NavigationStack {
+        NavigationView {
             UploadDocumentScreen(model: model)
                 .navigationTitle(localized("Upload"))
                 .navigationBarTitleDisplayMode(.inline)
@@ -847,6 +856,7 @@ private struct UploadScreen: View {
                     }
                 }
         }
+        .navigationViewStyle(.stack)
     }
 }
 
@@ -1710,7 +1720,7 @@ private struct OpenClawChatTab: View {
                         }
                         .padding(.horizontal, NPSpacing.outer)
                         .padding(.vertical, 14)
-                        .onChange(of: chatState.messages.count) { _, _ in
+                        .onChange(of: chatState.messages.count) { _ in
                             if let last = chatState.messages.last {
                                 withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
                                     proxy.scrollTo(last.id, anchor: .bottom)
@@ -2042,7 +2052,7 @@ private struct LearningTab: View {
                 .padding(.bottom, NPSpacing.section)
             }
         }
-        .onChange(of: model.selectedLearningSection) { _, section in
+        .onChange(of: model.selectedLearningSection) { section in
             if section == .flashcards {
                 model.ensureFlashcardsLoaded()
             }
@@ -2609,7 +2619,7 @@ private struct HomeworkCreateSheet: View {
     @State private var maxScoreText = "100"
 
     var body: some View {
-        NavigationStack {
+        NavigationView {
             Form {
                 Section(header: Text("Homework document")) {
                     Picker("Document", selection: $documentId) {
@@ -2618,7 +2628,7 @@ private struct HomeworkCreateSheet: View {
                             Text(document.title ?? document.originalFilename).tag(document.id)
                         }
                     }
-                    .onChange(of: documentId) { _, newValue in
+                    .onChange(of: documentId) { newValue in
                         if title.isEmpty, let document = model.homeworkDocumentCandidates.first(where: { $0.id == newValue }) {
                             title = document.title ?? document.originalFilename
                         }
@@ -2656,6 +2666,7 @@ private struct HomeworkCreateSheet: View {
                 }
             }
         }
+        .navigationViewStyle(.stack)
         .onAppear {
             if documentId.isEmpty, let document = model.homeworkDocumentCandidates.first {
                 documentId = document.id

@@ -12,3 +12,6 @@ xcuserdata/
 
 # Local backend documentation sync helper
 /scripts/sync-frontend-integration.sh
+
+# Local Workbuddy session memory
+.workbuddy/

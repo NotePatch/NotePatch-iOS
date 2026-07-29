@@ -68,10 +68,10 @@ enum AppLanguage: String, CaseIterable, Identifiable {
     static func resolvedSystemLanguage(preferredLanguages: [String] = Locale.preferredLanguages) -> AppLanguage {
         guard let identifier = preferredLanguages.first else { return .english }
         let locale = Locale(identifier: identifier)
-        guard locale.language.languageCode?.identifier.lowercased() == "zh" else { return .english }
+        guard locale.languageCode?.lowercased() == "zh" else { return .english }
 
-        let script = locale.language.script?.identifier.lowercased()
-        let region = locale.region?.identifier.uppercased()
+        let script = locale.scriptCode?.lowercased()
+        let region = locale.regionCode?.uppercased()
         if script == "hant" || ["TW", "HK", "MO"].contains(region ?? "") {
             return .traditionalChinese
         }
