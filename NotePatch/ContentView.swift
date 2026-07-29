@@ -285,8 +285,8 @@ private struct WorkbenchBottomNavigation: View {
     var body: some View {
         if #available(iOS 26.0, *) {
             navigationItems
-                .glassEffect(.regular, in: Capsule(style: .continuous))
-                .navigationCapsuleChrome()
+                .glassEffect(.regular.interactive(), in: Capsule(style: .continuous))
+                .nativeNavigationCapsuleChrome()
         } else {
             navigationItems
                 .background {
@@ -368,8 +368,8 @@ private struct UploadActionButton: View {
     private var uploadLabel: some View {
         if #available(iOS 26.0, *) {
             uploadIcon
-                .glassEffect(.regular, in: Circle())
-                .navigationCircleChrome()
+                .glassEffect(.regular.interactive(), in: Circle())
+                .nativeNavigationCircleChrome()
         } else {
             uploadIcon
                 .background {
@@ -391,6 +391,26 @@ private struct UploadActionButton: View {
 }
 
 private extension View {
+    func nativeNavigationCapsuleChrome() -> some View {
+        overlay {
+            Capsule(style: .continuous)
+                .stroke(.white.opacity(0.34), lineWidth: 0.75)
+                .allowsHitTesting(false)
+        }
+        .shadow(color: .black.opacity(0.05), radius: 16, x: 0, y: 4)
+        .shadow(color: .black.opacity(0.03), radius: 32, x: 0, y: 8)
+    }
+
+    func nativeNavigationCircleChrome() -> some View {
+        overlay {
+            Circle()
+                .stroke(.white.opacity(0.34), lineWidth: 0.75)
+                .allowsHitTesting(false)
+        }
+        .shadow(color: .black.opacity(0.05), radius: 16, x: 0, y: 4)
+        .shadow(color: .black.opacity(0.03), radius: 32, x: 0, y: 8)
+    }
+
     func navigationCapsuleChrome() -> some View {
         overlay {
             Capsule(style: .continuous)
