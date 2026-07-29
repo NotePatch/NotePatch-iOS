@@ -12,7 +12,7 @@
 "Language" = "語言";
 "Changes apply immediately throughout NotePatch." = "變更會立即套用至整個 NotePatch。";
 "Notes" = "筆記";
-"Documents" = "文件";
+"Documents" = "主頁";
 "Tasks" = "任務";
 "AI Co-pilot" = "AI";
 "Review" = "複習";
@@ -275,7 +275,7 @@
 "Please sign in first." = "請先登入。";
 "Server response is invalid." = "伺服器回應無效。";
 "language.system" = "跟隨系統";
-"tab.documents" = "文件";
+"tab.documents" = "主頁";
 "tab.notes" = "筆記";
 "tab.ai" = "AI";
 "tab.me" = "我的";

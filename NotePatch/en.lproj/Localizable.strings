@@ -12,7 +12,7 @@
 "Language" = "Language";
 "Changes apply immediately throughout NotePatch." = "Changes apply immediately throughout NotePatch.";
 "Notes" = "Notes";
-"Documents" = "Documents";
+"Documents" = "Home";
 "Tasks" = "Tasks";
 "AI Co-pilot" = "AI Co-pilot";
 "Review" = "Review";
@@ -275,7 +275,7 @@
 "Please sign in first." = "Please sign in first.";
 "Server response is invalid." = "Server response is invalid.";
 "language.system" = "Follow System";
-"tab.documents" = "Documents";
+"tab.documents" = "Home";
 "tab.notes" = "Notes";
 "tab.ai" = "AI";
 "tab.me" = "Me";

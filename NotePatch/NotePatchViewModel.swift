@@ -39,7 +39,7 @@ enum WorkbenchTab: Int, CaseIterable, Identifiable {
 
     var iconName: String {
         switch self {
-        case .documents: return "doc.text"
+        case .documents: return "house"
         case .notes: return "note.text"
         case .openClaw: return "sparkles"
         case .profile: return "person.crop.circle"

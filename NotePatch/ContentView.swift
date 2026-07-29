@@ -49,8 +49,8 @@ private struct AuthScreen: View {
             ScrollView {
                 VStack(spacing: NPSpacing.section) {
                     // Hero section
-                    VStack(spacing: 16) {
-                        NotePatchLogoImage(height: 56)
+                    VStack(spacing: NPSpacing.item) {
+                        NotePatchLogoImage(height: 78)
                             .scaleEffect(appear ? 1 : 0.80)
                             .opacity(appear ? 1 : 0)
 
@@ -64,7 +64,7 @@ private struct AuthScreen: View {
                         .opacity(appear ? 1 : 0)
                         .offset(y: appear ? 0 : 12)
                     }
-                    .padding(.top, NPSpacing.large)
+                    .padding(.top, NPSpacing.xl)
 
                     // Form card
                     VStack(spacing: NPSpacing.item) {
@@ -199,38 +199,42 @@ private struct WorkbenchScreen: View {
                 onDismiss: model.dismissStatusBanner
             )
 
-            // Content area — all tabs kept alive, only selected one visible
-            ZStack {
-                DocumentsTab(model: model)
-                    .opacity(model.selectedTab == .documents ? 1 : 0)
-                    .disabled(model.selectedTab != .documents)
+            // Content area — Upload button overlays content for real glass blur
+            ZStack(alignment: .bottomTrailing) {
+                ZStack {
+                    DocumentsTab(model: model)
+                        .opacity(model.selectedTab == .documents ? 1 : 0)
+                        .disabled(model.selectedTab != .documents)
+                    NotesTab(model: model)
+                        .opacity(model.selectedTab == .notes ? 1 : 0)
+                        .disabled(model.selectedTab != .notes)
+                    OpenClawChatTab(
+                        model: model,
+                        chatState: model.openClawState,
+                        composerState: model.openClawComposerState
+                    )
+                        .opacity(model.selectedTab == .openClaw ? 1 : 0)
+                        .disabled(model.selectedTab != .openClaw)
+                    ProfileTab(model: model)
+                        .opacity(model.selectedTab == .profile ? 1 : 0)
+                        .disabled(model.selectedTab != .profile)
+                }
+                .padding(.bottom, 64)
 
-                NotesTab(model: model)
-                    .opacity(model.selectedTab == .notes ? 1 : 0)
-                    .disabled(model.selectedTab != .notes)
-
-                OpenClawChatTab(
-                    model: model,
-                    chatState: model.openClawState,
-                    composerState: model.openClawComposerState
-                )
-                    .opacity(model.selectedTab == .openClaw ? 1 : 0)
-                    .disabled(model.selectedTab != .openClaw)
-
-                ProfileTab(model: model)
-                    .opacity(model.selectedTab == .profile ? 1 : 0)
-                    .disabled(model.selectedTab != .profile)
+                // Upload — overlaps content for real backdrop blur
+                UploadActionButton {
+                    isUploadPresented = true
+                }
+                .padding(.trailing, 20)
+                .padding(.bottom, 6)
             }
         }
         .background(NPColors.background)
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            FloatingTabBar(
-                selectedTab: $model.selectedTab,
-                onUpload: { isUploadPresented = true }
-            )
-            .onChange(of: model.selectedTab) { _, newTab in
-                if newTab != .openClaw { dismissActiveKeyboard() }
-            }
+            FloatingTabBar(selectedTab: $model.selectedTab)
+                .onChange(of: model.selectedTab) { _, newTab in
+                    if newTab != .openClaw { dismissActiveKeyboard() }
+                }
         }
         .fullScreenCover(isPresented: $isUploadPresented) {
             UploadScreen(model: model, isPresented: $isUploadPresented)
@@ -241,11 +245,50 @@ private struct WorkbenchScreen: View {
     }
 }
 
+// MARK: - Upload Action Button (Liquid Glass, overlays content for real blur)
+
+private struct UploadActionButton: View {
+    let action: () -> Void
+    @State private var isPressed = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                Image(systemName: "plus")
+                    .font(.system(size: 15, weight: .medium, design: .rounded))
+                    .foregroundStyle(NPColors.brand)
+                Text("Upload")
+                    .font(.system(size: 14, weight: .medium, design: .default))
+                    .foregroundStyle(NPColors.textPrimary)
+            }
+            .padding(.horizontal, 20)
+            .frame(width: 152, height: 50)
+            .background(
+                Capsule(style: .continuous)
+                    .fill(.ultraThinMaterial)
+            )
+            .overlay {
+                Capsule(style: .continuous)
+                    .stroke(.white.opacity(0.20), lineWidth: 1)
+            }
+            .shadow(color: .black.opacity(0.02), radius: 10, x: 0, y: 1)
+            .scaleEffect(isPressed ? 0.96 : 1.0)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Upload")
+        .accessibilityIdentifier("globalUploadButton")
+        .onLongPressGesture(minimumDuration: .infinity, pressing: { pressing in
+            withAnimation(.spring(response: 0.28, dampingFraction: 0.78)) {
+                isPressed = pressing
+            }
+        }, perform: {})
+    }
+}
+
 // MARK: - Floating Tab Bar (Liquid Glass)
 
 private struct FloatingTabBar: View {
     @Binding var selectedTab: WorkbenchTab
-    let onUpload: () -> Void
 
     var body: some View {
         HStack(spacing: 0) {
@@ -260,11 +303,6 @@ private struct FloatingTabBar: View {
                 )
                 .frame(maxWidth: .infinity)
             }
-
-            Spacer().frame(width: 6)
-
-            // Upload action
-            UploadFloatingButton(action: onUpload)
         }
         .frame(height: 64)
         .padding(.horizontal, 10)
@@ -300,41 +338,6 @@ private struct TabBarButton: View {
     }
 }
 
-private struct UploadFloatingButton: View {
-    let action: () -> Void
-    @State private var isPressed = false
-
-    var body: some View {
-        Button(action: action) {
-            Image(systemName: "plus")
-                .font(.system(size: 18, weight: .medium, design: .rounded))
-                .foregroundStyle(NPColors.brand)
-                .frame(width: 52, height: 52)
-                .background(
-                    Circle()
-                        .fill(.ultraThinMaterial)
-                )
-                .overlay {
-                    Circle()
-                        .stroke(.white.opacity(0.3), lineWidth: 0.5)
-                }
-                .shadow(
-                    color: .black.opacity(0.04),
-                    radius: 8,
-                    x: 0,
-                    y: 2
-                )
-                .scaleEffect(isPressed ? 0.96 : 1.0)
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("Upload")
-        .accessibilityIdentifier("uploadFAB")
-        .onLongPressGesture(minimumDuration: .infinity, pressing: { pressing in
-            withAnimation(Animation.npButton) { isPressed = pressing }
-        }, perform: {})
-    }
-}
-
 // MARK: - Notes Tab
 
 private struct NotesTab: View {
@@ -343,22 +346,30 @@ private struct NotesTab: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            NotePatchLogoImage(height: 64)
+            NotePatchLogoImage(height: 90)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, NPSpacing.outer)
-                .padding(.top, NPSpacing.item)
-                .padding(.bottom, NPSpacing.xs)
+                .padding(.top, NPSpacing.large)
+                .padding(.bottom, NPSpacing.small)
 
             Text("Patch your knowledge together.")
                 .font(.system(size: 13, weight: .regular, design: .default))
-                .foregroundStyle(NPColors.textSecondary.opacity(0.7))
+                .foregroundStyle(NPColors.textTertiary)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, NPSpacing.outer)
-                .padding(.bottom, NPSpacing.item)
+                .padding(.bottom, NPSpacing.xl)
 
+            // ── 2. Controls ──
             HStack {
+                Picker(localized("notes.section.picker"), selection: $model.selectedNotesSection) {
+                    ForEach(NotesSection.allCases) { section in
+                        Text(section.title).tag(section)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .accessibilityIdentifier("notesSectionPicker")
+
                 if model.selectedNotesSection == .notes {
-                    Spacer()
                     Button {
                         model.loadNotesOverview(allowOfflineNetwork: true)
                     } label: {
@@ -369,18 +380,8 @@ private struct NotesTab: View {
                     .accessibilityLabel(localizedFormat("accessibility.refresh_named", localized("notes.section.notes")))
                 }
             }
-            .frame(height: 48)
             .padding(.horizontal, NPSpacing.outer)
-
-            Picker(localized("notes.section.picker"), selection: $model.selectedNotesSection) {
-                ForEach(NotesSection.allCases) { section in
-                    Text(section.title).tag(section)
-                }
-            }
-            .pickerStyle(.segmented)
-            .padding(.horizontal, NPSpacing.outer)
-            .padding(.vertical, 10)
-            .accessibilityIdentifier("notesSectionPicker")
+            .padding(.bottom, NPSpacing.item)
 
             Group {
                 if model.selectedNotesSection == .notes {
@@ -394,7 +395,7 @@ private struct NotesTab: View {
             }
         }
         .sheet(item: $readerItem) { _ in
-            NavigationView {
+            NavigationStack {
                 StudyNoteReader(model: model)
                     .onDisappear { model.closeStudyNoteReader() }
                     .toolbar {
@@ -586,7 +587,7 @@ private struct StudyNoteReader: View {
             }
         }
         .sheet(isPresented: $model.isStudyNoteEditorPresented) {
-            NavigationView {
+            NavigationStack {
                 StudyNoteEditor(model: model)
                     .onDisappear { model.cancelStudyNoteEditing() }
             }
@@ -733,21 +734,37 @@ private struct DocumentsTab: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // Brand area
-            NotePatchLogoImage(height: 64)
+            // ── 1. Brand ──
+            NotePatchLogoImage(height: 90)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, NPSpacing.outer)
-                .padding(.top, NPSpacing.item)
-                .padding(.bottom, NPSpacing.xs)
+                .padding(.top, NPSpacing.large)
+                .padding(.bottom, NPSpacing.small)
 
             Text("Patch your knowledge together.")
                 .font(.system(size: 13, weight: .regular, design: .default))
-                .foregroundStyle(NPColors.textSecondary.opacity(0.7))
+                .foregroundStyle(NPColors.textTertiary)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, NPSpacing.outer)
-                .padding(.bottom, NPSpacing.item)
+                .padding(.bottom, NPSpacing.xl)
 
-            // Segmented control
+            // ── 2. Page Header ──
+            HStack {
+                Text("Home")
+                    .npSubheading()
+                Spacer()
+                Text("\(model.documents.count)")
+                    .npCaption()
+                    .foregroundStyle(NPColors.textSecondary)
+                    .padding(.horizontal, NPSpacing.small)
+                    .padding(.vertical, 2)
+                    .background(NPColors.interactive)
+                    .clipShape(Capsule())
+            }
+            .padding(.horizontal, NPSpacing.outer)
+            .padding(.bottom, NPSpacing.large)
+
+            // ── 3. Controls ──
             Picker("Document view", selection: $model.selectedDocumentsSection) {
                 ForEach(DocumentsSection.allCases) { section in
                     Text(section.title).tag(section)
@@ -756,8 +773,9 @@ private struct DocumentsTab: View {
             .pickerStyle(.segmented)
             .accessibilityIdentifier("documentsSectionPicker")
             .padding(.horizontal, NPSpacing.outer)
-            .padding(.bottom, NPSpacing.large)
+            .padding(.bottom, NPSpacing.item)
 
+            // ── 4. Content ──
             if model.selectedDocumentsSection == .documents {
                 documentList
             } else {
@@ -769,49 +787,36 @@ private struct DocumentsTab: View {
     private var documentList: some View {
         ScrollView {
             VStack(spacing: NPSpacing.section) {
-                // Filter —
-                Button {
-                    withAnimation(.npInteractive) { filtersExpanded.toggle() }
-                } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: "line.3.horizontal.decrease")
-                            .font(.system(size: 12, weight: .medium))
-                        Text(activeFilterSummary(status: model.statusFilter, documentKind: model.documentKindFilter, fileType: model.fileTypeFilter))
-                            .lineLimit(1)
-                        Image(systemName: filtersExpanded ? "chevron.up" : "chevron.down")
-                            .font(.system(size: 9, weight: .semibold))
+                // Filter
+                HStack {
+                    Button {
+                        withAnimation(.npInteractive) { filtersExpanded.toggle() }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "line.3.horizontal.decrease")
+                                .font(.system(size: 12, weight: .medium))
+                            Text(activeFilterSummary(status: model.statusFilter, documentKind: model.documentKindFilter, fileType: model.fileTypeFilter))
+                                .lineLimit(1)
+                            Image(systemName: filtersExpanded ? "chevron.up" : "chevron.down")
+                                .font(.system(size: 9, weight: .semibold))
+                        }
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(NPColors.textSecondary)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 9)
+                        .background(NPColors.surface)
+                        .clipShape(Capsule())
+                        .shadow(color: NPShadow.small.color, radius: NPShadow.small.radius, x: 0, y: NPShadow.small.y)
                     }
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(NPColors.textSecondary)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 9)
-                    .background(NPColors.surface)
-                    .clipShape(Capsule())
-                    .shadow(color: NPShadow.small.color, radius: NPShadow.small.radius, x: 0, y: NPShadow.small.y)
+                    .buttonStyle(.plain)
+                    Spacer()
                 }
-                .buttonStyle(.plain)
 
                 if filtersExpanded {
                     NPSection {
                         FilterPanel(model: model)
                     }
                 }
-
-                HStack {
-                    Text("Documents")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(NPColors.textSecondary)
-                        .textCase(.uppercase)
-                    Spacer()
-                    Text("\(model.documents.count)")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(NPColors.textSecondary)
-                        .padding(.horizontal, NPSpacing.small)
-                        .padding(.vertical, 2)
-                        .background(NPColors.interactive.opacity(0.4))
-                        .clipShape(Capsule())
-                }
-                .padding(.top, 6)
 
                 if model.documents.isEmpty {
                     NPEmptyState(systemImage: "doc", title: "No documents", message: "No documents yet. Upload an image, PDF, or file to get started.")
@@ -836,7 +841,7 @@ private struct DocumentsTab: View {
                 }
             }
             .padding(.horizontal, NPSpacing.outer)
-            .padding(.top, 14)
+            .padding(.top, NPSpacing.small)
             .padding(.bottom, NPSpacing.section)
         }
     }
@@ -850,17 +855,17 @@ private struct UploadScreen: View {
     @Binding var isPresented: Bool
 
     var body: some View {
-        NavigationView {
+        NavigationStack {
             UploadDocumentScreen(model: model)
                 .navigationTitle(localized("Upload"))
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Close") {
-                        isPresented = false
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Close") {
+                            isPresented = false
+                        }
                     }
                 }
-            }
         }
     }
 }
@@ -1612,18 +1617,18 @@ private struct OpenClawChatTab: View {
                     }
                     .frame(height: 0)
 
-                    NotePatchLogoImage(height: 64)
+                    NotePatchLogoImage(height: 90)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, NPSpacing.outer)
-                        .padding(.top, NPSpacing.item)
-                        .padding(.bottom, NPSpacing.xs)
+                        .padding(.top, NPSpacing.large)
+                .padding(.bottom, NPSpacing.small)
 
                     Text("Patch your knowledge together.")
                         .font(.system(size: 13, weight: .regular, design: .default))
-                        .foregroundStyle(NPColors.textSecondary.opacity(0.7))
+                        .foregroundStyle(NPColors.textTertiary)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, NPSpacing.outer)
-                        .padding(.bottom, NPSpacing.item)
+                        .padding(.bottom, NPSpacing.xl)
 
                     // ——— Conversation header ———
                     HStack(spacing: 10) {
@@ -2623,7 +2628,7 @@ private struct HomeworkCreateSheet: View {
     @State private var maxScoreText = "100"
 
     var body: some View {
-        NavigationView {
+        NavigationStack {
             Form {
                 Section(header: Text("Homework document")) {
                     Picker("Document", selection: $documentId) {
@@ -2798,18 +2803,18 @@ private struct ProfileTab: View {
         ScrollView {
             VStack(spacing: 24) {
                 // ——— Brand Hero ———
-                NotePatchLogoImage(height: 100)
-                    .frame(maxWidth: .infinity, alignment: .center)
+                NotePatchLogoImage(height: 90)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, NPSpacing.outer)
-                    .padding(.top, NPSpacing.item)
-                    .padding(.bottom, NPSpacing.xs)
+                    .padding(.top, NPSpacing.large)
+                    .padding(.bottom, NPSpacing.small)
 
                 Text("Patch your knowledge together.")
                     .font(.system(size: 13, weight: .regular, design: .default))
-                    .foregroundStyle(NPColors.textSecondary.opacity(0.7))
-                    .frame(maxWidth: .infinity, alignment: .center)
+                    .foregroundStyle(NPColors.textTertiary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, NPSpacing.outer)
-                    .padding(.bottom, NPSpacing.item)
+                    .padding(.bottom, NPSpacing.xl)
 
                 // ——— Profile Card ———
                 NPSection {
