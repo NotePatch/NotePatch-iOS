@@ -674,13 +674,13 @@ struct NotePatchTests {
 
         model.uploadSelectedQueuedFiles()
         try await Self.waitUntil(attempts: 500) {
-            model.statusMessage == localized("Selected files uploaded.") || model.errorMessage != nil
+            model.statusMessage == localized("upload.selected_completed") || model.errorMessage != nil
         }
 
         #expect(kinds == ["homework", "note"])
         #expect(tusCreateCount == 2)
         #expect(model.queuedUploadItems.isEmpty)
-        #expect(model.statusMessage == localized("Selected files uploaded."))
+        #expect(model.statusMessage == localized("upload.selected_completed"))
     }
 
     @Test func decodeTokenWorkspaceUploadArtifactAndTaskJSON() throws {
@@ -1416,6 +1416,8 @@ struct NotePatchTests {
                 return Self.response(request, status: 200, body: #"[{"id":"n-1","learning_unit_id":"u-1","version_no":1,"title":"旧笔记","html_object_key":"h1","json_object_key":"j1","download_urls":{"html":"https://download.test/n-1.html"}},{"id":"n-2","learning_unit_id":"u-1","version_no":2,"title":"新笔记","html_object_key":"h2","json_object_key":"j2","highlighted_html_object_key":"hh2","download_urls":{"highlighted_html":"https://download.test/n-2.html"}}]"#)
             case "/api/v1/workspaces/ws-1/learning-units/u-2/notes":
                 return Self.response(request, status: 200, body: "[]")
+            case "/api/v1/workspaces/ws-1/learning-units/u-1/notes/n-2/download-url":
+                return Self.response(request, status: 404, body: #"{"detail":"rendered note unavailable"}"#)
             default:
                 if request.url?.host == "download.test" {
                     return Self.response(request, status: 200, body: "<h1>比例</h1><ul><li>外项积等于内项积</li></ul>")
@@ -1501,6 +1503,8 @@ struct NotePatchTests {
                 return Self.response(request, status: 201, body: #"{"note":{"id":"n-3","learning_unit_id":"u-1","version_no":3,"title":"新标题","html_object_key":"h3","json_object_key":"j3","source_version_id":"n-2","edit_origin":"user","edit_summary":"补充例题","download_urls":null}}"#)
             case (1, "GET", "/api/v1/workspaces/ws-1/learning-units/u-1/notes"):
                 return Self.response(request, status: 200, body: #"[{"id":"n-3","learning_unit_id":"u-1","version_no":3,"title":"新标题","html_object_key":"h3","json_object_key":"j3","source_version_id":"n-2","edit_origin":"user","edit_summary":"补充例题","download_urls":{"html":"https://download.test/n-3.html"}},{"id":"n-2","learning_unit_id":"u-1","version_no":2,"title":"当前笔记","html_object_key":"h2","json_object_key":"j2","download_urls":{"html":"https://download.test/n-2.html"}},{"id":"n-1","learning_unit_id":"u-1","version_no":1,"title":"历史笔记","html_object_key":"h1","json_object_key":"j1","download_urls":{"html":"https://download.test/n-1.html"}}]"#)
+            case (1, "GET", "/api/v1/workspaces/ws-1/learning-units/u-1/notes/n-3/download-url"):
+                return Self.response(request, status: 404, body: #"{"detail":"rendered note unavailable"}"#)
             case (2, "POST", "/api/v1/workspaces/ws-1/learning-units/u-1/notes/n-3/revisions"):
                 return Self.response(request, status: 409, body: #"{"detail":"base version is stale"}"#)
             case (2, "GET", "/api/v1/workspaces/ws-1/learning-units/u-1/notes"):
@@ -1883,6 +1887,8 @@ struct NotePatchTests {
                 return Self.response(request, status: 200, body: #"{"id":"task-1","workspace_id":"ws-1","task_type":"process_document","status":"cancelled","resource_type":"document","resource_id":"doc-ready","payload":{},"result":null,"error_message":null,"progress":25,"cancel_requested_at":"2026-07-11T01:00:00Z","created_at":"","updated_at":""}"#)
             case "GET /api/v1/workspaces/ws-1/tasks/task-1/events":
                 return Self.response(request, status: 200, body: #"[{"id":"event-1","workspace_id":"ws-1","task_id":"task-1","event_type":"task_cancelled","level":"warning","message":"Source document was deleted","progress":25,"data":{},"created_at":""}]"#)
+            case "GET /api/v1/workspaces/ws-1/tasks/task-1/events/stream":
+                return Self.response(request, status: 404, body: #"{"detail":"stream unavailable"}"#)
             default:
                 resultReadCount += 1
                 return Self.response(request, status: 500, body: #"{"detail":"unexpected result read"}"#)
@@ -1891,7 +1897,8 @@ struct NotePatchTests {
         let model = NotePatchViewModel(
             settings: SettingsStore(defaults: defaults, keychain: KeychainStore(service: suiteName)),
             backendSession: session,
-            tusSession: session
+            tusSession: session,
+            taskEventStreamingEnabled: false
         )
         model.session = SavedSession(baseURL: "https://api.test", tusBaseURL: "https://tus.test/", accessToken: "a", refreshToken: "r", expiresAt: "x", userId: "u", email: "u@test", fullName: nil, selectedWorkspaceId: "ws-1", aiHistoryEnabled: true)
         model.selectedWorkspaceId = "ws-1"
@@ -2197,21 +2204,15 @@ struct NotePatchTests {
         #expect(requests[1].url?.query == "page=1&page_size=100")
     }
 
-    @Test @MainActor func expiredEmbeddedNoteURL_refreshesOnceAndLoadsHTML() async throws {
+    @Test @MainActor func noteReaderRequestsRenderedHTMLAndKeepsRawHTMLForEditing() async throws {
         let suiteName = "NotePatchTests.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
         var requestedHosts: [String] = []
         let session = Self.mockSession { request in
             requestedHosts.append(request.url?.host ?? "")
-            if request.url?.host == "expired.test" {
-                return Self.response(request, status: 403, body: #"{"detail":"expired"}"#)
-            }
-            if request.url?.host == "download.test" {
-                return Self.response(request, status: 200, body: "<h1>Fresh note</h1>")
-            }
             if request.url?.path == "/api/v1/workspaces/ws-1/learning-units/u-1/notes/n-1/download-url" {
-                return Self.response(request, status: 200, body: #"{"note_version_id":"n-1","learning_unit_id":"u-1","kind":"highlighted_html","filename":"note.html","expires_in":900,"download_url":"https://download.test/fresh.html"}"#)
+                return Self.response(request, status: 200, body: #"{"note_version_id":"n-1","learning_unit_id":"u-1","kind":"rendered_html","filename":"note.html","expires_in":900,"download_url":"/api/v1/assets/study-notes/render?token=fresh"}"#)
             }
             return Self.response(request, status: 500, body: #"{"detail":"unexpected request"}"#)
         }
@@ -2230,8 +2231,9 @@ struct NotePatchTests {
         model.openStudyNote(item)
         try await Self.waitUntil { !model.isStudyNoteLoading }
 
-        #expect(model.studyNoteHTML == "<h1>Fresh note</h1>")
-        #expect(requestedHosts == ["expired.test", "api.test", "download.test"])
+        #expect(model.studyNoteHTML == nil)
+        #expect(model.studyNoteRenderedURL?.absoluteString == "https://api.test/api/v1/assets/study-notes/render?token=fresh")
+        #expect(requestedHosts == ["api.test"])
     }
 
     @Test @MainActor func htmlSecurityShellBlocksExecutableAndExternalContent() {
@@ -2273,6 +2275,169 @@ struct NotePatchTests {
         #expect(model.currentFlashcard?.id == "card-2")
         #expect(!model.isFlashcardShowingBack)
         #expect(requestCount == 0)
+    }
+
+    @Test func productionModelsDecodeScanningMergeRenderedAndSequenceFields() throws {
+        let document = try JSONDecoder.notepatch.decode(
+            LearningDocumentItem.self,
+            from: Data(#"{"id":"doc-1","workspace_id":"ws-1","uploaded_by":"user-1","original_filename":"a.docx","file_type":"docx","document_kind":"courseware","storage_backend":"s3","bucket":"notepatch","object_key":"documents/a.docx","status":"scanning","scan_status":"pending","scan_message":"queued","scanned_at":null,"detected_mime_type":"application/vnd.openxmlformats-officedocument.wordprocessingml.document","created_at":"","updated_at":"","artifacts":[]}"#.utf8)
+        )
+        let unit = try JSONDecoder.notepatch.decode(
+            LearningUnit.self,
+            from: Data(#"{"id":"unit-1","workspace_id":"ws-1","title":"Unit","merge_status":"rebuilding","merged_into_id":null}"#.utf8)
+        )
+        let note = try JSONDecoder.notepatch.decode(
+            StudyNoteVersion.self,
+            from: Data(#"{"id":"note-1","learning_unit_id":"unit-1","version_no":1,"title":"Note","html_object_key":"n.html","json_object_key":"n.json","download_urls":{"rendered_html":"/api/v1/assets/study-notes/render?token=x","html":"https://download.test/raw.html"}}"#.utf8)
+        )
+        let event = try JSONDecoder.notepatch.decode(
+            TaskEventItem.self,
+            from: Data(#"{"id":"event-1","task_id":"task-1","sequence_no":7,"event_type":"progress","level":"info","message":"running","progress":40,"created_at":""}"#.utf8)
+        )
+
+        #expect(document.scanStatus == "pending")
+        #expect(document.detectedMimeType?.contains("wordprocessingml") == true)
+        #expect(unit.mergeStatus == "rebuilding")
+        #expect(note.preferredDownloadURL == "/api/v1/assets/study-notes/render?token=x")
+        #expect(event.sequenceNo == 7)
+        #expect(event.workspaceId.isEmpty)
+    }
+
+    @Test func taskSSEParserHandlesChunksHeartbeatMultilineAndDone() throws {
+        var parser = TaskSSEParser()
+        let first = ": heartbeat\n\nid: 9\nevent: task_event\ndata: {\"id\":\"event-9\",\"task_id\":\"task-1\",\"sequence_no\":9,"
+        let second = "\"event_type\":\"progress\",\"level\":\"info\",\"message\":\"Working\",\"progress\":75,\"data\":{},\"created_at\":\"\"}\n\nevent: done\ndata: {\"task_id\":\"task-1\",\"status\":\"succeeded\",\"last_sequence_no\":9}\n\n"
+        #expect(try parser.append(first, workspaceId: "ws-1").isEmpty)
+        let frames = try parser.append(second, workspaceId: "ws-1")
+
+        #expect(frames.count == 2)
+        guard case .taskEvent(let event) = frames[0] else {
+            Issue.record("Expected task event")
+            return
+        }
+        #expect(event.workspaceId == "ws-1")
+        #expect(event.sequenceNo == 9)
+        #expect(event.progress == 75)
+        guard case .done(let completion) = frames[1] else {
+            Issue.record("Expected done frame")
+            return
+        }
+        #expect(completion.status == "succeeded")
+        #expect(completion.lastSequenceNo == 9)
+    }
+
+    @Test @MainActor func taskSSERequestUsesBearerAcceptAndLastEventID() throws {
+        let client = LearningBackendClient(
+            baseURL: "https://api.test",
+            accessToken: "access-token",
+            refreshToken: "refresh-token"
+        )
+        let request = try client.taskEventStreamRequest(
+            workspaceId: "ws/1",
+            taskId: "task/1",
+            lastEventID: 42
+        )
+
+        let encodedPath = request.url.flatMap {
+            URLComponents(url: $0, resolvingAgainstBaseURL: false)?.percentEncodedPath
+        }
+        #expect(request.httpMethod == "GET")
+        #expect(encodedPath == "/api/v1/workspaces/ws%2F1/tasks/task%2F1/events/stream")
+        #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer access-token")
+        #expect(request.value(forHTTPHeaderField: "Accept") == "text/event-stream")
+        #expect(request.value(forHTTPHeaderField: "Last-Event-ID") == "42")
+    }
+
+    @Test @MainActor func mergeLearningUnitsRequestEscapesPathAndUsesFixedBody() async throws {
+        var capturedRequest: URLRequest?
+        let session = Self.mockSession { request in
+            capturedRequest = request
+            return Self.response(request, status: 202, body: Self.taskJSON)
+        }
+        let client = LearningBackendClient(baseURL: "https://api.test", accessToken: "a", refreshToken: "r", session: session)
+        _ = try await client.mergeLearningUnits(
+            workspaceId: "ws/1",
+            targetLearningUnitId: "target/1",
+            sourceLearningUnitIds: ["source-1", "source-2"]
+        )
+
+        #expect(capturedRequest?.httpMethod == "POST")
+        let request = try #require(capturedRequest)
+        let encodedPath = request.url.flatMap { URLComponents(url: $0, resolvingAgainstBaseURL: false)?.percentEncodedPath }
+        #expect(encodedPath == "/api/v1/workspaces/ws%2F1/learning-units/target%2F1/merge")
+        let body = try #require(Self.requestBodyData(request))
+        let json = try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
+        #expect(json["source_learning_unit_ids"] as? [String] == ["source-1", "source-2"])
+    }
+
+    @Test @MainActor func scanRulesBlockUnsafeFilesButAllowCleanRetry() throws {
+        let suiteName = "NotePatchScanRules.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let model = NotePatchViewModel(
+            settings: SettingsStore(defaults: defaults, keychain: KeychainStore(service: suiteName))
+        )
+        let infected = LearningDocumentItem(
+            id: "infected", workspaceId: "ws", originalFilename: "bad.pdf", fileType: "pdf",
+            documentKind: "homework", scanStatus: "infected", scanMessage: "malware", status: "failed"
+        )
+        let processingFailed = LearningDocumentItem(
+            id: "retry", workspaceId: "ws", originalFilename: "good.pdf", fileType: "pdf",
+            documentKind: "homework", scanStatus: "clean", status: "failed"
+        )
+
+        #expect(!model.canProcessDocument(infected))
+        #expect(!model.canDownloadDocument(infected))
+        #expect(model.canProcessDocument(processingFailed))
+        #expect(model.canDownloadDocument(processingFailed))
+    }
+
+    @Test @MainActor func learningUnitMergeValidatesSourcesAndPreservesSelectionOnFailure() async throws {
+        let suiteName = "NotePatchMergeState.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        var mergeRequestCount = 0
+        let session = Self.mockSession { request in
+            if request.httpMethod == "POST", request.url?.path.hasSuffix("/learning-units/unit-0/merge") == true {
+                mergeRequestCount += 1
+                return Self.response(request, status: 500, body: #"{"detail":"merge unavailable"}"#)
+            }
+            return Self.response(request, status: 500, body: #"{"detail":"unexpected request"}"#)
+        }
+        let model = NotePatchViewModel(
+            settings: SettingsStore(defaults: defaults, keychain: KeychainStore(service: suiteName)),
+            backendSession: session,
+            tusSession: session,
+            taskEventStreamingEnabled: false
+        )
+        model.session = SavedSession(
+            baseURL: "https://api.test", tusBaseURL: "https://tus.test/", accessToken: "a",
+            refreshToken: "r", expiresAt: "x", userId: "u", email: "u@test",
+            fullName: nil, selectedWorkspaceId: "ws-1", aiHistoryEnabled: true
+        )
+        model.selectedWorkspaceId = "ws-1"
+        model.learningUnits = (0...51).map {
+            LearningUnit(id: "unit-\($0)", workspaceId: "ws-1", title: "Unit \($0)")
+        }
+
+        model.beginLearningUnitMerge()
+        model.setLearningUnitMergeTarget("unit-0")
+        model.toggleLearningUnitMergeSource("unit-0")
+        #expect(model.mergeSourceLearningUnitIds.isEmpty)
+        for index in 1...51 {
+            model.toggleLearningUnitMergeSource("unit-\(index)")
+        }
+        #expect(model.mergeSourceLearningUnitIds.count == 50)
+        model.requestLearningUnitMergeConfirmation()
+        #expect(model.isLearningUnitMergeConfirmationPresented)
+
+        let selectedSources = model.mergeSourceLearningUnitIds
+        model.confirmLearningUnitMerge()
+        try await Self.waitUntil { !model.isLearningUnitMerging }
+        #expect(mergeRequestCount == 1)
+        #expect(model.mergeSourceLearningUnitIds == selectedSources)
+        #expect(model.isLearningUnitMergePresented)
+        #expect(model.errorMessage == "merge unavailable")
     }
 }
 

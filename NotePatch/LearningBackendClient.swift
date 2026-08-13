@@ -404,6 +404,19 @@ final class LearningBackendClient {
         )
     }
 
+    func mergeLearningUnits(
+        workspaceId: String,
+        targetLearningUnitId: String,
+        sourceLearningUnitIds: [String]
+    ) async throws -> TaskItem {
+        try await authedJSON(
+            "POST",
+            "/workspaces/\(workspaceId.pathSegment)/learning-units/\(targetLearningUnitId.pathSegment)/merge",
+            payload: ["source_learning_unit_ids": sourceLearningUnitIds],
+            as: TaskItem.self
+        )
+    }
+
     func getStudyNoteDownloadURL(
         workspaceId: String,
         learningUnitId: String,
@@ -573,6 +586,80 @@ final class LearningBackendClient {
         )
     }
 
+    func streamTaskEvents(
+        workspaceId: String,
+        taskId: String,
+        lastEventID: Int?
+    ) -> AsyncThrowingStream<TaskSSEFrame, Error> {
+        AsyncThrowingStream { continuation in
+            let streamTask = Task {
+                do {
+                    let (bytes, _) = try await openTaskEventStream(
+                        workspaceId: workspaceId,
+                        taskId: taskId,
+                        lastEventID: lastEventID,
+                        allowRefresh: true
+                    )
+                    var parser = TaskSSEParser()
+                    for try await line in bytes.lines {
+                        try Task.checkCancellation()
+                        if let frame = try parser.consumeLine(line, workspaceId: workspaceId) {
+                            continuation.yield(frame)
+                        }
+                    }
+                    for frame in try parser.finish(workspaceId: workspaceId) {
+                        continuation.yield(frame)
+                    }
+                    continuation.finish()
+                } catch is CancellationError {
+                    continuation.finish(throwing: CancellationError())
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in streamTask.cancel() }
+        }
+    }
+
+    func taskEventStreamRequest(
+        workspaceId: String,
+        taskId: String,
+        lastEventID: Int?
+    ) throws -> URLRequest {
+        var streamRequest = try request(
+            method: "GET",
+            pathOrURL: "/workspaces/\(workspaceId.pathSegment)/tasks/\(taskId.pathSegment)/events/stream"
+        )
+        streamRequest.timeoutInterval = 0
+        streamRequest.setValue(try bearerHeader(), forHTTPHeaderField: "Authorization")
+        streamRequest.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+        streamRequest.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
+        if let lastEventID, lastEventID > 0 {
+            streamRequest.setValue(String(lastEventID), forHTTPHeaderField: "Last-Event-ID")
+        }
+        return streamRequest
+    }
+
+    func resolveServiceURL(_ pathOrURL: String) throws -> URL {
+        if pathOrURL.hasPrefix("http://") || pathOrURL.hasPrefix("https://") {
+            guard let url = URL(string: pathOrURL) else {
+                throw LearningBackendError("Server returned an invalid download URL.")
+            }
+            return url
+        }
+        let path = pathOrURL.hasPrefix("/") ? pathOrURL : "/\(pathOrURL)"
+        let base: String
+        if normalizedBaseURL.hasSuffix("/api/v1"), path.hasPrefix("/api/v1/") {
+            base = String(normalizedBaseURL.dropLast("/api/v1".count))
+        } else {
+            base = normalizedBaseURL
+        }
+        guard let url = URL(string: "\(base)\(path)") else {
+            throw LearningBackendError("Server returned an invalid download URL.")
+        }
+        return url
+    }
+
     private func postJSON<T: Decodable>(_ path: String, payload: [String: Any], as type: T.Type) async throws -> T {
         var request = try request(method: "POST", pathOrURL: path)
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -651,6 +738,72 @@ final class LearningBackendClient {
 
         try validate(response: response, data: data)
         return data
+    }
+
+    private func openTaskEventStream(
+        workspaceId: String,
+        taskId: String,
+        lastEventID: Int?,
+        allowRefresh: Bool
+    ) async throws -> (URLSession.AsyncBytes, HTTPURLResponse) {
+        let streamRequest = try taskEventStreamRequest(
+            workspaceId: workspaceId,
+            taskId: taskId,
+            lastEventID: lastEventID
+        )
+
+        let (bytes, response): (URLSession.AsyncBytes, URLResponse)
+        do {
+            (bytes, response) = try await session.bytes(for: streamRequest)
+        } catch {
+            throw error
+        }
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw LearningBackendError("Server response is invalid.")
+        }
+        if httpResponse.statusCode == 401, allowRefresh {
+            guard let refreshToken else {
+                throw LearningBackendError(
+                    "Session expired. Please sign in again.",
+                    statusCode: 401,
+                    shouldClearSession: true
+                )
+            }
+            let attemptedRefreshToken = refreshToken
+            let refreshed: TokenResponse
+            do {
+                refreshed = try await refreshTokenSingleFlight(attemptedRefreshToken)
+            } catch let error as LearningBackendError {
+                throw LearningBackendError(
+                    error.message,
+                    statusCode: error.statusCode ?? 401,
+                    shouldClearSession: true,
+                    refreshTokenAttempt: attemptedRefreshToken,
+                    cause: error
+                )
+            }
+            accessToken = refreshed.accessToken
+            self.refreshToken = refreshed.refreshToken
+            onTokenRefreshed?(refreshed, attemptedRefreshToken)
+            return try await openTaskEventStream(
+                workspaceId: workspaceId,
+                taskId: taskId,
+                lastEventID: lastEventID,
+                allowRefresh: false
+            )
+        }
+        guard (200...299).contains(httpResponse.statusCode) else {
+            var errorData = Data()
+            for try await byte in bytes.prefix(64 * 1024) {
+                errorData.append(byte)
+            }
+            throw LearningBackendError(
+                Self.parseErrorMessage(String(data: errorData, encoding: .utf8) ?? "", status: httpResponse.statusCode),
+                statusCode: httpResponse.statusCode,
+                shouldClearSession: httpResponse.statusCode == 401
+            )
+        }
+        return (bytes, httpResponse)
     }
 
     private func refreshTokenInternal(_ token: String) async throws -> TokenResponse {

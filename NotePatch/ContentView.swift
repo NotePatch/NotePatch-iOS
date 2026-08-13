@@ -661,6 +661,13 @@ private struct StudyNoteReader: View {
                     if model.isStudyNoteLoading {
                         ProgressView(localized("note.reader.loading"))
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    } else if let renderedURL = model.studyNoteRenderedURL {
+                        SafeRenderedHTMLNoteView(
+                            url: renderedURL,
+                            onAuthorizationExpired: model.handleRenderedStudyNoteExpired,
+                            onFailure: model.handleRenderedStudyNoteFailure
+                        )
+                        .accessibilityIdentifier("studyNoteRenderedHTMLReader")
                     } else if let html = model.studyNoteHTML {
                         SafeHTMLNoteView(html: html)
                             .accessibilityIdentifier("studyNoteHTMLReader")
@@ -948,6 +955,8 @@ private struct DocumentsTab: View {
                                 artifacts: model.selectedArtifactDocumentId == document.id ? model.selectedArtifacts : [],
                                 ocrArtifacts: model.selectedOcrDocumentId == document.id ? model.selectedOcrArtifacts : [],
                                 isBusy: model.isBusy,
+                                canProcess: model.canProcessDocument(document),
+                                canDownload: model.canDownloadDocument(document),
                                 onDownload: { model.downloadAndPreview(document) },
                                 onProcess: { model.startProcessing(document) },
                                 onDelete: { model.deleteDocument(document) },
@@ -1354,7 +1363,7 @@ private struct FilterPanel: View {
         VStack(alignment: .leading, spacing: 12) {
             FilterChoices(
                 label: "Status",
-                values: ["", "created", "uploading", "uploaded", "processing", "ready", "failed"],
+                values: ["", "created", "uploading", "scanning", "uploaded", "processing", "ready", "failed"],
                 selected: model.statusFilter,
                 enabled: !model.isBusy,
                 onChange: model.setStatusFilter
@@ -1403,6 +1412,8 @@ private struct DocumentRow: View {
     let artifacts: [DocumentArtifactItem]
     let ocrArtifacts: [OcrArtifactItem]
     let isBusy: Bool
+    let canProcess: Bool
+    let canDownload: Bool
     let onDownload: () -> Void
     let onProcess: () -> Void
     let onDelete: () -> Void
@@ -1431,6 +1442,24 @@ private struct DocumentRow: View {
                     NPStatusChip(text: statusLabel(document.status), variant: statusChipVariant(document.status))
                 }
 
+                if let scanStatus = document.scanStatus, !scanStatus.isEmpty {
+                    HStack(alignment: .top, spacing: NPSpacing.small) {
+                        Image(systemName: scanStatus == "clean" ? "checkmark.shield" : "shield.lefthalf.filled")
+                            .foregroundStyle(scanStatus == "clean" ? NPColors.brand : colorForStatus(scanStatus))
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(localizedFormat("document.scan_status", scanStatusLabel(scanStatus)))
+                                .font(.system(size: 13, weight: .semibold))
+                            if let message = document.scanMessage?.trimmingCharacters(in: .whitespacesAndNewlines), !message.isEmpty {
+                                Text(message).npCaption()
+                            }
+                            if let detected = document.detectedMimeType, !detected.isEmpty {
+                                Text(localizedFormat("document.detected_mime", detected)).npCaption()
+                            }
+                        }
+                    }
+                    .accessibilityIdentifier("documentScanStatus-\(document.id)")
+                }
+
                 HStack(spacing: NPSpacing.small) {
                     Button(action: onProcess) {
                         Label(processTitle, systemImage: "wand.and.stars")
@@ -1443,17 +1472,18 @@ private struct DocumentRow: View {
                         Image(systemName: "arrow.down.to.line")
                     }
                     .buttonStyle(NPDocumentIconButtonStyle())
-                    .disabled(isBusy || document.status == "deleted")
+                    .disabled(isBusy || !canDownload)
                     .accessibilityLabel("Download")
 
                     Menu {
                         Button(action: onOCR) {
                             Label("OCR Results", systemImage: "text.viewfinder")
                         }
-                        .disabled(isBusy || document.status != "ready")
+                        .disabled(isBusy || document.status != "ready" || !canDownload)
                         Button(action: onArtifacts) {
                             Label("Artifacts", systemImage: "tray.full")
                         }
+                        .disabled(isBusy || !canDownload)
                         Button {
                             detailsExpanded.toggle()
                         } label: {
@@ -1534,9 +1564,6 @@ private struct DocumentRow: View {
         document.status == "ready" || document.status == "failed" ? "Reprocess" : "Process"
     }
 
-    private var canProcess: Bool {
-        document.status == "uploaded" || document.status == "ready" || document.status == "failed"
-    }
 }
 
 private struct TaskTab: View {
@@ -2200,6 +2227,24 @@ private struct LearningUnitsSection: View {
             LearningSectionHeader(title: "Learning units", subtitle: "Auto-organized results from your workspace", isLoading: model.isLearningLoading) {
                 model.loadLearningUnits(allowOfflineNetwork: true)
             }
+            HStack(spacing: NPSpacing.small) {
+                Button {
+                    model.beginLearningUnitMerge()
+                } label: {
+                    Label(localized("merge.action"), systemImage: "arrow.triangle.merge")
+                }
+                .buttonStyle(NPSecondaryButtonStyle())
+                .disabled(!model.canBeginLearningUnitMerge)
+                .accessibilityIdentifier("mergeLearningUnitsButton")
+
+                if model.activeTask?.taskType == "merge_learning_units" {
+                    Button(localized("merge.view_task")) {
+                        model.viewLearningUnitMergeTask()
+                    }
+                    .buttonStyle(NPSecondaryButtonStyle())
+                }
+                Spacer()
+            }
             if model.isLearningLoading && model.learningUnits.isEmpty {
                 ProgressView("Loading learning units...")
                     .frame(maxWidth: .infinity)
@@ -2220,6 +2265,9 @@ private struct LearningUnitsSection: View {
                             let details = [unit.subject, unit.gradeLevel, unit.topic].compactMap { $0?.isEmpty == false ? $0 : nil }
                             if !details.isEmpty {
                                 Text(details.joined(separator: " · ")).npCaption()
+                            }
+                            if let mergeStatus = model.displayedMergeStatus(for: unit), !mergeStatus.isEmpty {
+                                NPStatusChip(text: mergeStatusLabel(mergeStatus), variant: statusChipVariant(mergeStatus))
                             }
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -2261,6 +2309,89 @@ private struct LearningUnitsSection: View {
                 }
             }
         }
+        .sheet(isPresented: $model.isLearningUnitMergePresented) {
+            LearningUnitMergeSheet(model: model)
+        }
+        .alert(localized("merge.confirm.title"), isPresented: $model.isLearningUnitMergeConfirmationPresented) {
+            Button(localized("common.cancel"), role: .cancel) {}
+            Button(localized("merge.confirm.action"), role: .destructive) {
+                model.confirmLearningUnitMerge()
+            }
+        } message: {
+            Text(localized("merge.confirm.message"))
+        }
+    }
+}
+
+private struct LearningUnitMergeSheet: View {
+    @ObservedObject var model: NotePatchViewModel
+
+    var body: some View {
+        NavigationView {
+            ScrollView {
+                VStack(alignment: .leading, spacing: NPSpacing.item) {
+                    Text(localized("merge.help"))
+                        .npBody()
+                        .foregroundStyle(NPColors.textSecondary)
+
+                    NPSection {
+                        VStack(alignment: .leading, spacing: NPSpacing.small) {
+                            SectionLabel(localized("merge.target"))
+                            Picker(localized("merge.target"), selection: Binding(
+                                get: { model.mergeTargetLearningUnitId },
+                                set: { model.setLearningUnitMergeTarget($0) }
+                            )) {
+                                ForEach(model.learningUnits.filter { $0.mergedIntoId == nil }) { unit in
+                                    Text(unit.title).tag(unit.id)
+                                }
+                            }
+                            .pickerStyle(.menu)
+                        }
+                    }
+
+                    Text(localizedFormat("merge.sources_count", String(model.mergeSourceLearningUnitIds.count)))
+                        .npSubheading()
+                    ForEach(model.learningUnits.filter { $0.id != model.mergeTargetLearningUnitId && $0.mergedIntoId == nil }) { unit in
+                        Button {
+                            model.toggleLearningUnitMergeSource(unit.id)
+                        } label: {
+                            HStack(spacing: NPSpacing.medium) {
+                                Image(systemName: model.mergeSourceLearningUnitIds.contains(unit.id) ? "checkmark.circle.fill" : "circle")
+                                    .foregroundStyle(model.mergeSourceLearningUnitIds.contains(unit.id) ? NPColors.brand : NPColors.textSecondary)
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(unit.title).npSubheading()
+                                    let details = [unit.subject, unit.gradeLevel, unit.topic].compactMap { value -> String? in
+                                        guard let value else { return nil }
+                                        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+                                        return trimmed.isEmpty ? nil : trimmed
+                                    }
+                                    if !details.isEmpty { Text(details.joined(separator: " · ")).npCaption() }
+                                }
+                                Spacer()
+                            }
+                            .modifier(NPCardModifier())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityIdentifier("mergeSource-\(unit.id)")
+                    }
+                }
+                .padding(NPSpacing.outer)
+            }
+            .navigationTitle(localized("merge.title"))
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button(localized("common.cancel")) { model.isLearningUnitMergePresented = false }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(localized("merge.continue")) { model.requestLearningUnitMergeConfirmation() }
+                        .disabled(model.mergeSourceLearningUnitIds.isEmpty || model.isLearningUnitMerging)
+                        .accessibilityIdentifier("mergeContinueButton")
+                }
+            }
+        }
+        .navigationViewStyle(.stack)
+        .accessibilityIdentifier("learningUnitMergeSheet")
     }
 }
 
@@ -3633,9 +3764,9 @@ private struct NotePatchLogoImage: View {
 
 private func colorForStatus(_ status: String) -> Color {
     switch status {
-    case "failed", "cancelled", "deleted":
+    case "failed", "infected", "cancelled", "deleted":
         return NPColors.destructive
-    case "created", "uploading", "uploaded", "processing", "queued", "running":
+    case "created", "uploading", "scanning", "pending", "uploaded", "processing", "queued", "running", "rebuilding":
         return NPColors.warning
     case "ready", "succeeded", "completed":
         return NPColors.brand
@@ -3646,9 +3777,9 @@ private func colorForStatus(_ status: String) -> Color {
 
 private func statusChipVariant(_ status: String) -> NPStatusChip.NPStatusChipVariant {
     switch status {
-    case "failed", "cancelled", "deleted":
+    case "failed", "infected", "cancelled", "deleted":
         return .destructive
-    case "created", "uploading", "uploaded", "processing", "queued", "running":
+    case "created", "uploading", "scanning", "pending", "uploaded", "processing", "queued", "running", "rebuilding":
         return .warning
     case "ready", "succeeded", "completed":
         return .brand
@@ -3688,6 +3819,8 @@ private func taskTypeLabel(_ taskType: String) -> String {
         return localized("task.type.document_cleanup")
     case "process_document", "document_process":
         return localized("task.type.document_processing")
+    case "merge_learning_units":
+        return localized("task.type.merge_learning_units")
     case "openclaw", "openclaw_task":
         return "OpenClaw"
     default:

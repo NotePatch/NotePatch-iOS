@@ -191,6 +191,121 @@ struct SafeHTMLNoteView: UIViewRepresentable {
     }
 }
 
+struct SafeRenderedHTMLNoteView: UIViewRepresentable {
+    let url: URL
+    let onAuthorizationExpired: () -> Void
+    let onFailure: (String) -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onAuthorizationExpired: onAuthorizationExpired, onFailure: onFailure)
+    }
+
+    func makeUIView(context: Context) -> WKWebView {
+        let configuration = WKWebViewConfiguration()
+        configuration.websiteDataStore = .nonPersistent()
+        configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
+        configuration.defaultWebpagePreferences.allowsContentJavaScript = false
+        let webView = WKWebView(frame: .zero, configuration: configuration)
+        webView.isOpaque = false
+        webView.backgroundColor = .clear
+        webView.scrollView.backgroundColor = .clear
+        webView.navigationDelegate = context.coordinator
+        webView.uiDelegate = context.coordinator
+        return webView
+    }
+
+    func updateUIView(_ webView: WKWebView, context: Context) {
+        context.coordinator.onAuthorizationExpired = onAuthorizationExpired
+        context.coordinator.onFailure = onFailure
+        guard context.coordinator.loadedURL != url else { return }
+        context.coordinator.loadedURL = url
+        context.coordinator.hasReportedFailure = false
+        webView.load(URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData))
+    }
+
+    static func dismantleUIView(_ webView: WKWebView, coordinator: Coordinator) {
+        webView.stopLoading()
+        webView.navigationDelegate = nil
+        webView.uiDelegate = nil
+    }
+
+    final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate {
+        var loadedURL: URL?
+        var onAuthorizationExpired: () -> Void
+        var onFailure: (String) -> Void
+        var hasReportedFailure = false
+
+        init(onAuthorizationExpired: @escaping () -> Void, onFailure: @escaping (String) -> Void) {
+            self.onAuthorizationExpired = onAuthorizationExpired
+            self.onFailure = onFailure
+        }
+
+        func webView(
+            _ webView: WKWebView,
+            decidePolicyFor navigationAction: WKNavigationAction,
+            decisionHandler: @escaping (WKNavigationActionPolicy) -> Void
+        ) {
+            guard navigationAction.targetFrame?.isMainFrame != false else {
+                decisionHandler(.cancel)
+                return
+            }
+            let requestURL = navigationAction.request.url
+            let isInitialRequest = requestURL == loadedURL && navigationAction.navigationType == .other
+            decisionHandler(isInitialRequest ? .allow : .cancel)
+        }
+
+        func webView(
+            _ webView: WKWebView,
+            decidePolicyFor navigationResponse: WKNavigationResponse,
+            decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void
+        ) {
+            guard navigationResponse.isForMainFrame,
+                  let response = navigationResponse.response as? HTTPURLResponse else {
+                decisionHandler(.allow)
+                return
+            }
+            if response.statusCode == 401 || response.statusCode == 403 {
+                decisionHandler(.cancel)
+                reportAuthorizationExpired()
+            } else if !(200...299).contains(response.statusCode) {
+                decisionHandler(.cancel)
+                reportFailure(localizedFormat("note.reader.http_error", String(response.statusCode)))
+            } else {
+                decisionHandler(.allow)
+            }
+        }
+
+        func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+            reportFailure(error.localizedDescription)
+        }
+
+        func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+            reportFailure(error.localizedDescription)
+        }
+
+        func webView(
+            _ webView: WKWebView,
+            createWebViewWith configuration: WKWebViewConfiguration,
+            for navigationAction: WKNavigationAction,
+            windowFeatures: WKWindowFeatures
+        ) -> WKWebView? {
+            nil
+        }
+
+        private func reportAuthorizationExpired() {
+            guard !hasReportedFailure else { return }
+            hasReportedFailure = true
+            DispatchQueue.main.async { [onAuthorizationExpired] in onAuthorizationExpired() }
+        }
+
+        private func reportFailure(_ message: String) {
+            guard !hasReportedFailure else { return }
+            hasReportedFailure = true
+            DispatchQueue.main.async { [onFailure] in onFailure(message) }
+        }
+    }
+}
+
 struct RichHTMLNoteEditor: UIViewRepresentable {
     @Binding var html: String
     let command: HTMLNoteCommand?

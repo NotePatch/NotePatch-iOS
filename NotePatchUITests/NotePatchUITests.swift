@@ -133,6 +133,30 @@ final class NotePatchUITests: XCTestCase {
     }
 
     @MainActor
+    func testOfflineScanningStatusAndLearningUnitMergeConfirmation() throws {
+        let app = makeApp(["-NotePatchUITestWorkbench"])
+        app.launch()
+
+        XCTAssertTrue(app.otherElements["workbenchTabs"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.descendants(matching: .any)["documentScanStatus-scan-doc"].waitForExistence(timeout: 3))
+
+        app.buttons["tab.notes"].tap()
+        app.segmentedControls["notesSectionPicker"].buttons["复习"].tap()
+        let mergeButton = app.buttons["mergeLearningUnitsButton"]
+        XCTAssertTrue(mergeButton.waitForExistence(timeout: 3))
+        mergeButton.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["learningUnitMergeSheet"].waitForExistence(timeout: 3))
+        let source = app.buttons["mergeSource-unit-2"]
+        XCTAssertTrue(source.waitForExistence(timeout: 3))
+        source.tap()
+        let continueButton = app.buttons["mergeContinueButton"]
+        XCTAssertTrue(continueButton.isEnabled)
+        continueButton.tap()
+        XCTAssertTrue(app.alerts.firstMatch.waitForExistence(timeout: 3))
+        XCTAssertTrue(app.alerts.firstMatch.buttons["合并"].exists)
+    }
+
+    @MainActor
     func testFailedDocumentPurgeShowsRetryAction() throws {
         let app = makeApp(["-NotePatchUITestWorkbench", "-NotePatchUITestPurgeFailure"])
         app.launch()

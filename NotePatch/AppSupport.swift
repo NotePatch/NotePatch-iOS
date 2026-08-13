@@ -258,6 +258,7 @@ func statusLabel(_ value: String) -> String {
     switch value {
     case "created": return localized("status.created")
     case "uploading": return localized("status.uploading")
+    case "scanning": return localized("status.scanning")
     case "uploaded": return localized("status.uploaded")
     case "processing": return localized("status.processing")
     case "ready": return localized("status.ready")
@@ -269,6 +270,28 @@ func statusLabel(_ value: String) -> String {
     case "cancelled": return localized("status.cancelled")
     case "completed": return localized("status.completed")
     case "draft": return localized("status.draft")
+    default: return value
+    }
+}
+
+func scanStatusLabel(_ value: String) -> String {
+    switch value {
+    case "pending": return localized("scan.pending")
+    case "scanning": return localized("scan.scanning")
+    case "clean": return localized("scan.clean")
+    case "infected": return localized("scan.infected")
+    case "failed": return localized("scan.failed")
+    case "skipped": return localized("scan.skipped")
+    default: return value
+    }
+}
+
+func mergeStatusLabel(_ value: String) -> String {
+    switch value {
+    case "merging": return localized("merge.status.merging")
+    case "rebuilding": return localized("merge.status.rebuilding")
+    case "completed": return localized("merge.status.completed")
+    case "failed": return localized("merge.status.failed")
     default: return value
     }
 }
@@ -315,6 +338,7 @@ func artifactTypeLabel(_ value: String) -> String {
     case "grading_report": return localized("artifact.grading_report")
     case "summary": return localized("artifact.summary")
     case "flashcards": return localized("artifact.flashcards")
+    case "converted_pdf": return localized("artifact.converted_pdf")
     case "other": return localized("common.other")
     default: return value
     }

@@ -311,6 +311,10 @@ struct LearningDocumentItem: Decodable, Equatable, Identifiable {
     let uploadId: String?
     let tusUploadURL: String?
     let sha256: String?
+    let scanStatus: String?
+    let scanMessage: String?
+    let scannedAt: String?
+    let detectedMimeType: String?
     let status: String
     let purgeStatus: String?
     let purgeTaskId: String?
@@ -335,6 +339,10 @@ struct LearningDocumentItem: Decodable, Equatable, Identifiable {
         case uploadId = "upload_id"
         case tusUploadURL = "tus_upload_url"
         case sha256
+        case scanStatus = "scan_status"
+        case scanMessage = "scan_message"
+        case scannedAt = "scanned_at"
+        case detectedMimeType = "detected_mime_type"
         case status
         case purgeStatus = "purge_status"
         case purgeTaskId = "purge_task_id"
@@ -360,6 +368,10 @@ struct LearningDocumentItem: Decodable, Equatable, Identifiable {
         uploadId: String? = nil,
         tusUploadURL: String? = nil,
         sha256: String? = nil,
+        scanStatus: String? = nil,
+        scanMessage: String? = nil,
+        scannedAt: String? = nil,
+        detectedMimeType: String? = nil,
         status: String,
         purgeStatus: String? = nil,
         purgeTaskId: String? = nil,
@@ -383,6 +395,10 @@ struct LearningDocumentItem: Decodable, Equatable, Identifiable {
         self.uploadId = uploadId
         self.tusUploadURL = tusUploadURL
         self.sha256 = sha256
+        self.scanStatus = scanStatus
+        self.scanMessage = scanMessage
+        self.scannedAt = scannedAt
+        self.detectedMimeType = detectedMimeType
         self.status = status
         self.purgeStatus = purgeStatus
         self.purgeTaskId = purgeTaskId
@@ -695,6 +711,8 @@ struct LearningUnit: Decodable, Equatable, Identifiable {
     let attemptRevision: Int
     let notesGeneratedRevision: Int
     let noteGenerationDueAt: String?
+    let mergeStatus: String?
+    let mergedIntoId: String?
     let createdAt: String?
     let updatedAt: String?
 
@@ -710,6 +728,8 @@ struct LearningUnit: Decodable, Equatable, Identifiable {
         case attemptRevision = "attempt_revision"
         case notesGeneratedRevision = "notes_generated_revision"
         case noteGenerationDueAt = "note_generation_due_at"
+        case mergeStatus = "merge_status"
+        case mergedIntoId = "merged_into_id"
         case createdAt = "created_at"
         case updatedAt = "updated_at"
     }
@@ -726,6 +746,8 @@ struct LearningUnit: Decodable, Equatable, Identifiable {
         attemptRevision: Int = 0,
         notesGeneratedRevision: Int = 0,
         noteGenerationDueAt: String? = nil,
+        mergeStatus: String? = nil,
+        mergedIntoId: String? = nil,
         createdAt: String? = nil,
         updatedAt: String? = nil
     ) {
@@ -740,6 +762,8 @@ struct LearningUnit: Decodable, Equatable, Identifiable {
         self.attemptRevision = attemptRevision
         self.notesGeneratedRevision = notesGeneratedRevision
         self.noteGenerationDueAt = noteGenerationDueAt
+        self.mergeStatus = mergeStatus
+        self.mergedIntoId = mergedIntoId
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }
@@ -757,6 +781,8 @@ struct LearningUnit: Decodable, Equatable, Identifiable {
         attemptRevision = try container.decodeIfPresent(Int.self, forKey: .attemptRevision) ?? 0
         notesGeneratedRevision = try container.decodeIfPresent(Int.self, forKey: .notesGeneratedRevision) ?? 0
         noteGenerationDueAt = try container.decodeIfPresent(String.self, forKey: .noteGenerationDueAt)
+        mergeStatus = try container.decodeIfPresent(String.self, forKey: .mergeStatus)
+        mergedIntoId = try container.decodeIfPresent(String.self, forKey: .mergedIntoId)
         createdAt = try container.decodeIfPresent(String.self, forKey: .createdAt)
         updatedAt = try container.decodeIfPresent(String.self, forKey: .updatedAt)
     }
@@ -881,7 +907,11 @@ struct StudyNoteVersion: Decodable, Equatable, Identifiable {
     }
 
     var preferredDownloadURL: String? {
-        preferredHTMLDownloadURL ?? downloadURLs["json"]
+        renderedHTMLDownloadURL ?? preferredHTMLDownloadURL ?? downloadURLs["json"]
+    }
+
+    var renderedHTMLDownloadURL: String? {
+        downloadURLs["rendered_html"]
     }
 
     var preferredHTMLDownloadURL: String? {
@@ -942,6 +972,8 @@ struct StudyNoteGroup: Equatable, Identifiable {
     var id: String { learningUnit.id }
 
     var generationState: StudyNoteGenerationState {
+        if ["merging", "rebuilding"].contains(learningUnit.mergeStatus ?? "") { return .generating }
+        if learningUnit.mergeStatus == "failed" { return .unavailable }
         if learningUnit.knowledgeRevision == 0 { return .noKnowledge }
         if learningUnit.notesGeneratedRevision < learningUnit.knowledgeRevision { return .generating }
         return notes.isEmpty ? .unavailable : .ready
@@ -964,6 +996,7 @@ enum StudyNoteDownloadKind: String {
     case json
     case highlightedHTML = "highlighted_html"
     case highlightMap = "highlight_map"
+    case renderedHTML = "rendered_html"
 }
 
 struct StudyNoteDownloadURLResponse: Decodable, Equatable {
@@ -1378,12 +1411,38 @@ struct TaskItem: Decodable, Equatable, Identifiable {
         startedAt = try container.decodeIfPresent(String.self, forKey: .startedAt)
         finishedAt = try container.decodeIfPresent(String.self, forKey: .finishedAt)
     }
+
+    func applyingLiveEvent(_ event: TaskEventItem) -> TaskItem {
+        let inferredStatus = event.eventType == "queued" ? "queued" : (status == "queued" ? "running" : status)
+        return TaskItem(
+            id: id,
+            workspaceId: workspaceId,
+            taskType: taskType,
+            status: inferredStatus,
+            resourceType: resourceType,
+            resourceId: resourceId,
+            payload: payload,
+            result: result,
+            errorMessage: errorMessage,
+            progress: event.progress ?? progress,
+            cancelRequestedAt: cancelRequestedAt,
+            createdAt: createdAt,
+            updatedAt: updatedAt,
+            startedAt: startedAt,
+            finishedAt: finishedAt
+        )
+    }
+
+    var isTerminal: Bool {
+        ["succeeded", "failed", "cancelled"].contains(status)
+    }
 }
 
 struct TaskEventItem: Decodable, Equatable, Identifiable {
     let id: String
     let workspaceId: String
     let taskId: String
+    let sequenceNo: Int
     let eventType: String
     let level: String
     let message: String
@@ -1395,6 +1454,7 @@ struct TaskEventItem: Decodable, Equatable, Identifiable {
         case id
         case workspaceId = "workspace_id"
         case taskId = "task_id"
+        case sequenceNo = "sequence_no"
         case eventType = "event_type"
         case level
         case message
@@ -1406,14 +1466,39 @@ struct TaskEventItem: Decodable, Equatable, Identifiable {
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(String.self, forKey: .id)
-        workspaceId = try container.decode(String.self, forKey: .workspaceId)
+        workspaceId = try container.decodeIfPresent(String.self, forKey: .workspaceId) ?? ""
         taskId = try container.decode(String.self, forKey: .taskId)
+        sequenceNo = try container.decodeIfPresent(Int.self, forKey: .sequenceNo) ?? 0
         eventType = try container.decodeIfPresent(String.self, forKey: .eventType) ?? ""
         level = try container.decodeIfPresent(String.self, forKey: .level) ?? ""
         message = try container.decodeIfPresent(String.self, forKey: .message) ?? ""
         progress = try container.decodeIfPresent(Int.self, forKey: .progress)
         dataText = try container.decodeIfPresent(JSONValue.self, forKey: .data)?.displayString
         createdAt = try container.decodeIfPresent(String.self, forKey: .createdAt) ?? ""
+    }
+
+    init(
+        id: String,
+        workspaceId: String,
+        taskId: String,
+        sequenceNo: Int,
+        eventType: String,
+        level: String,
+        message: String,
+        progress: Int?,
+        dataText: String?,
+        createdAt: String
+    ) {
+        self.id = id
+        self.workspaceId = workspaceId
+        self.taskId = taskId
+        self.sequenceNo = sequenceNo
+        self.eventType = eventType
+        self.level = level
+        self.message = message
+        self.progress = progress
+        self.dataText = dataText
+        self.createdAt = createdAt
     }
 }
 

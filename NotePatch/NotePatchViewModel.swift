@@ -4,7 +4,6 @@ import SwiftUI
 import UIKit
 
 private let taskPollIntervalNanoseconds: UInt64 = 1_500_000_000
-private let taskMaxPolls = 120
 private let completeUploadMaxRetries = 5
 private let defaultPresenceHeartbeatIntervalSeconds = 30
 private let defaultPersonalWorkspaceName = "My Workspace"
@@ -190,6 +189,7 @@ final class NotePatchViewModel: ObservableObject {
     @Published var isNotesLoading = false
     @Published var selectedStudyNoteItem: StudyNoteListItem?
     @Published var studyNoteHTML: String?
+    @Published var studyNoteRenderedURL: URL?
     @Published var studyNoteReaderError: String?
     @Published var isStudyNoteLoading = false
     @Published var isStudyNoteEditorPresented = false
@@ -201,6 +201,12 @@ final class NotePatchViewModel: ObservableObject {
     @Published var isStudyNoteSaving = false
     @Published var isStudyNoteConflictPending = false
     @Published var selectedLearningSection: LearningSection = .units
+    @Published var isLearningUnitMergePresented = false
+    @Published var isLearningUnitMergeConfirmationPresented = false
+    @Published var mergeTargetLearningUnitId = ""
+    @Published var mergeSourceLearningUnitIds = Set<String>()
+    @Published private(set) var isLearningUnitMerging = false
+    @Published private(set) var activeMergeTargetLearningUnitId: String?
     @Published var selectedFlashcardLearningUnitId = ""
     @Published var flashcardDecks: [FlashcardDeck] = []
     @Published var selectedFlashcardDeckId: String?
@@ -237,9 +243,13 @@ final class NotePatchViewModel: ObservableObject {
     private let backendSession: URLSession
     private let tusSession: URLSession
     private let cacheDirectory: URL
+    private let taskEventStreamingEnabled: Bool
     private var nextOpenClawMessageId: Int64 = 1
     private var presenceTask: Task<Void, Never>?
     private var studyNoteGenerationPollingTask: Task<Void, Never>?
+    private var scanTrackingTask: Task<Void, Never>?
+    private var scanTrackingDocumentIds = Set<String>()
+    private var scanTrackingWorkspaceId: String?
     private var aiModelLoadTask: Task<Void, Never>?
     private var aiModelLoadGeneration = UUID()
     private var aiModelCatalogWorkspaceId: String?
@@ -249,6 +259,7 @@ final class NotePatchViewModel: ObservableObject {
     private var didRestoreSession = false
     private var pendingUITestUploadFile: LocalUploadFile?
     private var retryableDocumentPurgeId: String?
+    private var renderedStudyNoteRefreshAttempted = false
     private var loadedDeferredContent = Set<DeferredWorkspaceLoadKey>()
     private var deferredLoadTasks: [DeferredWorkspaceLoadKey: Task<Void, Never>] = [:]
     private var deferredLoadGenerations: [DeferredWorkspaceLoadKey: UUID] = [:]
@@ -333,7 +344,8 @@ final class NotePatchViewModel: ObservableObject {
         settings: SettingsStore,
         backendSession: URLSession = .shared,
         tusSession: URLSession = .shared,
-        cacheDirectory: URL = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first ?? FileManager.default.temporaryDirectory
+        cacheDirectory: URL = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first ?? FileManager.default.temporaryDirectory,
+        taskEventStreamingEnabled: Bool = true
     ) {
         self.openClawState = OpenClawViewState()
         self.openClawComposerState = OpenClawComposerState()
@@ -341,6 +353,7 @@ final class NotePatchViewModel: ObservableObject {
         self.backendSession = backendSession
         self.tusSession = tusSession
         self.cacheDirectory = cacheDirectory
+        self.taskEventStreamingEnabled = taskEventStreamingEnabled
         if ProcessInfo.processInfo.arguments.contains("-NotePatchUITestNoSession") {
             settings.clearSession()
         }
@@ -385,12 +398,14 @@ final class NotePatchViewModel: ObservableObject {
         case .active:
             isAppActive = true
             resumeStudyNoteGenerationPollingIfNeeded()
+            startScanTrackingIfNeeded()
             if !isOfflineTestMode, let session {
                 startPresence(activeSession: session)
             }
         case .background, .inactive:
             isAppActive = false
             stopStudyNoteGenerationPolling()
+            stopScanTracking(clearDocuments: false)
             if !isOfflineTestMode {
                 stopPresence(activeSession: session, sendOffline: true, clearClientId: false)
             }
@@ -777,6 +792,7 @@ final class NotePatchViewModel: ObservableObject {
         Task {
             var failureMessages: [String] = []
             var successCount = 0
+            var scanningCount = 0
             for (offset, id) in selectedIds.enumerated() {
                 guard let index = queuedUploadItems.firstIndex(where: { $0.id == id }) else { continue }
                 queuedUploadItems[index].state = .uploading
@@ -784,7 +800,8 @@ final class NotePatchViewModel: ObservableObject {
                 setUploadProgress("upload.batch_progress", String(offset + 1), String(selectedIds.count), item.file.filename)
                 uploadProgressPercent = 0
                 do {
-                    try await performUpload(item, activeSession: activeSession, workspaceId: workspaceId)
+                    let uploaded = try await performUpload(item, activeSession: activeSession, workspaceId: workspaceId)
+                    if isDocumentAwaitingSecurityScan(uploaded) { scanningCount += 1 }
                     if let completedIndex = queuedUploadItems.firstIndex(where: { $0.id == id }) {
                         let completed = queuedUploadItems.remove(at: completedIndex)
                         UploadThumbnailCache.shared.remove(file: completed.file)
@@ -807,14 +824,16 @@ final class NotePatchViewModel: ObservableObject {
             uploadProgressLabel = ""
             isBusy = false
             if failureMessages.isEmpty {
-                statusMessage = "Selected files uploaded."
+                statusMessage = scanningCount > 0
+                    ? localized("upload.security_scan_started")
+                    : localized("upload.selected_completed")
             } else {
                 setError("upload.some_failed", failureMessages.joined(separator: "\n"))
             }
         }
     }
 
-    private func performUpload(_ item: QueuedUploadItem, activeSession: SavedSession, workspaceId: String) async throws {
+    private func performUpload(_ item: QueuedUploadItem, activeSession: SavedSession, workspaceId: String) async throws -> LearningDocumentItem {
         let prepared = try await FileImportService.shared.prepareForUpload(item.file, cacheDirectory: cacheDirectory)
         let client = clientFor(activeSession)
         statusMessage = "Creating upload session..."
@@ -843,21 +862,28 @@ final class NotePatchViewModel: ObservableObject {
             }
         }
         statusMessage = "Confirming upload..."
-        _ = try await completeUploadWithRetry(
+        let completedDocument = try await completeUploadWithRetry(
             client: client,
             workspaceId: workspaceId,
             uploadSession: uploadSession,
             tusResult: tusResult,
             file: prepared
         )
+        registerScanningDocuments([completedDocument], workspaceId: workspaceId)
+        if isDocumentAwaitingSecurityScan(completedDocument) {
+            statusMessage = localized("upload.security_scan_started")
+        }
+        return completedDocument
     }
 
     func startProcessing(_ document: LearningDocumentItem) {
         guard let activeSession = currentSessionOrError(), let workspaceId = selectedWorkspaceId, !isBusy else {
             return
         }
-        guard isProcessableDocument(document) else {
-            errorMessage = "Only uploaded, ready, or failed documents can be processed."
+        guard canProcessDocument(document) else {
+            errorMessage = isDocumentSecurityBlocked(document)
+                ? localized("document.error.security_scan_blocked")
+                : localized("document.error.not_processable")
             return
         }
         isBusy = true
@@ -1316,7 +1342,9 @@ final class NotePatchViewModel: ObservableObject {
         cancelStudyNoteEditing()
         selectedStudyNoteItem = item
         studyNoteHTML = nil
+        studyNoteRenderedURL = nil
         studyNoteReaderError = nil
+        renderedStudyNoteRefreshAttempted = false
 
         if isOfflineTestMode, item.note.id == "note-1" {
             studyNoteHTML = """
@@ -1338,15 +1366,13 @@ final class NotePatchViewModel: ObservableObject {
         Task {
             defer { isStudyNoteLoading = false }
             do {
-                let html = try await loadStudyNoteHTML(
+                try await loadStudyNoteReader(
                     activeSession: activeSession,
                     workspaceId: workspaceId,
                     learningUnitId: item.learningUnit.id,
-                    note: item.note,
-                    prefersHighlighted: true
+                    note: item.note
                 )
                 guard selectedStudyNoteItem?.id == item.id else { return }
-                studyNoteHTML = html
                 statusMessage = localized("operation.note_loaded")
             } catch {
                 guard selectedStudyNoteItem?.id == item.id else { return }
@@ -1359,8 +1385,10 @@ final class NotePatchViewModel: ObservableObject {
         cancelStudyNoteEditing()
         selectedStudyNoteItem = nil
         studyNoteHTML = nil
+        studyNoteRenderedURL = nil
         studyNoteReaderError = nil
         isStudyNoteLoading = false
+        renderedStudyNoteRefreshAttempted = false
     }
 
     var canEditSelectedStudyNote: Bool {
@@ -1492,6 +1520,12 @@ final class NotePatchViewModel: ObservableObject {
                     )
                     if let refreshed = refreshedItems.first(where: { $0.note.id == response.note.id }) {
                         selectedStudyNoteItem = refreshed
+                        await refreshRenderedStudyNoteAfterRevision(
+                            activeSession: activeSession,
+                            workspaceId: workspaceId,
+                            item: refreshed,
+                            fallbackHTML: html
+                        )
                     }
                 } catch {
                     handlePostCommitRefreshFailure(error, completionKey: "operation.note_revision_saved")
@@ -1526,6 +1560,139 @@ final class NotePatchViewModel: ObservableObject {
                 showError(error)
             }
         }
+    }
+
+    var canBeginLearningUnitMerge: Bool {
+        learningUnits.filter { $0.mergedIntoId == nil }.count >= 2 && !isLearningUnitMerging
+    }
+
+    func beginLearningUnitMerge() {
+        guard canBeginLearningUnitMerge else { return }
+        if !learningUnits.contains(where: { $0.id == mergeTargetLearningUnitId }) {
+            mergeTargetLearningUnitId = selectedLearningUnitId
+                ?? learningUnits.first(where: { $0.mergedIntoId == nil })?.id
+                ?? ""
+        }
+        mergeSourceLearningUnitIds.remove(mergeTargetLearningUnitId)
+        isLearningUnitMergePresented = true
+        errorMessage = nil
+    }
+
+    func setLearningUnitMergeTarget(_ learningUnitId: String) {
+        mergeTargetLearningUnitId = learningUnitId
+        mergeSourceLearningUnitIds.remove(learningUnitId)
+    }
+
+    func toggleLearningUnitMergeSource(_ learningUnitId: String) {
+        guard learningUnitId != mergeTargetLearningUnitId else { return }
+        if mergeSourceLearningUnitIds.contains(learningUnitId) {
+            mergeSourceLearningUnitIds.remove(learningUnitId)
+        } else if mergeSourceLearningUnitIds.count < 50 {
+            mergeSourceLearningUnitIds.insert(learningUnitId)
+        }
+    }
+
+    func requestLearningUnitMergeConfirmation() {
+        guard learningUnits.contains(where: { $0.id == mergeTargetLearningUnitId }) else {
+            errorMessage = localized("merge.error.target_required")
+            return
+        }
+        guard (1...50).contains(mergeSourceLearningUnitIds.count),
+              !mergeSourceLearningUnitIds.contains(mergeTargetLearningUnitId) else {
+            errorMessage = localized("merge.error.sources_required")
+            return
+        }
+        isLearningUnitMergeConfirmationPresented = true
+    }
+
+    func confirmLearningUnitMerge() {
+        guard let activeSession = currentSessionOrError(),
+              let workspaceId = selectedWorkspaceId,
+              !isLearningUnitMerging else { return }
+        let targetId = mergeTargetLearningUnitId
+        let sourceIds = Array(mergeSourceLearningUnitIds).sorted()
+        guard learningUnits.contains(where: { $0.id == targetId }),
+              (1...50).contains(sourceIds.count),
+              !sourceIds.contains(targetId) else {
+            errorMessage = localized("merge.error.sources_required")
+            return
+        }
+
+        isLearningUnitMerging = true
+        errorMessage = nil
+        statusMessage = localized("merge.starting")
+        taskEvents = []
+        Task {
+            defer { isLearningUnitMerging = false }
+            var mergeRequestAccepted = false
+            do {
+                let task = try await clientFor(activeSession).mergeLearningUnits(
+                    workspaceId: workspaceId,
+                    targetLearningUnitId: targetId,
+                    sourceLearningUnitIds: sourceIds
+                )
+                mergeRequestAccepted = true
+                activeTask = task
+                activeMergeTargetLearningUnitId = targetId
+                isLearningUnitMergePresented = false
+                isLearningUnitMergeConfirmationPresented = false
+                mergeSourceLearningUnitIds = []
+                statusMessage = localized("merge.in_progress")
+
+                _ = try await pollTask(
+                    activeSession: activeSession,
+                    workspaceId: workspaceId,
+                    taskId: task.id
+                ) { [weak self] task, events in
+                    self?.activeTask = task
+                    self?.taskEvents = events
+                    self?.setStatus("merge.task_progress", statusLabel(task.status), String(task.progress.clamped(to: 0...100)))
+                }
+
+                try await refreshLearningUnits(activeSession: activeSession, workspaceId: workspaceId)
+                try? await refreshWorkspaceContent(activeSession: activeSession, workspaceId: workspaceId)
+                try? await refreshHomeworks(activeSession: activeSession, workspaceId: workspaceId, preserveGradingDrafts: true)
+                selectedFlashcardLearningUnitId = targetId
+                selectedFlashcardDeckId = nil
+                flashcardDecks = []
+                flashcardDeckDetail = nil
+                if let target = learningUnits.first(where: { $0.id == targetId }),
+                   target.mergeStatus == "completed" {
+                    _ = try? await refreshStudyNoteGroup(
+                        activeSession: activeSession,
+                        workspaceId: workspaceId,
+                        learningUnit: target
+                    )
+                    activeMergeTargetLearningUnitId = nil
+                    statusMessage = localized("merge.completed")
+                    if selectedLearningSection == .flashcards {
+                        loadFlashcards(learningUnitId: targetId)
+                    }
+                } else if learningUnits.first(where: { $0.id == targetId })?.mergeStatus == "failed" {
+                    errorMessage = "merge.status.failed"
+                } else {
+                    statusMessage = localized("merge.rebuilding")
+                    resumeStudyNoteGenerationPollingIfNeeded()
+                }
+            } catch {
+                if mergeRequestAccepted {
+                    try? await refreshLearningUnits(activeSession: activeSession, workspaceId: workspaceId)
+                }
+                showError(error)
+            }
+        }
+    }
+
+    func viewLearningUnitMergeTask() {
+        selectedTab = .documents
+        selectedDocumentsSection = .tasks
+    }
+
+    func displayedMergeStatus(for unit: LearningUnit) -> String? {
+        if activeMergeTargetLearningUnitId == unit.id, isLearningUnitMerging {
+            return "merging"
+        }
+        return unit.mergeStatus
     }
 
     var currentFlashcard: Flashcard? {
@@ -1969,6 +2136,10 @@ final class NotePatchViewModel: ObservableObject {
         guard let activeSession = currentSessionOrError(), let workspaceId = selectedWorkspaceId else {
             return
         }
+        guard canDownloadDocument(document) else {
+            errorMessage = localized("document.error.security_scan_blocked")
+            return
+        }
         Task {
             isBusy = true
             errorMessage = nil
@@ -1986,6 +2157,10 @@ final class NotePatchViewModel: ObservableObject {
 
     func loadOcrArtifacts(for document: LearningDocumentItem) {
         guard let activeSession = currentSessionOrError(), let workspaceId = selectedWorkspaceId else {
+            return
+        }
+        guard canDownloadDocument(document) else {
+            errorMessage = localized("document.error.security_scan_blocked")
             return
         }
         Task {
@@ -2151,6 +2326,10 @@ final class NotePatchViewModel: ObservableObject {
         guard let activeSession = currentSessionOrError(), let workspaceId = selectedWorkspaceId else {
             return
         }
+        guard canDownloadDocument(document) else {
+            errorMessage = localized("document.error.security_scan_blocked")
+            return
+        }
         Task {
             isBusy = true
             errorMessage = nil
@@ -2191,8 +2370,24 @@ final class NotePatchViewModel: ObservableObject {
         document.status == "ready" || document.status == "failed"
     }
 
-    private func isProcessableDocument(_ document: LearningDocumentItem) -> Bool {
-        document.status == "uploaded" || document.status == "ready" || document.status == "failed"
+    func canProcessDocument(_ document: LearningDocumentItem) -> Bool {
+        ["uploaded", "ready", "failed"].contains(document.status)
+            && !isDocumentAwaitingSecurityScan(document)
+            && !isDocumentSecurityBlocked(document)
+    }
+
+    func canDownloadDocument(_ document: LearningDocumentItem) -> Bool {
+        document.status != "deleted"
+            && !isDocumentAwaitingSecurityScan(document)
+            && !isDocumentSecurityBlocked(document)
+    }
+
+    private func isDocumentAwaitingSecurityScan(_ document: LearningDocumentItem) -> Bool {
+        document.status == "scanning" || ["pending", "scanning"].contains(document.scanStatus ?? "")
+    }
+
+    private func isDocumentSecurityBlocked(_ document: LearningDocumentItem) -> Bool {
+        ["infected", "failed"].contains(document.scanStatus ?? "")
     }
 
     private func defaultArtifactFilename(type: String, mimeType: String?, fallback: String) -> String {
@@ -2297,7 +2492,8 @@ final class NotePatchViewModel: ObservableObject {
         )
         let sampleDocuments = [
             LearningDocumentItem(id: "homework-doc", workspaceId: "ui-workspace", title: "Algebra Homework", originalFilename: "homework.pdf", mimeType: "application/pdf", fileType: "pdf", documentKind: "homework", status: "ready"),
-            LearningDocumentItem(id: "answer-doc", workspaceId: "ui-workspace", title: "Answer Key", originalFilename: "answer.pdf", mimeType: "application/pdf", fileType: "pdf", documentKind: "answer_key", status: "ready")
+            LearningDocumentItem(id: "answer-doc", workspaceId: "ui-workspace", title: "Answer Key", originalFilename: "answer.pdf", mimeType: "application/pdf", fileType: "pdf", documentKind: "answer_key", status: "ready"),
+            LearningDocumentItem(id: "scan-doc", workspaceId: "ui-workspace", title: "New Worksheet", originalFilename: "worksheet.pdf", mimeType: "application/pdf", fileType: "pdf", documentKind: "homework", scanStatus: "scanning", scanMessage: "Checking the uploaded file", status: "scanning")
         ]
         isOfflineTestMode = true
         didRestoreSession = true
@@ -2310,16 +2506,28 @@ final class NotePatchViewModel: ObservableObject {
         selectedWorkspaceId = uiSession.selectedWorkspaceId
         workspaces = [WorkspaceItem(id: "ui-workspace", name: "My Workspace")]
         documents = sampleDocuments
-        learningUnits = [LearningUnit(
-            id: "unit-1",
-            workspaceId: "ui-workspace",
-            title: "Fractions & Ratios",
-            subject: "Mathematics",
-            gradeLevel: "Grade 7",
-            topic: "Ratios",
-            knowledgeRevision: 1,
-            notesGeneratedRevision: 1
-        )]
+        learningUnits = [
+            LearningUnit(
+                id: "unit-1",
+                workspaceId: "ui-workspace",
+                title: "Fractions & Ratios",
+                subject: "Mathematics",
+                gradeLevel: "Grade 7",
+                topic: "Ratios",
+                knowledgeRevision: 1,
+                notesGeneratedRevision: 1
+            ),
+            LearningUnit(
+                id: "unit-2",
+                workspaceId: "ui-workspace",
+                title: "Linear Equations",
+                subject: "Mathematics",
+                gradeLevel: "Grade 7",
+                topic: "Equations",
+                knowledgeRevision: 1,
+                notesGeneratedRevision: 1
+            )
+        ]
         studyNotes = [StudyNoteVersion(
             id: "note-1",
             workspaceId: "ui-workspace",
@@ -2424,6 +2632,7 @@ final class NotePatchViewModel: ObservableObject {
         presenceTask?.cancel()
         presenceTask = nil
         stopStudyNoteGenerationPolling()
+        stopScanTracking(clearDocuments: true)
         invalidateDeferredContentLoads()
         settings.clearSession()
         isOfflineTestMode = false
@@ -2793,8 +3002,7 @@ final class NotePatchViewModel: ObservableObject {
     private func resumeStudyNoteGenerationPollingIfNeeded() {
         guard isAppActive,
               selectedTab == .notes,
-              selectedNotesSection == .notes,
-              studyNoteGroups.contains(where: { $0.generationState == .generating }),
+              needsStudyRefreshPolling,
               !isOfflineTestMode,
               session != nil,
               selectedWorkspaceId != nil else {
@@ -2817,20 +3025,43 @@ final class NotePatchViewModel: ObservableObject {
                       let self,
                       self.isAppActive,
                       self.selectedTab == .notes,
-                      self.selectedNotesSection == .notes,
                       let activeSession = self.session,
                       let workspaceId = self.selectedWorkspaceId else { break }
 
                 do {
-                    try await self.loadNotesOverviewContent(
-                        activeSession: activeSession,
-                        workspaceId: workspaceId,
-                        shouldApply: { [weak self] in
-                            self?.selectedWorkspaceId == workspaceId && self?.session != nil
+                    if self.selectedNotesSection == .notes {
+                        try await self.loadNotesOverviewContent(
+                            activeSession: activeSession,
+                            workspaceId: workspaceId,
+                            shouldApply: { [weak self] in
+                                self?.selectedWorkspaceId == workspaceId && self?.session != nil
+                            }
+                        )
+                    } else {
+                        try await self.refreshLearningUnits(activeSession: activeSession, workspaceId: workspaceId)
+                        if let targetId = self.activeMergeTargetLearningUnitId,
+                           let target = self.learningUnits.first(where: { $0.id == targetId }) {
+                            if target.mergeStatus == "completed" {
+                                _ = try? await self.refreshStudyNoteGroup(
+                                    activeSession: activeSession,
+                                    workspaceId: workspaceId,
+                                    learningUnit: target
+                                )
+                                self.activeMergeTargetLearningUnitId = nil
+                                self.statusMessage = localized("merge.completed")
+                                if self.selectedLearningSection == .flashcards {
+                                    self.loadFlashcards(learningUnitId: target.id)
+                                }
+                            } else if target.mergeStatus == "failed" {
+                                self.statusMessage = ""
+                                if self.errorMessage == nil {
+                                    self.errorMessage = "merge.status.failed"
+                                }
+                            }
                         }
-                    )
+                    }
                     failureCount = 0
-                    if !self.studyNoteGroups.contains(where: { $0.generationState == .generating }) {
+                    if !self.needsStudyRefreshPolling {
                         break
                     }
                 } catch is CancellationError {
@@ -2841,6 +3072,14 @@ final class NotePatchViewModel: ObservableObject {
             }
             self?.studyNoteGenerationPollingTask = nil
         }
+    }
+
+    private var needsStudyRefreshPolling: Bool {
+        if selectedNotesSection == .notes {
+            return studyNoteGroups.contains(where: { $0.generationState == .generating })
+        }
+        return selectedNotesSection == .review
+            && learningUnits.contains(where: { ["merging", "rebuilding"].contains($0.mergeStatus ?? "") })
     }
 
     private func stopStudyNoteGenerationPolling() {
@@ -2855,6 +3094,7 @@ final class NotePatchViewModel: ObservableObject {
             documentKind: documentKindFilter.isEmpty ? nil : documentKindFilter,
             fileType: fileTypeFilter.isEmpty ? nil : fileTypeFilter
         )
+        registerScanningDocuments(documents, workspaceId: workspaceId)
         if let selectedArtifactDocumentId,
            !documents.contains(where: { $0.id == selectedArtifactDocumentId }) {
             self.selectedArtifactDocumentId = nil
@@ -2864,6 +3104,119 @@ final class NotePatchViewModel: ObservableObject {
            !documents.contains(where: { $0.id == selectedOcrDocumentId }) {
             self.selectedOcrDocumentId = nil
             selectedOcrArtifacts = []
+        }
+    }
+
+    private func registerScanningDocuments(_ loadedDocuments: [LearningDocumentItem], workspaceId: String) {
+        let pendingIds = Set(loadedDocuments.filter(isDocumentAwaitingSecurityScan).map(\.id))
+        if scanTrackingWorkspaceId != workspaceId {
+            stopScanTracking(clearDocuments: true)
+            scanTrackingWorkspaceId = workspaceId
+        }
+        scanTrackingDocumentIds.formUnion(pendingIds)
+        startScanTrackingIfNeeded()
+    }
+
+    private func startScanTrackingIfNeeded() {
+        guard isAppActive,
+              !isOfflineTestMode,
+              scanTrackingTask?.isCancelled != false,
+              !scanTrackingDocumentIds.isEmpty,
+              let activeSession = session,
+              let workspaceId = selectedWorkspaceId,
+              workspaceId == scanTrackingWorkspaceId else { return }
+
+        scanTrackingTask = Task { [weak self] in
+            var failureCount = 0
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
+                guard !Task.isCancelled,
+                      let self,
+                      self.isAppActive,
+                      self.selectedWorkspaceId == workspaceId,
+                      self.session?.userId == activeSession.userId else { break }
+
+                let ids = Array(self.scanTrackingDocumentIds)
+                guard !ids.isEmpty else { break }
+                let results = await self.loadScanningDocuments(
+                    ids: ids,
+                    activeSession: activeSession,
+                    workspaceId: workspaceId
+                )
+                var transitioned = false
+                var successfulRequest = false
+                for (documentId, result) in results {
+                    switch result {
+                    case .success(let document):
+                        successfulRequest = true
+                        if let index = self.documents.firstIndex(where: { $0.id == document.id }),
+                           self.documents[index] != document {
+                            self.documents[index] = document
+                        }
+                        if !self.isDocumentAwaitingSecurityScan(document) {
+                            self.scanTrackingDocumentIds.remove(document.id)
+                            transitioned = true
+                        }
+                    case .failure(let error):
+                        if let backendError = error as? LearningBackendError, backendError.statusCode == 404 {
+                            self.scanTrackingDocumentIds.remove(documentId)
+                        }
+                    }
+                }
+                if successfulRequest { failureCount = 0 } else { failureCount += 1 }
+                if transitioned {
+                    try? await self.refreshWorkspaceContent(activeSession: activeSession, workspaceId: workspaceId)
+                }
+                if self.scanTrackingDocumentIds.isEmpty { break }
+                if !successfulRequest {
+                    let delays: [UInt64] = [5, 10, 20, 30]
+                    let delay = delays[min(max(failureCount - 1, 0), delays.count - 1)]
+                    try? await Task.sleep(nanoseconds: delay * 1_000_000_000)
+                }
+            }
+            self?.scanTrackingTask = nil
+        }
+    }
+
+    private func loadScanningDocuments(
+        ids: [String],
+        activeSession: SavedSession,
+        workspaceId: String
+    ) async -> [(String, Result<LearningDocumentItem, Error>)] {
+        let client = clientFor(activeSession)
+        var results = Array<Result<LearningDocumentItem, Error>?>(repeating: nil, count: ids.count)
+        await withTaskGroup(of: (Int, Result<LearningDocumentItem, Error>).self) { group in
+            var nextIndex = 0
+            func enqueueNext() {
+                guard nextIndex < ids.count else { return }
+                let index = nextIndex
+                let id = ids[index]
+                nextIndex += 1
+                group.addTask {
+                    do {
+                        return (index, .success(try await client.getDocument(workspaceId: workspaceId, documentId: id)))
+                    } catch {
+                        return (index, .failure(error))
+                    }
+                }
+            }
+            for _ in 0..<min(4, ids.count) { enqueueNext() }
+            while let (index, result) = await group.next() {
+                results[index] = result
+                enqueueNext()
+            }
+        }
+        return results.enumerated().compactMap { index, result in
+            result.map { (ids[index], $0) }
+        }
+    }
+
+    private func stopScanTracking(clearDocuments: Bool) {
+        scanTrackingTask?.cancel()
+        scanTrackingTask = nil
+        if clearDocuments {
+            scanTrackingDocumentIds = []
+            scanTrackingWorkspaceId = nil
         }
     }
 
@@ -2946,35 +3299,147 @@ final class NotePatchViewModel: ObservableObject {
         onUpdate: @escaping (TaskItem, [TaskEventItem]) -> Void
     ) async throws -> TaskItem {
         let client = clientFor(activeSession)
-        var pollCount = 0
+        var currentTask = activeTask?.id == taskId
+            ? activeTask!
+            : try await client.getTask(workspaceId: workspaceId, taskId: taskId)
+        var events = taskEvents.filter { $0.taskId == taskId }
+        var seenEventIds = Set(events.map(\.id))
+        var seenSequences = Set(events.map(\.sequenceNo).filter { $0 > 0 })
+        var lastSequenceNo = events.map(\.sequenceNo).max()
         var lastPublishedTask: TaskItem?
         var lastPublishedEvents: [TaskEventItem]?
-        while pollCount < taskMaxPolls {
-            let task = try await client.getTask(workspaceId: workspaceId, taskId: taskId)
-            let events = (try? await client.getTaskEvents(workspaceId: workspaceId, taskId: taskId)) ?? []
-            if task != lastPublishedTask || events != lastPublishedEvents {
-                onUpdate(task, events)
-                lastPublishedTask = task
-                lastPublishedEvents = events
+
+        func publishIfChanged() {
+            guard currentTask != lastPublishedTask || events != lastPublishedEvents else { return }
+            onUpdate(currentTask, events)
+            lastPublishedTask = currentTask
+            lastPublishedEvents = events
+        }
+
+        func appendEvent(_ event: TaskEventItem) {
+            guard !seenEventIds.contains(event.id),
+                  event.sequenceNo <= 0 || !seenSequences.contains(event.sequenceNo) else { return }
+            seenEventIds.insert(event.id)
+            if event.sequenceNo > 0 {
+                seenSequences.insert(event.sequenceNo)
+                lastSequenceNo = max(lastSequenceNo ?? 0, event.sequenceNo)
             }
-            switch task.status {
-            case "succeeded":
-                return task
-            case "failed":
-                throw LearningBackendError(task.errorMessage ?? "Task \(task.status).")
-            case "cancelled":
-                let cancellationReason = events.last(where: { $0.eventType.contains("cancel") })?.message
+            events.append(event)
+            events.sort {
+                if $0.sequenceNo != $1.sequenceNo { return $0.sequenceNo < $1.sequenceNo }
+                return $0.createdAt < $1.createdAt
+            }
+            currentTask = currentTask.applyingLiveEvent(event)
+            publishIfChanged()
+        }
+
+        publishIfChanged()
+        if currentTask.isTerminal {
+            return try terminalTaskResult(currentTask, events: events)
+        }
+
+        if taskEventStreamingEnabled {
+            for attempt in 0..<3 {
+                try Task.checkCancellation()
+                do {
+                    var receivedDone = false
+                    for try await frame in client.streamTaskEvents(
+                        workspaceId: workspaceId,
+                        taskId: taskId,
+                        lastEventID: lastSequenceNo
+                    ) {
+                        try Task.checkCancellation()
+                        switch frame {
+                        case .taskEvent(let event):
+                            appendEvent(event)
+                        case .done:
+                            receivedDone = true
+                        }
+                        if receivedDone { break }
+                    }
+                    if receivedDone {
+                        currentTask = try await client.getTask(workspaceId: workspaceId, taskId: taskId)
+                        if let authoritativeEvents = try? await client.getTaskEvents(workspaceId: workspaceId, taskId: taskId) {
+                            authoritativeEvents.forEach(appendEvent)
+                        }
+                        publishIfChanged()
+                        if currentTask.isTerminal {
+                            break
+                        }
+                        break
+                    }
+                    throw LearningBackendError("Task event stream disconnected.")
+                } catch is CancellationError {
+                    throw CancellationError()
+                } catch let error as LearningBackendError
+                    where [404, 405, 406].contains(error.statusCode ?? 0) {
+                    break
+                } catch let error as LearningBackendError
+                    where error.shouldClearSession || [401, 403, 422].contains(error.statusCode ?? 0) {
+                    throw error
+                } catch {
+                    guard attempt < 2 else { break }
+                    let reconnectDelay = UInt64(attempt + 1)
+                    try await Task.sleep(nanoseconds: reconnectDelay * 1_000_000_000)
+                }
+            }
+            if currentTask.isTerminal {
+                return try terminalTaskResult(currentTask, events: events)
+            }
+        }
+
+        var failureCount = 0
+        while true {
+            try Task.checkCancellation()
+            var reachedTerminal = false
+            do {
+                currentTask = try await client.getTask(workspaceId: workspaceId, taskId: taskId)
+                if let refreshedEvents = try? await client.getTaskEvents(workspaceId: workspaceId, taskId: taskId) {
+                    refreshedEvents.forEach(appendEvent)
+                }
+                publishIfChanged()
+                failureCount = 0
+                reachedTerminal = currentTask.isTerminal
+                if !reachedTerminal {
+                    try await Task.sleep(nanoseconds: taskPollIntervalNanoseconds)
+                }
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch let error as LearningBackendError
+                where error.shouldClearSession || [400, 401, 403, 404, 409, 422].contains(error.statusCode ?? 0) {
+                throw error
+            } catch {
+                failureCount += 1
+                let delaySeconds = min(15, 1 << min(failureCount, 4))
+                try await Task.sleep(nanoseconds: UInt64(delaySeconds) * 1_000_000_000)
+            }
+            if reachedTerminal {
+                return try terminalTaskResult(currentTask, events: events)
+            }
+        }
+    }
+
+    private func terminalTaskResult(_ task: TaskItem, events: [TaskEventItem]) throws -> TaskItem {
+        switch task.status {
+        case "succeeded":
+            return task
+        case "failed":
+            throw LearningBackendError(
+                task.errorMessage
+                    ?? events.last(where: { $0.level == "error" })?.message
+                    ?? "Task failed."
+            )
+        case "cancelled":
+            throw LearningBackendError(
+                events.last(where: { $0.eventType.contains("cancel") })?.message
                     ?? events.last(where: { $0.level == "error" })?.message
                     ?? events.last?.message
                     ?? task.errorMessage
                     ?? "Task cancelled."
-                throw LearningBackendError(cancellationReason)
-            default:
-                pollCount += 1
-                try await Task.sleep(nanoseconds: taskPollIntervalNanoseconds)
-            }
+            )
+        default:
+            throw LearningBackendError("Task event stream ended before the task completed.")
         }
-        throw LearningBackendError("Task timed out. Please refresh later to check.")
     }
 
     private func completeUploadWithRetry(
@@ -3143,6 +3608,103 @@ final class NotePatchViewModel: ObservableObject {
         return items
     }
 
+    private func loadStudyNoteReader(
+        activeSession: SavedSession,
+        workspaceId: String,
+        learningUnitId: String,
+        note: StudyNoteVersion
+    ) async throws {
+        let client = clientFor(activeSession)
+        if let embedded = note.renderedHTMLDownloadURL, !embedded.isEmpty {
+            studyNoteRenderedURL = try client.resolveServiceURL(embedded)
+            studyNoteHTML = nil
+            return
+        }
+
+        do {
+            let response = try await client.getStudyNoteDownloadURL(
+                workspaceId: workspaceId,
+                learningUnitId: learningUnitId,
+                noteVersionId: note.id,
+                kind: .renderedHTML
+            )
+            studyNoteRenderedURL = try client.resolveServiceURL(response.downloadURL)
+            studyNoteHTML = nil
+        } catch let error as LearningBackendError where [404, 422].contains(error.statusCode ?? 0) {
+            studyNoteRenderedURL = nil
+            studyNoteHTML = try await loadStudyNoteHTML(
+                activeSession: activeSession,
+                workspaceId: workspaceId,
+                learningUnitId: learningUnitId,
+                note: note,
+                prefersHighlighted: true
+            )
+        }
+    }
+
+    private func refreshRenderedStudyNoteAfterRevision(
+        activeSession: SavedSession,
+        workspaceId: String,
+        item: StudyNoteListItem,
+        fallbackHTML: String
+    ) async {
+        studyNoteHTML = fallbackHTML
+        studyNoteRenderedURL = nil
+        do {
+            let client = clientFor(activeSession)
+            let response = try await client.getStudyNoteDownloadURL(
+                workspaceId: workspaceId,
+                learningUnitId: item.learningUnit.id,
+                noteVersionId: item.note.id,
+                kind: .renderedHTML
+            )
+            guard selectedStudyNoteItem?.id == item.id else { return }
+            studyNoteRenderedURL = try client.resolveServiceURL(response.downloadURL)
+            studyNoteHTML = nil
+        } catch {
+            guard selectedStudyNoteItem?.id == item.id else { return }
+            studyNoteHTML = fallbackHTML
+            studyNoteRenderedURL = nil
+        }
+    }
+
+    func handleRenderedStudyNoteExpired() {
+        guard !renderedStudyNoteRefreshAttempted,
+              let item = selectedStudyNoteItem,
+              let activeSession = currentSessionOrError(),
+              let workspaceId = selectedWorkspaceId else {
+            studyNoteReaderError = localized("note.reader.signed_url_expired")
+            studyNoteRenderedURL = nil
+            return
+        }
+        renderedStudyNoteRefreshAttempted = true
+        isStudyNoteLoading = true
+        Task {
+            defer { isStudyNoteLoading = false }
+            do {
+                let response = try await clientFor(activeSession).getStudyNoteDownloadURL(
+                    workspaceId: workspaceId,
+                    learningUnitId: item.learningUnit.id,
+                    noteVersionId: item.note.id,
+                    kind: .renderedHTML
+                )
+                guard selectedStudyNoteItem?.id == item.id else { return }
+                studyNoteRenderedURL = try clientFor(activeSession).resolveServiceURL(response.downloadURL)
+                studyNoteReaderError = nil
+            } catch {
+                guard selectedStudyNoteItem?.id == item.id else { return }
+                studyNoteRenderedURL = nil
+                studyNoteReaderError = friendlyError(error)
+            }
+        }
+    }
+
+    func handleRenderedStudyNoteFailure(_ message: String) {
+        guard selectedStudyNoteItem != nil else { return }
+        studyNoteRenderedURL = nil
+        studyNoteReaderError = message
+    }
+
     private func loadStudyNoteHTML(
         activeSession: SavedSession,
         workspaceId: String,
@@ -3263,6 +3825,13 @@ final class NotePatchViewModel: ObservableObject {
 
     private func clearLearningWorkspaceState() {
         invalidateDeferredContentLoads()
+        stopScanTracking(clearDocuments: true)
+        isLearningUnitMergePresented = false
+        isLearningUnitMergeConfirmationPresented = false
+        mergeTargetLearningUnitId = ""
+        mergeSourceLearningUnitIds = []
+        isLearningUnitMerging = false
+        activeMergeTargetLearningUnitId = nil
         queuedUploadItems.forEach {
             UploadThumbnailCache.shared.remove(file: $0.file)
             removeCachedUploadFile($0.file)
