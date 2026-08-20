@@ -461,6 +461,11 @@
 "ai.model.refresh" = "Refresh models";
 "operation.ai_model_saved" = "AI model preference saved.";
 "chat.model_used" = "Model: %@";
+"chat.attachment_default_prompt" = "Please analyze the attached file.";
+"chat.uploading_attachments" = "Uploading attachments...";
+"chat.uploading_attachment" = "Uploading attachment %@ of %@: %@";
+"chat.attachment_upload_failed" = "The attachment could not be prepared for AI chat.";
+"chat.attachment_accessibility" = "Attached file: %@";
 "status.scanning" = "Scanning";
 "scan.pending" = "Pending security check";
 "scan.scanning" = "Security check in progress";

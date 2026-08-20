@@ -320,10 +320,15 @@ final class LearningBackendClient {
         )
     }
 
-    func openClawChat(workspaceId: String, prompt: String, conversationId: String? = nil) async throws -> TaskItem {
+    func openClawChat(
+        workspaceId: String,
+        prompt: String,
+        conversationId: String? = nil,
+        input: [String: Any] = [:]
+    ) async throws -> TaskItem {
         var payload: [String: Any] = [
             "prompt": prompt,
-            "input": [:],
+            "input": input,
             "options": [:]
         ]
         if let conversationId, !conversationId.isEmpty {

@@ -194,6 +194,25 @@ struct NotePatchTests {
         #expect(overflow.requiresScrolling)
     }
 
+    @Test func keyboardAvoidance_movesComposerButNotWorkbenchBottomBar() {
+        let chatFrame = CGRect(x: 0, y: 0, width: 390, height: 760)
+        let dockedKeyboard = CGRect(x: 0, y: 510, width: 390, height: 334)
+        #expect(keyboardAvoidanceOffset(contentFrame: chatFrame, keyboardFrame: dockedKeyboard) == 250)
+
+        let hiddenKeyboard = CGRect(x: 0, y: 844, width: 390, height: 334)
+        #expect(keyboardAvoidanceOffset(contentFrame: chatFrame, keyboardFrame: hiddenKeyboard) == 0)
+
+        let nonOverlappingFloatingKeyboard = CGRect(x: 420, y: 500, width: 300, height: 250)
+        #expect(keyboardAvoidanceOffset(contentFrame: chatFrame, keyboardFrame: nonOverlappingFloatingKeyboard) == 0)
+        #expect(keyboardAvoidanceOffset(contentFrame: chatFrame, keyboardFrame: .null) == 0)
+    }
+
+    @Test func bottomNavigationUsesSystemHomeIndicatorSpacingOnce() {
+        #expect(workbenchBottomBarAdditionalPadding(safeAreaBottom: 34) == 0)
+        #expect(workbenchBottomBarAdditionalPadding(safeAreaBottom: 21) == 0)
+        #expect(workbenchBottomBarAdditionalPadding(safeAreaBottom: 0) == 8)
+    }
+
     @Test @MainActor func workbenchTabsHaveExpectedOrderAndDefault() throws {
         #expect(WorkbenchTab.allCases == [.documents, .notes, .openClaw, .profile])
         let model = NotePatchViewModel()
@@ -339,6 +358,15 @@ struct NotePatchTests {
         renderer.load(markdown)
         #expect(renderer.blocks == first)
         #expect(cachedMarkdownInlineTokens("正文 **加粗**") == cachedMarkdownInlineTokens("正文 **加粗**"))
+
+        let flashcardBlocks = parseMarkdownBlocks(
+            "What does a **ratio** compare?\n\n1. First step\n2. Use `x`"
+        )
+        #expect(flashcardBlocks[0].inlineTokens.contains { $0.type == .bold && $0.text == "ratio" })
+        #expect(flashcardBlocks[1].type == .ordered)
+        #expect(flashcardBlocks[1].level == 1)
+        #expect(flashcardBlocks[2].level == 2)
+        #expect(flashcardBlocks[2].inlineTokens.contains { $0.type == .code && $0.text == "x" })
 
         let longMarkdown = String(repeating: "段落内容\n\n", count: 1_000)
         renderer.load(longMarkdown)
@@ -899,6 +927,9 @@ struct NotePatchTests {
         #expect(blocks[0].level == 1)
         #expect(blocks[2].type == .bullet)
         #expect(blocks[2].text == "one")
+        #expect(blocks[3].type == .ordered)
+        #expect(blocks[3].level == 1)
+        #expect(blocks[3].text == "two")
         #expect(blocks[5].type == .code)
         #expect(blocks[5].text == "val x = 1")
 
@@ -1150,15 +1181,84 @@ struct NotePatchTests {
             refreshToken: "refresh",
             session: session
         )
-        let task = try await client.openClawChat(workspaceId: "ws-1", prompt: "总结本周错题", conversationId: "conversation-1")
+        let task = try await client.openClawChat(
+            workspaceId: "ws-1",
+            prompt: "总结本周错题",
+            conversationId: "conversation-1",
+            input: [
+                "attachments": [[
+                    "document_id": "document-1",
+                    "filename": "question.png",
+                    "mime_type": "image/png",
+                    "file_type": "image"
+                ]]
+            ]
+        )
 
         #expect(capturedRequest?.httpMethod == "POST")
         #expect(capturedRequest?.url?.path == "/api/v1/workspaces/ws-1/ai/chat")
         #expect(capturedBody?["prompt"] as? String == "总结本周错题")
         #expect(capturedBody?["conversation_id"] as? String == "conversation-1")
-        #expect(capturedBody?["input"] as? [String: Any] != nil)
+        let input = capturedBody?["input"] as? [String: Any]
+        let attachments = input?["attachments"] as? [[String: Any]]
+        #expect(attachments?.count == 1)
+        #expect(attachments?.first?["document_id"] as? String == "document-1")
+        #expect(attachments?.first?["filename"] as? String == "question.png")
+        #expect(attachments?.first?["mime_type"] as? String == "image/png")
         #expect(capturedBody?["options"] as? [String: Any] != nil)
         #expect(task.id == "task-1")
+    }
+
+    @Test @MainActor func openClawAttachmentUploadFailure_keepsComposerDraft() async throws {
+        let suiteName = "NotePatchChatAttachmentTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let session = Self.mockSession { request in
+            #expect(request.url?.path == "/api/v1/workspaces/ws-1/documents/upload-session")
+            return Self.response(request, status: 500, body: #"{"detail":"storage unavailable"}"#)
+        }
+        let cacheDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("NotePatchChatAttachmentTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: cacheDirectory) }
+        let imageURL = cacheDirectory.appendingPathComponent("question.png")
+        let image = UIGraphicsImageRenderer(size: CGSize(width: 8, height: 8)).image { context in
+            UIColor.systemBlue.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 8, height: 8))
+        }
+        try #require(image.pngData()).write(to: imageURL)
+        let file = LocalUploadFile(url: imageURL, filename: "question.png", mimeType: "image/png")
+
+        let model = NotePatchViewModel(
+            settings: SettingsStore(defaults: defaults, keychain: KeychainStore(service: suiteName)),
+            backendSession: session,
+            tusSession: session,
+            cacheDirectory: cacheDirectory,
+            taskEventStreamingEnabled: false
+        )
+        model.session = SavedSession(
+            baseURL: "https://api.test",
+            tusBaseURL: "https://tus.test/files/",
+            accessToken: "access",
+            refreshToken: "refresh",
+            expiresAt: "x",
+            userId: "user-1",
+            email: "user@example.test",
+            fullName: nil,
+            selectedWorkspaceId: "ws-1",
+            aiHistoryEnabled: true
+        )
+        model.selectedWorkspaceId = "ws-1"
+        model.openClawComposerState.text = "分析图片"
+        model.openClawComposerState.attachments = [file]
+
+        #expect(model.startOpenClawChat(prompt: model.openClawComposerState.text, attachments: [file]))
+        try await Self.waitUntil { !model.isOpenClawSending }
+
+        #expect(model.openClawComposerState.text == "分析图片")
+        #expect(model.openClawComposerState.attachments == [file])
+        #expect(model.openClawMessages.count == 1)
+        #expect(model.errorMessage?.contains("storage unavailable") == true)
     }
 
     @Test func artifactAndOcrRequests_useDocumentScopedEndpoints() async throws {
@@ -1753,6 +1853,74 @@ struct NotePatchTests {
         #expect(model.statusMessage == "对话已删除。")
     }
 
+    @Test @MainActor func conversationSelection_ignoresLateResponseFromPreviousSelection() async throws {
+        let suiteName = "NotePatchTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let session = Self.mockSession { request in
+            switch request.url?.path {
+            case "/api/v1/workspaces/ws-1/ai/conversations/c-1/messages":
+                Thread.sleep(forTimeInterval: 0.12)
+                return Self.response(request, status: 200, body: #"{"items":[{"id":"m-1","conversation_id":"c-1","role":"assistant","content":"old","status":"succeeded","created_at":""}],"page":1,"page_size":100,"total":1}"#)
+            case "/api/v1/workspaces/ws-1/ai/conversations/c-2/messages":
+                return Self.response(request, status: 200, body: #"{"items":[{"id":"m-2","conversation_id":"c-2","role":"assistant","content":"current","status":"succeeded","created_at":""}],"page":1,"page_size":100,"total":1}"#)
+            default:
+                return Self.response(request, status: 500, body: #"{"detail":"unexpected request"}"#)
+            }
+        }
+        let model = NotePatchViewModel(
+            settings: SettingsStore(defaults: defaults, keychain: KeychainStore(service: suiteName)),
+            backendSession: session,
+            tusSession: session
+        )
+        model.session = SavedSession(baseURL: "https://api.test", tusBaseURL: "https://tus.test/", accessToken: "a", refreshToken: "r", expiresAt: "x", userId: "u", email: "u@test", fullName: nil, selectedWorkspaceId: "ws-1", aiHistoryEnabled: true)
+        model.selectedWorkspaceId = "ws-1"
+
+        model.selectConversation("c-1")
+        model.selectConversation("c-2")
+        try await Self.waitUntil { !model.isChatHistoryLoading && model.openClawMessages.first?.content == "current" }
+        try await Task.sleep(nanoseconds: 180_000_000)
+
+        #expect(model.selectedConversationId == "c-2")
+        #expect(model.openClawMessages.map(\.content) == ["current"])
+    }
+
+    @Test @MainActor func homeworkSelection_ignoresLateReferencesFromPreviousHomework() async throws {
+        let suiteName = "NotePatchTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let session = Self.mockSession { request in
+            switch request.url?.path {
+            case "/api/v1/workspaces/ws-1/homeworks/h-1/references":
+                Thread.sleep(forTimeInterval: 0.12)
+                return Self.response(request, status: 200, body: #"[{"id":"r-1","workspace_id":"ws-1","homework_id":"h-1","document_id":"d-1","reference_type":"answer_key","created_at":""}]"#)
+            case "/api/v1/workspaces/ws-1/homeworks/h-2/references":
+                return Self.response(request, status: 200, body: #"[{"id":"r-2","workspace_id":"ws-1","homework_id":"h-2","document_id":"d-2","reference_type":"rubric","created_at":""}]"#)
+            default:
+                return Self.response(request, status: 500, body: #"{"detail":"unexpected request"}"#)
+            }
+        }
+        let model = NotePatchViewModel(
+            settings: SettingsStore(defaults: defaults, keychain: KeychainStore(service: suiteName)),
+            backendSession: session,
+            tusSession: session
+        )
+        model.session = SavedSession(baseURL: "https://api.test", tusBaseURL: "https://tus.test/", accessToken: "a", refreshToken: "r", expiresAt: "x", userId: "u", email: "u@test", fullName: nil, selectedWorkspaceId: "ws-1", aiHistoryEnabled: true)
+        model.selectedWorkspaceId = "ws-1"
+        model.homeworks = [
+            HomeworkItem(id: "h-1", workspaceId: "ws-1", title: "One", maxScore: 100),
+            HomeworkItem(id: "h-2", workspaceId: "ws-1", title: "Two", maxScore: 100)
+        ]
+
+        model.selectHomework("h-1")
+        model.selectHomework("h-2")
+        try await Self.waitUntil { !model.isHomeworkLoading && model.homeworkReferences.first?.id == "r-2" }
+        try await Task.sleep(nanoseconds: 180_000_000)
+
+        #expect(model.selectedHomeworkId == "h-2")
+        #expect(model.homeworkReferences.map(\.id) == ["r-2"])
+    }
+
     @Test @MainActor func documentDeletion_keepsServerCommitWhenRefreshFails() async throws {
         let suiteName = "NotePatchTests.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suiteName))
@@ -1956,6 +2124,60 @@ struct NotePatchTests {
         #expect(model.aiHistoryEnabled == false)
         #expect(settings.loadAIHistoryEnabled() == false)
         #expect(model.errorMessage == "preference rejected")
+    }
+
+    @Test @MainActor func aiPreferenceResponse_doesNotRestoreLoggedOutSession() async throws {
+        let suiteName = "NotePatchTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        let settings = SettingsStore(defaults: defaults, keychain: KeychainStore(service: suiteName))
+        defer {
+            settings.clearSession()
+            defaults.removePersistentDomain(forName: suiteName)
+        }
+        let session = Self.mockSession { request in
+            if request.url?.path == "/api/v1/auth/preferences" {
+                Thread.sleep(forTimeInterval: 0.12)
+                return Self.response(request, status: 200, body: #"{"id":"u","email":"u@test","is_active":true,"ai_history_enabled":false,"created_at":""}"#)
+            }
+            return Self.response(request, status: 204, body: "")
+        }
+        let model = NotePatchViewModel(settings: settings, backendSession: session, tusSession: session)
+        let activeSession = SavedSession(baseURL: "https://api.test", tusBaseURL: "https://tus.test/", accessToken: "a", refreshToken: "r", expiresAt: "x", userId: "u", email: "u@test", fullName: nil, selectedWorkspaceId: "ws-1", aiHistoryEnabled: true)
+        settings.saveSession(activeSession)
+        model.session = activeSession
+        model.selectedWorkspaceId = "ws-1"
+
+        model.updateAIHistoryEnabled(false)
+        model.logout()
+        try await Task.sleep(nanoseconds: 220_000_000)
+
+        #expect(model.session == nil)
+        #expect(settings.loadSession() == nil)
+        #expect(!model.isAIPreferenceUpdating)
+    }
+
+    @Test @MainActor func staleAttachmentImport_isDiscardedAfterWorkspaceChange() throws {
+        let suiteName = "NotePatchTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let model = NotePatchViewModel(
+            settings: SettingsStore(defaults: defaults, keychain: KeychainStore(service: suiteName))
+        )
+        model.session = SavedSession(baseURL: "https://api.test", tusBaseURL: "https://tus.test/", accessToken: "a", refreshToken: "r", expiresAt: "x", userId: "u", email: "u@test", fullName: nil, selectedWorkspaceId: "ws-2", aiHistoryEnabled: true)
+        model.selectedWorkspaceId = "ws-2"
+        let fileURL = model.uploadCacheDirectory.appendingPathComponent("stale-attachment.txt")
+        try Data("stale".utf8).write(to: fileURL)
+        let file = LocalUploadFile(url: fileURL, filename: "stale-attachment.txt", mimeType: "text/plain")
+
+        let accepted = model.stageOpenClawDraftAttachments(
+            [file],
+            expectedUserId: "u",
+            expectedWorkspaceId: "ws-1"
+        )
+
+        #expect(!accepted)
+        #expect(model.openClawComposerState.attachments.isEmpty)
+        #expect(!FileManager.default.fileExists(atPath: fileURL.path))
     }
 
     @Test @MainActor func gradingDraftAndReferenceDeletion_reflectServerState() async throws {

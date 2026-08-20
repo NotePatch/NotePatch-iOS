@@ -93,9 +93,13 @@ nonisolated func parseMarkdownBlocks(_ markdown: String) -> [MarkdownBlock] {
             continue
         }
 
-        if let match = trimmed.firstMatch(pattern: "^\\d+[.)]\\s+(.+)$") {
+        if let match = trimmed.firstMatch(pattern: "^(\\d+)[.)]\\s+(.+)$") {
             flushParagraph()
-            appendBlock(.ordered, match[1].trimmingCharacters(in: .whitespaces))
+            appendBlock(
+                .ordered,
+                match[2].trimmingCharacters(in: .whitespaces),
+                level: Int(match[1]) ?? 1
+            )
             continue
         }
 

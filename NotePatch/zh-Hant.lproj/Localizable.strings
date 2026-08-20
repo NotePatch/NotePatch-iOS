@@ -461,6 +461,11 @@
 "ai.model.refresh" = "重新整理模型";
 "operation.ai_model_saved" = "AI 模型設定已儲存。";
 "chat.model_used" = "模型：%@";
+"chat.attachment_default_prompt" = "請分析我附加的檔案。";
+"chat.uploading_attachments" = "正在上傳附件…";
+"chat.uploading_attachment" = "正在上傳第 %@/%@ 個附件：%@";
+"chat.attachment_upload_failed" = "無法準備 AI 對話附件。";
+"chat.attachment_accessibility" = "附件：%@";
 "status.scanning" = "安全檢查中";
 "scan.pending" = "等待安全檢查";
 "scan.scanning" = "正在進行安全檢查";

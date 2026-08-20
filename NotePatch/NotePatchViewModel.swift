@@ -103,6 +103,25 @@ enum OpenClawMessageStatus: Equatable {
     case error
 }
 
+enum OpenClawAttachmentStatus: Equatable {
+    case uploading
+    case ready
+}
+
+struct OpenClawChatAttachment: Identifiable, Equatable {
+    let id: UUID
+    let file: LocalUploadFile
+    var documentId: String?
+    var status: OpenClawAttachmentStatus
+
+    init(file: LocalUploadFile, documentId: String? = nil, status: OpenClawAttachmentStatus = .uploading) {
+        id = file.id
+        self.file = file
+        self.documentId = documentId
+        self.status = status
+    }
+}
+
 struct OpenClawChatMessage: Identifiable, Equatable {
     let id: String
     let role: OpenClawChatRole
@@ -114,6 +133,7 @@ struct OpenClawChatMessage: Identifiable, Equatable {
     var citations: [ChatCitation]
     var sourceStatus: String?
     var modelId: String?
+    var attachments: [OpenClawChatAttachment]
 
     init(
         id: String,
@@ -125,7 +145,8 @@ struct OpenClawChatMessage: Identifiable, Equatable {
         events: [TaskEventItem],
         citations: [ChatCitation] = [],
         sourceStatus: String? = nil,
-        modelId: String? = nil
+        modelId: String? = nil,
+        attachments: [OpenClawChatAttachment] = []
     ) {
         self.id = id
         self.role = role
@@ -137,6 +158,7 @@ struct OpenClawChatMessage: Identifiable, Equatable {
         self.citations = citations
         self.sourceStatus = sourceStatus
         self.modelId = modelId
+        self.attachments = attachments
     }
 }
 
@@ -260,6 +282,27 @@ final class NotePatchViewModel: ObservableObject {
     private var pendingUITestUploadFile: LocalUploadFile?
     private var retryableDocumentPurgeId: String?
     private var renderedStudyNoteRefreshAttempted = false
+    private var chatAttachmentsByMessageId: [String: [OpenClawChatAttachment]] = [:]
+    private var preparedChatAttachmentDocuments: [UUID: LearningDocumentItem] = [:]
+    private var openClawChatTask: Task<Void, Never>?
+    private var openClawChatGeneration = UUID()
+    private var conversationLoadTask: Task<Void, Never>?
+    private var conversationLoadGeneration = UUID()
+    private var conversationMutationGeneration = UUID()
+    private var aiPreferenceTask: Task<Void, Never>?
+    private var aiPreferenceGeneration = UUID()
+    private var homeworkSelectionTask: Task<Void, Never>?
+    private var homeworkSelectionGeneration = UUID()
+    private var knowledgeSearchTask: Task<Void, Never>?
+    private var knowledgeSearchGeneration = UUID()
+    private var uploadImportGeneration = UUID()
+    private var uploadQueueGeneration = UUID()
+    private var learningUnitSelectionGeneration = UUID()
+    private var workspaceContentGeneration = UUID()
+    private var learningContentGeneration = UUID()
+    private var homeworkContentGeneration = UUID()
+    private var studyNoteReaderGeneration = UUID()
+    private var studyNoteSaveGeneration = UUID()
     private var loadedDeferredContent = Set<DeferredWorkspaceLoadKey>()
     private var deferredLoadTasks: [DeferredWorkspaceLoadKey: Task<Void, Never>] = [:]
     private var deferredLoadGenerations: [DeferredWorkspaceLoadKey: UUID] = [:]
@@ -451,6 +494,7 @@ final class NotePatchViewModel: ObservableObject {
         settings.saveBaseURL(baseURL)
         Task {
             isBusy = true
+            defer { isBusy = false }
             errorMessage = nil
             statusMessage = "Checking API..."
             do {
@@ -459,7 +503,6 @@ final class NotePatchViewModel: ObservableObject {
             } catch {
                 showError(error)
             }
-            isBusy = false
         }
     }
 
@@ -469,6 +512,7 @@ final class NotePatchViewModel: ObservableObject {
         settings.saveTUSBaseURL(tusBaseURL)
         Task {
             isBusy = true
+            defer { isBusy = false }
             errorMessage = nil
             statusMessage = "Checking tusd..."
             do {
@@ -477,7 +521,6 @@ final class NotePatchViewModel: ObservableObject {
             } catch {
                 showError(error)
             }
-            isBusy = false
         }
     }
 
@@ -502,6 +545,7 @@ final class NotePatchViewModel: ObservableObject {
 
         Task {
             isBusy = true
+            defer { isBusy = false }
             errorMessage = nil
             statusMessage = register ? "Registering..." : "Signing in..."
             do {
@@ -536,7 +580,6 @@ final class NotePatchViewModel: ObservableObject {
             } catch {
                 showError(error)
             }
-            isBusy = false
         }
     }
 
@@ -592,15 +635,20 @@ final class NotePatchViewModel: ObservableObject {
         }
         Task {
             isBusy = true
+            defer {
+                if isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) {
+                    isBusy = false
+                }
+            }
             errorMessage = nil
             statusMessage = "Refreshing documents..."
             do {
                 try await refreshWorkspaceContent(activeSession: activeSession, workspaceId: workspaceId)
                 statusMessage = "Documents refreshed."
             } catch {
+                guard isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) else { return }
                 showError(error)
             }
-            isBusy = false
         }
     }
 
@@ -612,6 +660,11 @@ final class NotePatchViewModel: ObservableObject {
         saveSelectedWorkspace(workspaceId)
         Task {
             isBusy = true
+            defer {
+                if isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) {
+                    isBusy = false
+                }
+            }
             errorMessage = nil
             selectedArtifacts = []
             selectedArtifactDocumentId = nil
@@ -623,7 +676,6 @@ final class NotePatchViewModel: ObservableObject {
             } catch {
                 showError(error)
             }
-            isBusy = false
         }
     }
 
@@ -633,6 +685,11 @@ final class NotePatchViewModel: ObservableObject {
         }
         Task {
             isBusy = true
+            defer {
+                if isCurrentSessionContext(activeSession) {
+                    isBusy = false
+                }
+            }
             errorMessage = nil
             statusMessage = "Recovering workspace..."
             do {
@@ -647,12 +704,14 @@ final class NotePatchViewModel: ObservableObject {
                     }
                     workspace = existing
                 }
+                guard isCurrentSessionContext(activeSession) else { return }
                 try await loadWorkspaces(activeSession: activeSession, preferredWorkspaceId: workspace.id)
+                guard isCurrentSessionContext(activeSession) else { return }
                 statusMessage = "Workspace recovered."
             } catch {
+                guard isCurrentSessionContext(activeSession) else { return }
                 showError(error)
             }
-            isBusy = false
         }
     }
 
@@ -675,7 +734,17 @@ final class NotePatchViewModel: ObservableObject {
         uploadPickedFiles(from: [sourceURL])
     }
 
-    func uploadPickedFiles(from sourceURLs: [URL]) {
+    func uploadPickedFiles(
+        from sourceURLs: [URL],
+        expectedUserId: String? = nil,
+        expectedWorkspaceId: String? = nil
+    ) {
+        guard let activeSession = currentSessionOrError(), let workspaceId = selectedWorkspaceId else { return }
+        if let expectedUserId, let expectedWorkspaceId,
+           (activeSession.userId != expectedUserId || workspaceId != expectedWorkspaceId) {
+            return
+        }
+        let importGeneration = uploadImportGeneration
         let documentKind = uploadDocumentKind
         let learningMetadata = uploadLearningMetadata
         Task {
@@ -688,6 +757,11 @@ final class NotePatchViewModel: ObservableObject {
                 fallbackPrefix: "file",
                 cacheDirectory: cacheDirectory
             )
+            guard importGeneration == uploadImportGeneration,
+                  isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) else {
+                discardImportedUploadFiles(outcomes.compactMap(\.file))
+                return
+            }
             for outcome in outcomes {
                 if let uploadFile = outcome.file {
                     stageUploadFileForPreview(uploadFile, documentKind: documentKind, learningMetadata: learningMetadata)
@@ -703,6 +777,8 @@ final class NotePatchViewModel: ObservableObject {
     }
 
     func uploadPhotoData(_ selections: [(data: Data, suggestedFilename: String, mimeType: String?)]) {
+        guard let activeSession = currentSessionOrError(), let workspaceId = selectedWorkspaceId else { return }
+        let importGeneration = uploadImportGeneration
         let documentKind = uploadDocumentKind
         let learningMetadata = uploadLearningMetadata
         Task {
@@ -711,6 +787,11 @@ final class NotePatchViewModel: ObservableObject {
             defer { isBusy = false }
             statusMessage = "Reading selected photos..."
             let outcomes = await FileImportService.shared.writePhotos(selections, cacheDirectory: cacheDirectory)
+            guard importGeneration == uploadImportGeneration,
+                  isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) else {
+                discardImportedUploadFiles(outcomes.compactMap(\.file))
+                return
+            }
             for outcome in outcomes {
                 if let uploadFile = outcome.file {
                     stageUploadFileForPreview(uploadFile, documentKind: documentKind, learningMetadata: learningMetadata)
@@ -722,6 +803,8 @@ final class NotePatchViewModel: ObservableObject {
     }
 
     func uploadCameraImage(_ image: UIImage) {
+        guard let activeSession = currentSessionOrError(), let workspaceId = selectedWorkspaceId else { return }
+        let importGeneration = uploadImportGeneration
         let documentKind = uploadDocumentKind
         let learningMetadata = uploadLearningMetadata
         Task {
@@ -730,6 +813,11 @@ final class NotePatchViewModel: ObservableObject {
             statusMessage = "Reading image..."
             do {
                 let uploadFile = try await FileImportService.shared.writeCameraImage(image, cacheDirectory: cacheDirectory)
+                guard importGeneration == uploadImportGeneration,
+                      isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) else {
+                    discardImportedUploadFiles([uploadFile])
+                    return
+                }
                 isBusy = false
                 stageUploadFileForPreview(uploadFile, documentKind: documentKind, learningMetadata: learningMetadata)
             } catch {
@@ -743,12 +831,49 @@ final class NotePatchViewModel: ObservableObject {
         stageUploadFileForPreview(uploadFile, documentKind: uploadDocumentKind, learningMetadata: uploadLearningMetadata)
     }
 
-    func stageImportedUploadFiles(_ files: [LocalUploadFile]) {
+    func stageImportedUploadFiles(
+        _ files: [LocalUploadFile],
+        expectedUserId: String? = nil,
+        expectedWorkspaceId: String? = nil
+    ) {
+        if let expectedUserId, let expectedWorkspaceId,
+           (session?.userId != expectedUserId || selectedWorkspaceId != expectedWorkspaceId) {
+            discardImportedUploadFiles(files)
+            return
+        }
         let documentKind = uploadDocumentKind
         let learningMetadata = uploadLearningMetadata
         for file in files {
             stageUploadFileForPreview(file, documentKind: documentKind, learningMetadata: learningMetadata)
         }
+    }
+
+    func removeOpenClawDraftAttachment(_ file: LocalUploadFile) {
+        openClawComposerState.removeAttachment(file)
+        preparedChatAttachmentDocuments[file.id] = nil
+        UploadThumbnailCache.shared.remove(file: file)
+        removeCachedUploadFile(file)
+    }
+
+    @discardableResult
+    func stageOpenClawDraftAttachments(
+        _ files: [LocalUploadFile],
+        expectedUserId: String?,
+        expectedWorkspaceId: String?
+    ) -> Bool {
+        guard let expectedUserId, let expectedWorkspaceId,
+              session?.userId == expectedUserId,
+              selectedWorkspaceId == expectedWorkspaceId else {
+            discardImportedUploadFiles(files)
+            return false
+        }
+        openClawComposerState.attachments.append(contentsOf: files)
+        return true
+    }
+
+    func isCurrentImportContext(userId: String?, workspaceId: String?) -> Bool {
+        guard let userId, let workspaceId else { return false }
+        return session?.userId == userId && selectedWorkspaceId == workspaceId
     }
 
     private func stageUploadFileForPreview(
@@ -788,12 +913,23 @@ final class NotePatchViewModel: ObservableObject {
         }
 
         isBusy = true
+        let generation = UUID()
+        uploadQueueGeneration = generation
         errorMessage = nil
         Task {
+            defer {
+                if uploadQueueGeneration == generation {
+                    uploadProgressPercent = nil
+                    uploadProgressLabel = ""
+                    isBusy = false
+                }
+            }
             var failureMessages: [String] = []
             var successCount = 0
             var scanningCount = 0
             for (offset, id) in selectedIds.enumerated() {
+                guard uploadQueueGeneration == generation,
+                      isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) else { return }
                 guard let index = queuedUploadItems.firstIndex(where: { $0.id == id }) else { continue }
                 queuedUploadItems[index].state = .uploading
                 let item = queuedUploadItems[index]
@@ -801,6 +937,8 @@ final class NotePatchViewModel: ObservableObject {
                 uploadProgressPercent = 0
                 do {
                     let uploaded = try await performUpload(item, activeSession: activeSession, workspaceId: workspaceId)
+                    guard uploadQueueGeneration == generation,
+                          isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) else { return }
                     if isDocumentAwaitingSecurityScan(uploaded) { scanningCount += 1 }
                     if let completedIndex = queuedUploadItems.firstIndex(where: { $0.id == id }) {
                         let completed = queuedUploadItems.remove(at: completedIndex)
@@ -809,6 +947,8 @@ final class NotePatchViewModel: ObservableObject {
                     }
                     successCount += 1
                 } catch {
+                    guard uploadQueueGeneration == generation,
+                          isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) else { return }
                     let message = friendlyError(error)
                     failureMessages.append("\(item.file.filename): \(message)")
                     if let failedIndex = queuedUploadItems.firstIndex(where: { $0.id == id }) {
@@ -820,9 +960,8 @@ final class NotePatchViewModel: ObservableObject {
             if successCount > 0 {
                 try? await refreshWorkspaceContent(activeSession: activeSession, workspaceId: workspaceId)
             }
-            uploadProgressPercent = nil
-            uploadProgressLabel = ""
-            isBusy = false
+            guard uploadQueueGeneration == generation,
+                  isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) else { return }
             if failureMessages.isEmpty {
                 statusMessage = scanningCount > 0
                     ? localized("upload.security_scan_started")
@@ -835,6 +974,7 @@ final class NotePatchViewModel: ObservableObject {
 
     private func performUpload(_ item: QueuedUploadItem, activeSession: SavedSession, workspaceId: String) async throws -> LearningDocumentItem {
         let prepared = try await FileImportService.shared.prepareForUpload(item.file, cacheDirectory: cacheDirectory)
+        guard isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) else { throw CancellationError() }
         let client = clientFor(activeSession)
         statusMessage = "Creating upload session..."
         let uploadSession = try await client.createUploadSession(
@@ -845,6 +985,7 @@ final class NotePatchViewModel: ObservableObject {
             documentKind: item.documentKind,
             learningMetadata: item.learningMetadata
         )
+        guard isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) else { throw CancellationError() }
         statusMessage = "Uploading via tus..."
         let endpoint = TusUploader.preferredEndpoint(
             configuredEndpoint: activeSession.tusBaseURL,
@@ -857,10 +998,12 @@ final class NotePatchViewModel: ObservableObject {
         ) { [weak self] uploaded, total in
             let progress = total <= 0 ? 0 : Int((uploaded * 100) / total).clamped(to: 0...100)
             await MainActor.run {
+                guard self?.isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) == true else { return }
                 self?.uploadProgressPercent = progress
                 self?.setStatus("upload.tus_progress", String(progress))
             }
         }
+        guard isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) else { throw CancellationError() }
         statusMessage = "Confirming upload..."
         let completedDocument = try await completeUploadWithRetry(
             client: client,
@@ -869,6 +1012,7 @@ final class NotePatchViewModel: ObservableObject {
             tusResult: tusResult,
             file: prepared
         )
+        guard isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) else { throw CancellationError() }
         registerScanningDocuments([completedDocument], workspaceId: workspaceId)
         if isDocumentAwaitingSecurityScan(completedDocument) {
             statusMessage = localized("upload.security_scan_started")
@@ -891,7 +1035,11 @@ final class NotePatchViewModel: ObservableObject {
         taskEvents = []
         statusMessage = "Starting document processing..."
         Task {
-            defer { isBusy = false }
+            defer {
+                if isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) {
+                    isBusy = false
+                }
+            }
             do {
                 let client = clientFor(activeSession)
                 let task = try await client.processDocument(
@@ -899,36 +1047,49 @@ final class NotePatchViewModel: ObservableObject {
                     documentId: document.id,
                     forceReprocess: shouldForceReprocess(document)
                 )
+                guard isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) else { return }
                 activeTask = task
                 selectedTab = .documents
                 selectedDocumentsSection = .tasks
                 let finishedTask = try await pollTask(activeSession: activeSession, workspaceId: workspaceId, taskId: task.id) { [weak self] updatedTask, events in
-                    self?.activeTask = updatedTask
-                    self?.taskEvents = events
-                    self?.setStatus(
+                    guard let self,
+                          self.isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId),
+                          self.activeTask?.id == task.id else { return }
+                    self.activeTask = updatedTask
+                    self.taskEvents = events
+                    self.setStatus(
                         "task.progress",
                         statusLabel(updatedTask.status),
                         String(updatedTask.progress.clamped(to: 0...100))
                     )
                 }
+                guard isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId),
+                      activeTask?.id == task.id else { return }
                 try await refreshWorkspaceContent(activeSession: activeSession, workspaceId: workspaceId)
+                guard isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId),
+                      activeTask?.id == task.id else { return }
                 selectedArtifactDocumentId = document.id
                 selectedArtifacts = try await client.listArtifacts(workspaceId: workspaceId, documentId: document.id)
+                guard isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId),
+                      activeTask?.id == task.id else { return }
                 if finishedTask.status == "succeeded" {
                     selectedOcrDocumentId = document.id
                     selectedOcrArtifacts = (try? await client.getOcrArtifacts(workspaceId: workspaceId, documentId: document.id).artifacts) ?? []
+                    guard isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId),
+                          activeTask?.id == task.id else { return }
                     try? await refreshLearningUnits(activeSession: activeSession, workspaceId: workspaceId)
                     try? await refreshHomeworks(activeSession: activeSession, workspaceId: workspaceId)
                 }
                 statusMessage = "Document processing complete."
             } catch {
+                guard isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) else { return }
                 showError(error)
             }
         }
     }
 
     @discardableResult
-    func startOpenClawChat(prompt rawPrompt: String) -> Bool {
+    func startOpenClawChat(prompt rawPrompt: String, attachments files: [LocalUploadFile] = []) -> Bool {
         guard let activeSession = currentSessionOrError() else {
             return false
         }
@@ -937,26 +1098,31 @@ final class NotePatchViewModel: ObservableObject {
             return false
         }
         guard !isOpenClawSending else { return false }
-        let prompt = rawPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !prompt.isEmpty else {
+        let trimmedPrompt = rawPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedPrompt.isEmpty || !files.isEmpty else {
             errorMessage = "Please enter an AI Co-pilot prompt."
             return false
         }
+        let prompt = trimmedPrompt.isEmpty ? localized("chat.attachment_default_prompt") : trimmedPrompt
+        let requestedConversationId = selectedConversationId
+        var chatAttachments = files.map { OpenClawChatAttachment(file: $0) }
+        let userMessageId = allocateOpenClawMessageId()
 
         let userMessage = OpenClawChatMessage(
-            id: allocateOpenClawMessageId(),
+            id: userMessageId,
             role: .user,
             content: prompt,
             status: .done,
             taskId: nil,
             progress: nil,
-            events: []
+            events: [],
+            attachments: chatAttachments
         )
         let assistantMessageId = allocateOpenClawMessageId()
         let assistantMessage = OpenClawChatMessage(
             id: assistantMessageId,
             role: .assistant,
-            content: "Thinking...",
+            content: files.isEmpty ? "Thinking..." : localized("chat.uploading_attachments"),
             status: .sending,
             taskId: nil,
             progress: 0,
@@ -967,23 +1133,87 @@ final class NotePatchViewModel: ObservableObject {
         errorMessage = nil
         statusMessage = ""
 
-        Task {
+        let chatGeneration = UUID()
+        openClawChatGeneration = chatGeneration
+        openClawChatTask = Task {
+            defer { finishOpenClawChat(generation: chatGeneration) }
             var latestEvents: [TaskEventItem] = []
+            var taskWasAccepted = false
             do {
-                let task = try await clientFor(activeSession).openClawChat(
+                var uploadedDocuments: [LearningDocumentItem] = []
+                for (index, file) in files.enumerated() {
+                    if let preparedDocument = preparedChatAttachmentDocuments[file.id] {
+                        uploadedDocuments.append(preparedDocument)
+                        chatAttachments[index].documentId = preparedDocument.id
+                        chatAttachments[index].status = .ready
+                        updateOpenClawMessage(userMessageId) {
+                            $0.attachments = chatAttachments
+                        }
+                        continue
+                    }
+                    let uploadSession = session ?? activeSession
+                    let uploadItem = QueuedUploadItem(
+                        file: file,
+                        documentKind: "other",
+                        learningMetadata: LearningMetadata()
+                    )
+                    setStatus("chat.uploading_attachment", String(index + 1), String(files.count), file.filename)
+                    var document = try await performUpload(
+                        uploadItem,
+                        activeSession: uploadSession,
+                        workspaceId: workspaceId
+                    )
+                    document = try await waitForChatAttachment(
+                        document,
+                        activeSession: session ?? uploadSession,
+                        workspaceId: workspaceId
+                    )
+                    preparedChatAttachmentDocuments[file.id] = document
+                    uploadedDocuments.append(document)
+                    chatAttachments[index].documentId = document.id
+                    chatAttachments[index].status = .ready
+                    updateOpenClawMessage(userMessageId) {
+                        $0.attachments = chatAttachments
+                    }
+                }
+
+                let attachmentInput: [[String: Any]] = uploadedDocuments.map { document in
+                    var value: [String: Any] = [
+                        "document_id": document.id,
+                        "filename": document.originalFilename,
+                        "file_type": document.fileType
+                    ]
+                    if let mimeType = document.detectedMimeType ?? document.mimeType, !mimeType.isEmpty {
+                        value["mime_type"] = mimeType
+                    }
+                    return value
+                }
+                let input: [String: Any] = attachmentInput.isEmpty ? [:] : ["attachments": attachmentInput]
+                let chatSession = session ?? activeSession
+                let task = try await clientFor(chatSession).openClawChat(
                     workspaceId: workspaceId,
                     prompt: prompt,
-                    conversationId: selectedConversationId
+                    conversationId: requestedConversationId,
+                    input: input
                 )
-                if let conversationId = task.payload?.objectStringValue(for: "conversation_id") {
-                    selectedConversationId = conversationId
+                taskWasAccepted = true
+                openClawComposerState.clearDraft(removeAttachmentFiles: false)
+                files.forEach { preparedChatAttachmentDocuments[$0.id] = nil }
+                let taskConversationId = task.payload?.objectStringValue(for: "conversation_id")
+                if selectedConversationId == requestedConversationId, let taskConversationId {
+                    selectedConversationId = taskConversationId
+                }
+                if let serverUserMessageId = task.payload?.objectStringValue(for: "user_message_id"),
+                   !chatAttachments.isEmpty {
+                    chatAttachmentsByMessageId[serverUserMessageId] = chatAttachments
                 }
                 updateOpenClawMessage(assistantMessageId) {
+                    $0.content = "Thinking..."
                     $0.taskId = task.id
                     $0.progress = task.progress.clamped(to: 0...100)
                     $0.modelId = task.payload?.objectStringValue(for: "ai_model")
                 }
-                let finishedTask = try await pollTask(activeSession: activeSession, workspaceId: workspaceId, taskId: task.id) { [weak self] updatedTask, events in
+                let finishedTask = try await pollTask(activeSession: chatSession, workspaceId: workspaceId, taskId: task.id) { [weak self] updatedTask, events in
                     latestEvents = events
                     self?.updateOpenClawMessage(assistantMessageId) {
                         $0.content = "Thinking..."
@@ -995,9 +1225,19 @@ final class NotePatchViewModel: ObservableObject {
                         }
                     }
                 }
-                if let conversationId = selectedConversationId {
-                    try await refreshConversationMessages(activeSession: activeSession, workspaceId: workspaceId, conversationId: conversationId)
-                    try? await refreshConversations(activeSession: activeSession, workspaceId: workspaceId)
+                if let conversationId = taskConversationId,
+                   selectedConversationId == conversationId,
+                   isCurrentWorkspaceContext(chatSession, workspaceId: workspaceId) {
+                    try await refreshConversationMessages(
+                        activeSession: chatSession,
+                        workspaceId: workspaceId,
+                        conversationId: conversationId,
+                        shouldApply: { [weak self] in
+                            self?.isCurrentWorkspaceContext(chatSession, workspaceId: workspaceId) == true
+                                && self?.selectedConversationId == conversationId
+                        }
+                    )
+                    try? await refreshConversations(activeSession: chatSession, workspaceId: workspaceId)
                 } else {
                     let answer = formatOpenClawTaskResult(finishedTask.resultText)
                     updateOpenClawMessage(assistantMessageId) {
@@ -1009,6 +1249,14 @@ final class NotePatchViewModel: ObservableObject {
                     }
                 }
             } catch {
+                if error is CancellationError {
+                    return
+                }
+                if !taskWasAccepted {
+                    openClawMessages.removeAll { $0.id == userMessageId || $0.id == assistantMessageId }
+                    showError(error)
+                    return
+                }
                 if let backendError = error as? LearningBackendError, backendError.shouldClearSession {
                     showError(error)
                 }
@@ -1023,9 +1271,51 @@ final class NotePatchViewModel: ObservableObject {
                     $0.events = latestEvents
                 }
             }
-            isOpenClawSending = false
         }
         return true
+    }
+
+    private func finishOpenClawChat(generation: UUID) {
+        guard openClawChatGeneration == generation else { return }
+        openClawChatTask = nil
+        isOpenClawSending = false
+    }
+
+    private func waitForChatAttachment(
+        _ initialDocument: LearningDocumentItem,
+        activeSession: SavedSession,
+        workspaceId: String
+    ) async throws -> LearningDocumentItem {
+        var document = initialDocument
+        var retryDelaySeconds: UInt64 = 5
+        while true {
+            try Task.checkCancellation()
+            guard selectedWorkspaceId == workspaceId else { throw CancellationError() }
+            if isDocumentSecurityBlocked(document) {
+                throw LearningBackendError(
+                    document.scanMessage ?? localized("document.error.security_scan_blocked")
+                )
+            }
+            if ["uploaded", "ready"].contains(document.status), !isDocumentAwaitingSecurityScan(document) {
+                return document
+            }
+            if ["failed", "deleted"].contains(document.status) {
+                throw LearningBackendError(document.scanMessage ?? localized("chat.attachment_upload_failed"))
+            }
+
+            try await Task.sleep(nanoseconds: 3_000_000_000)
+            do {
+                document = try await clientFor(session ?? activeSession).getDocument(
+                    workspaceId: workspaceId,
+                    documentId: document.id
+                )
+                retryDelaySeconds = 5
+            } catch let error as LearningBackendError
+                where !error.shouldClearSession && (error.statusCode == nil || (error.statusCode ?? 0) >= 500) {
+                try await Task.sleep(nanoseconds: retryDelaySeconds * 1_000_000_000)
+                retryDelaySeconds = min(retryDelaySeconds * 2, 30)
+            }
+        }
     }
 
     private func taskProviderModelId(_ task: TaskItem) -> String? {
@@ -1074,22 +1364,49 @@ final class NotePatchViewModel: ObservableObject {
 
     func selectConversation(_ conversationId: String) {
         guard let activeSession = currentSessionOrError(), let workspaceId = selectedWorkspaceId else { return }
+        conversationLoadTask?.cancel()
+        let generation = UUID()
+        conversationLoadGeneration = generation
         selectedConversationId = conversationId
         openClawMessages = []
-        Task {
-            isChatHistoryLoading = true
-            defer { isChatHistoryLoading = false }
+        isChatHistoryLoading = true
+        conversationLoadTask = Task {
+            defer {
+                if conversationLoadGeneration == generation {
+                    conversationLoadTask = nil
+                    isChatHistoryLoading = false
+                }
+            }
             do {
-                try await refreshConversationMessages(activeSession: activeSession, workspaceId: workspaceId, conversationId: conversationId)
+                try await refreshConversationMessages(
+                    activeSession: activeSession,
+                    workspaceId: workspaceId,
+                    conversationId: conversationId,
+                    shouldApply: { [weak self] in
+                        self?.conversationLoadGeneration == generation
+                            && self?.isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) == true
+                            && self?.selectedConversationId == conversationId
+                    }
+                )
+            } catch is CancellationError {
+                return
             } catch {
+                guard conversationLoadGeneration == generation,
+                      isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId),
+                      selectedConversationId == conversationId else { return }
                 showError(error)
             }
         }
     }
 
     func startNewConversation() {
+        conversationLoadGeneration = UUID()
+        conversationLoadTask?.cancel()
+        conversationLoadTask = nil
+        isChatHistoryLoading = false
         selectedConversationId = nil
         openClawMessages = [welcomeChatMessage]
+        openClawComposerState.attachments.forEach { preparedChatAttachmentDocuments[$0.id] = nil }
         openClawComposerState.clearDraft(removeAttachmentFiles: true)
     }
 
@@ -1106,15 +1423,25 @@ final class NotePatchViewModel: ObservableObject {
             return
         }
         isConversationMutating = true
+        let generation = UUID()
+        conversationMutationGeneration = generation
         errorMessage = nil
         statusMessage = "Saving conversation title..."
         Task {
-            defer { isConversationMutating = false }
+            defer {
+                if conversationMutationGeneration == generation {
+                    isConversationMutating = false
+                }
+            }
             do {
                 let updated = try await clientFor(activeSession).updateConversation(workspaceId: workspaceId, conversationId: conversationId, title: trimmed)
+                guard conversationMutationGeneration == generation,
+                      isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) else { return }
                 conversations = conversations.map { $0.id == updated.id ? updated : $0 }
                 statusMessage = "Conversation title saved."
             } catch {
+                guard conversationMutationGeneration == generation,
+                      isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) else { return }
                 showError(error)
             }
         }
@@ -1124,30 +1451,52 @@ final class NotePatchViewModel: ObservableObject {
         guard let activeSession = currentSessionOrError(), let workspaceId = selectedWorkspaceId,
               let conversationId = selectedConversationId, !isConversationMutating else { return }
         isConversationMutating = true
+        let generation = UUID()
+        conversationMutationGeneration = generation
         errorMessage = nil
         statusMessage = "Deleting conversation..."
         Task {
-            defer { isConversationMutating = false }
+            defer {
+                if conversationMutationGeneration == generation {
+                    isConversationMutating = false
+                }
+            }
             do {
                 try await clientFor(activeSession).deleteConversation(workspaceId: workspaceId, conversationId: conversationId)
+                guard conversationMutationGeneration == generation,
+                      isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) else { return }
                 conversations.removeAll { $0.id == conversationId }
                 selectedConversationId = conversations.first?.id
                 openClawMessages = [welcomeChatMessage]
                 statusMessage = "Conversation deleted."
 
                 do {
-                    try await refreshConversations(activeSession: activeSession, workspaceId: workspaceId)
+                    try await refreshConversations(
+                        activeSession: activeSession,
+                        workspaceId: workspaceId,
+                        shouldApply: { [weak self] in
+                            self?.conversationMutationGeneration == generation
+                                && self?.isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) == true
+                        }
+                    )
                     if let nextConversationId = selectedConversationId {
                         try await refreshConversationMessages(
                             activeSession: activeSession,
                             workspaceId: workspaceId,
-                            conversationId: nextConversationId
+                            conversationId: nextConversationId,
+                            shouldApply: { [weak self] in
+                                self?.conversationMutationGeneration == generation
+                                    && self?.isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) == true
+                                    && self?.selectedConversationId == nextConversationId
+                            }
                         )
                     }
                 } catch {
                     handlePostCommitRefreshFailure(error, completionKey: "operation.conversation_deleted")
                 }
             } catch {
+                guard conversationMutationGeneration == generation,
+                      isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) else { return }
                 showError(error)
             }
         }
@@ -1158,15 +1507,29 @@ final class NotePatchViewModel: ObservableObject {
         let previous = aiHistoryEnabled
         aiHistoryEnabled = enabled
         isAIPreferenceUpdating = true
+        let generation = UUID()
+        aiPreferenceGeneration = generation
         errorMessage = nil
         statusMessage = "Saving AI history setting..."
-        Task {
-            defer { isAIPreferenceUpdating = false }
+        aiPreferenceTask = Task {
+            defer {
+                if aiPreferenceGeneration == generation {
+                    aiPreferenceTask = nil
+                    isAIPreferenceUpdating = false
+                }
+            }
             do {
                 let response = try await clientFor(activeSession).updateAIPreferences(aiHistoryEnabled: enabled)
-                saveSession(activeSession.withAIHistoryEnabled(response.aiHistoryEnabled))
+                guard aiPreferenceGeneration == generation,
+                      let currentSession = session,
+                      currentSession.userId == activeSession.userId else { return }
+                saveSession(currentSession.withAIHistoryEnabled(response.aiHistoryEnabled))
                 statusMessage = "AI history setting saved."
+            } catch is CancellationError {
+                return
             } catch {
+                guard aiPreferenceGeneration == generation,
+                      session?.userId == activeSession.userId else { return }
                 aiHistoryEnabled = previous
                 showError(error)
             }
@@ -1339,6 +1702,8 @@ final class NotePatchViewModel: ObservableObject {
     }
 
     func openStudyNote(_ item: StudyNoteListItem) {
+        let generation = UUID()
+        studyNoteReaderGeneration = generation
         cancelStudyNoteEditing()
         selectedStudyNoteItem = item
         studyNoteHTML = nil
@@ -1364,7 +1729,11 @@ final class NotePatchViewModel: ObservableObject {
 
         isStudyNoteLoading = true
         Task {
-            defer { isStudyNoteLoading = false }
+            defer {
+                if studyNoteReaderGeneration == generation {
+                    isStudyNoteLoading = false
+                }
+            }
             do {
                 try await loadStudyNoteReader(
                     activeSession: activeSession,
@@ -1372,16 +1741,21 @@ final class NotePatchViewModel: ObservableObject {
                     learningUnitId: item.learningUnit.id,
                     note: item.note
                 )
-                guard selectedStudyNoteItem?.id == item.id else { return }
+                guard studyNoteReaderGeneration == generation,
+                      isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId),
+                      selectedStudyNoteItem?.id == item.id else { return }
                 statusMessage = localized("operation.note_loaded")
             } catch {
-                guard selectedStudyNoteItem?.id == item.id else { return }
+                guard studyNoteReaderGeneration == generation,
+                      isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId),
+                      selectedStudyNoteItem?.id == item.id else { return }
                 studyNoteReaderError = friendlyError(error)
             }
         }
     }
 
     func closeStudyNoteReader() {
+        studyNoteReaderGeneration = UUID()
         cancelStudyNoteEditing()
         selectedStudyNoteItem = nil
         studyNoteHTML = nil
@@ -1490,10 +1864,16 @@ final class NotePatchViewModel: ObservableObject {
         }
 
         isStudyNoteSaving = true
+        let saveGeneration = UUID()
+        studyNoteSaveGeneration = saveGeneration
         studyNoteEditorError = nil
         errorMessage = nil
         Task {
-            defer { isStudyNoteSaving = false }
+            defer {
+                if studyNoteSaveGeneration == saveGeneration {
+                    isStudyNoteSaving = false
+                }
+            }
             let input = StudyNoteRevisionInput(
                 html: html,
                 title: title.nilIfBlank,
@@ -1506,6 +1886,10 @@ final class NotePatchViewModel: ObservableObject {
                     baseVersionId: item.note.id,
                     input: input
                 )
+                guard studyNoteSaveGeneration == saveGeneration,
+                      isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId),
+                      selectedStudyNoteItem?.id == item.id,
+                      isStudyNoteEditorPresented else { return }
                 let optimisticItem = StudyNoteListItem(learningUnit: item.learningUnit, note: response.note)
                 selectedStudyNoteItem = optimisticItem
                 studyNoteHTML = html
@@ -1518,6 +1902,9 @@ final class NotePatchViewModel: ObservableObject {
                         workspaceId: workspaceId,
                         learningUnit: item.learningUnit
                     )
+                    guard studyNoteSaveGeneration == saveGeneration,
+                          isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId),
+                          selectedStudyNoteItem?.note.id == response.note.id else { return }
                     if let refreshed = refreshedItems.first(where: { $0.note.id == response.note.id }) {
                         selectedStudyNoteItem = refreshed
                         await refreshRenderedStudyNoteAfterRevision(
@@ -1531,6 +1918,9 @@ final class NotePatchViewModel: ObservableObject {
                     handlePostCommitRefreshFailure(error, completionKey: "operation.note_revision_saved")
                 }
             } catch let error as LearningBackendError where error.statusCode == 409 {
+                guard studyNoteSaveGeneration == saveGeneration,
+                      isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId),
+                      isStudyNoteEditorPresented else { return }
                 await handleStudyNoteRevisionConflict(
                     activeSession: activeSession,
                     workspaceId: workspaceId,
@@ -1539,6 +1929,9 @@ final class NotePatchViewModel: ObservableObject {
                     afterConflictConfirmation: afterConflictConfirmation
                 )
             } catch {
+                guard studyNoteSaveGeneration == saveGeneration,
+                      isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId),
+                      isStudyNoteEditorPresented else { return }
                 studyNoteEditorError = friendlyError(error)
                 if let backendError = error as? LearningBackendError,
                    backendError.shouldClearSession || backendError.statusCode == 403 {
@@ -1549,14 +1942,30 @@ final class NotePatchViewModel: ObservableObject {
     }
 
     func selectLearningUnit(_ learningUnitId: String) {
+        let generation = UUID()
+        learningUnitSelectionGeneration = generation
         selectedLearningUnitId = learningUnitId
         guard let activeSession = currentSessionOrError(), let workspaceId = selectedWorkspaceId else { return }
         Task {
             isLearningLoading = true
-            defer { isLearningLoading = false }
+            defer {
+                if learningUnitSelectionGeneration == generation {
+                    isLearningLoading = false
+                }
+            }
             do {
-                studyNotes = try await clientFor(activeSession).listStudyNotes(workspaceId: workspaceId, learningUnitId: learningUnitId)
+                let loadedNotes = try await clientFor(activeSession).listStudyNotes(
+                    workspaceId: workspaceId,
+                    learningUnitId: learningUnitId
+                )
+                guard learningUnitSelectionGeneration == generation,
+                      isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId),
+                      selectedLearningUnitId == learningUnitId else { return }
+                studyNotes = loadedNotes
             } catch {
+                guard learningUnitSelectionGeneration == generation,
+                      isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId),
+                      selectedLearningUnitId == learningUnitId else { return }
                 showError(error)
             }
         }
@@ -1876,6 +2285,7 @@ final class NotePatchViewModel: ObservableObject {
 
     func searchKnowledge() {
         guard let activeSession = currentSessionOrError(), let workspaceId = selectedWorkspaceId else { return }
+        guard !isKnowledgeSearching else { return }
         let query = knowledgeQuery.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else {
             errorMessage = "Please enter a knowledge search query."
@@ -1885,19 +2295,32 @@ final class NotePatchViewModel: ObservableObject {
             errorMessage = "Knowledge search query cannot exceed 8,000 characters."
             return
         }
-        knowledgeLimit = knowledgeLimit.clamped(to: 1...20)
-        Task {
-            isKnowledgeSearching = true
-            errorMessage = nil
-            defer { isKnowledgeSearching = false }
+        let limit = knowledgeLimit.clamped(to: 1...20)
+        let learningUnitId = knowledgeLearningUnitId.nilIfBlank
+        let subject = knowledgeSubject.nilIfBlank
+        knowledgeLimit = limit
+        knowledgeSearchTask?.cancel()
+        let generation = UUID()
+        knowledgeSearchGeneration = generation
+        isKnowledgeSearching = true
+        errorMessage = nil
+        knowledgeSearchTask = Task {
+            defer {
+                if knowledgeSearchGeneration == generation {
+                    knowledgeSearchTask = nil
+                    isKnowledgeSearching = false
+                }
+            }
             do {
                 let response = try await clientFor(activeSession).searchKnowledge(
                     workspaceId: workspaceId,
                     query: query,
-                    learningUnitId: knowledgeLearningUnitId.nilIfBlank,
-                    subject: knowledgeSubject.nilIfBlank,
-                    limit: knowledgeLimit
+                    learningUnitId: learningUnitId,
+                    subject: subject,
+                    limit: limit
                 )
+                guard knowledgeSearchGeneration == generation,
+                      isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) else { return }
                 knowledgeResults = response.items
                 hasSearchedKnowledge = true
                 if response.items.isEmpty {
@@ -1905,7 +2328,11 @@ final class NotePatchViewModel: ObservableObject {
                 } else {
                     setStatus("knowledge.results_found", String(response.items.count))
                 }
+            } catch is CancellationError {
+                return
             } catch {
+                guard knowledgeSearchGeneration == generation,
+                      isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) else { return }
                 showError(error)
             }
         }
@@ -1920,17 +2347,26 @@ final class NotePatchViewModel: ObservableObject {
         guard let activeSession = currentSessionOrError(), let workspaceId = selectedWorkspaceId else { return }
         Task {
             isBusy = true
-            defer { isBusy = false }
+            defer {
+                if isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) {
+                    isBusy = false
+                }
+            }
             do {
                 let document = try await clientFor(activeSession).getDocument(workspaceId: workspaceId, documentId: documentId)
+                guard isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) else { return }
                 downloadAndPreview(document)
             } catch {
+                guard isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) else { return }
                 showError(error)
             }
         }
     }
 
     func selectHomework(_ homeworkId: String) {
+        homeworkSelectionTask?.cancel()
+        let generation = UUID()
+        homeworkSelectionGeneration = generation
         selectedHomeworkId = homeworkId
         homeworkReferences = []
         lastGradingTask = nil
@@ -1939,12 +2375,26 @@ final class NotePatchViewModel: ObservableObject {
             homeworkMaxScoreText = formatScore(homework.maxScore)
         }
         guard let activeSession = currentSessionOrError(), let workspaceId = selectedWorkspaceId else { return }
-        Task {
-            isHomeworkLoading = true
-            defer { isHomeworkLoading = false }
+        isHomeworkLoading = true
+        homeworkSelectionTask = Task {
+            defer {
+                if homeworkSelectionGeneration == generation {
+                    homeworkSelectionTask = nil
+                    isHomeworkLoading = false
+                }
+            }
             do {
-                homeworkReferences = try await clientFor(activeSession).listHomeworkReferences(workspaceId: workspaceId, homeworkId: homeworkId)
+                let references = try await clientFor(activeSession).listHomeworkReferences(workspaceId: workspaceId, homeworkId: homeworkId)
+                guard homeworkSelectionGeneration == generation,
+                      isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId),
+                      selectedHomeworkId == homeworkId else { return }
+                homeworkReferences = references
+            } catch is CancellationError {
+                return
             } catch {
+                guard homeworkSelectionGeneration == generation,
+                      isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId),
+                      selectedHomeworkId == homeworkId else { return }
                 showError(error)
             }
         }
@@ -1957,9 +2407,11 @@ final class NotePatchViewModel: ObservableObject {
         description: String,
         dueAt: Date?,
         rubricText: String,
-        maxScoreText: String
+        maxScoreText: String,
+        onCommitted: @escaping @MainActor () -> Void = {}
     ) -> Bool {
-        guard let activeSession = currentSessionOrError(), let workspaceId = selectedWorkspaceId else { return false }
+        guard let activeSession = currentSessionOrError(), let workspaceId = selectedWorkspaceId,
+              !isHomeworkLoading else { return false }
         let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard homeworkDocumentCandidates.contains(where: { $0.id == documentId }) else {
             errorMessage = "Please select a processed homework document."
@@ -1981,16 +2433,32 @@ final class NotePatchViewModel: ObservableObject {
             rubricText: rubricText.nilIfBlank,
             maxScore: maxScore
         )
+        isHomeworkLoading = true
+        errorMessage = nil
         Task {
-            isHomeworkLoading = true
-            errorMessage = nil
             defer { isHomeworkLoading = false }
             do {
                 let homework = try await clientFor(activeSession).createHomework(workspaceId: workspaceId, input: input)
-                try await refreshHomeworks(activeSession: activeSession, workspaceId: workspaceId)
-                selectHomework(homework.id)
+                guard isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) else { return }
+                if let index = homeworks.firstIndex(where: { $0.id == homework.id }) {
+                    homeworks[index] = homework
+                } else {
+                    homeworks.insert(homework, at: 0)
+                }
+                selectedHomeworkId = homework.id
+                homeworkReferences = []
+                homeworkRubricText = homework.rubricText ?? ""
+                homeworkMaxScoreText = formatScore(homework.maxScore)
                 statusMessage = "Homework created."
+                onCommitted()
+                do {
+                    try await refreshHomeworks(activeSession: activeSession, workspaceId: workspaceId)
+                } catch {
+                    guard isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) else { return }
+                    handlePostCommitRefreshFailure(error, completionKey: "Homework created.")
+                }
             } catch {
+                guard isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) else { return }
                 showError(error)
             }
         }
@@ -2006,6 +2474,8 @@ final class NotePatchViewModel: ObservableObject {
         }
         guard isGradingConfigDirty else { return }
         let input = GradingConfigInput(rubricText: homeworkRubricText.nilIfBlank, maxScore: maxScore)
+        let submittedRubricText = homeworkRubricText
+        let submittedMaxScoreText = homeworkMaxScoreText
         isHomeworkLoading = true
         errorMessage = nil
         statusMessage = "Saving grading configuration..."
@@ -2013,18 +2483,28 @@ final class NotePatchViewModel: ObservableObject {
             defer { isHomeworkLoading = false }
             do {
                 let updated = try await clientFor(activeSession).updateGradingConfig(workspaceId: workspaceId, homeworkId: homeworkId, input: input)
+                guard isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId),
+                      selectedHomeworkId == homeworkId else { return }
                 homeworks = homeworks.map { $0.id == updated.id ? updated : $0 }
-                homeworkRubricText = updated.rubricText ?? ""
-                homeworkMaxScoreText = formatScore(updated.maxScore)
+                if homeworkRubricText == submittedRubricText,
+                   homeworkMaxScoreText == submittedMaxScoreText {
+                    homeworkRubricText = updated.rubricText ?? ""
+                    homeworkMaxScoreText = formatScore(updated.maxScore)
+                }
                 lastGradingTask = nil
                 statusMessage = "Grading configuration saved. Please re-grade."
             } catch {
+                guard isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId),
+                      selectedHomeworkId == homeworkId else { return }
                 showError(error)
             }
         }
     }
 
-    func addHomeworkReference(documentId: String) {
+    func addHomeworkReference(
+        documentId: String,
+        onCommitted: @escaping @MainActor () -> Void = {}
+    ) {
         guard let document = referenceDocumentCandidates.first(where: { $0.id == documentId }),
               let activeSession = currentSessionOrError(), let workspaceId = selectedWorkspaceId,
               let homeworkId = selectedHomeworkId, !isHomeworkLoading else { return }
@@ -2039,10 +2519,19 @@ final class NotePatchViewModel: ObservableObject {
                     documentId: document.id,
                     referenceType: document.documentKind
                 )
-                homeworkReferences.append(reference)
+                guard isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId),
+                      selectedHomeworkId == homeworkId else { return }
+                if let index = homeworkReferences.firstIndex(where: { $0.id == reference.id }) {
+                    homeworkReferences[index] = reference
+                } else {
+                    homeworkReferences.append(reference)
+                }
                 lastGradingTask = nil
                 statusMessage = "Reference added. Please re-grade."
+                onCommitted()
             } catch {
+                guard isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId),
+                      selectedHomeworkId == homeworkId else { return }
                 showError(error)
             }
         }
@@ -2059,15 +2548,22 @@ final class NotePatchViewModel: ObservableObject {
             do {
                 let client = clientFor(activeSession)
                 try await client.deleteHomeworkReference(workspaceId: workspaceId, homeworkId: homeworkId, referenceId: reference.id)
+                guard isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId),
+                      selectedHomeworkId == homeworkId else { return }
                 homeworkReferences.removeAll { $0.id == reference.id }
                 lastGradingTask = nil
                 statusMessage = "Reference removed. Please re-grade."
                 do {
-                    homeworkReferences = try await client.listHomeworkReferences(workspaceId: workspaceId, homeworkId: homeworkId)
+                    let refreshedReferences = try await client.listHomeworkReferences(workspaceId: workspaceId, homeworkId: homeworkId)
+                    guard isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId),
+                          selectedHomeworkId == homeworkId else { return }
+                    homeworkReferences = refreshedReferences
                 } catch {
                     handlePostCommitRefreshFailure(error, completionKey: "operation.reference_removed")
                 }
             } catch {
+                guard isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId),
+                      selectedHomeworkId == homeworkId else { return }
                 showError(error)
             }
         }
@@ -2075,7 +2571,7 @@ final class NotePatchViewModel: ObservableObject {
 
     func gradeSelectedHomework() {
         guard let activeSession = currentSessionOrError(), let workspaceId = selectedWorkspaceId,
-              let homeworkId = selectedHomeworkId else { return }
+              let homeworkId = selectedHomeworkId, !isHomeworkLoading else { return }
         Task {
             isHomeworkLoading = true
             errorMessage = nil
@@ -2084,23 +2580,32 @@ final class NotePatchViewModel: ObservableObject {
             defer { isHomeworkLoading = false }
             do {
                 let task = try await clientFor(activeSession).gradeHomework(workspaceId: workspaceId, homeworkId: homeworkId)
+                guard isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId),
+                      selectedHomeworkId == homeworkId else { return }
                 activeTask = task
                 selectedTab = .documents
                 selectedDocumentsSection = .tasks
                 let finished = try await pollTask(activeSession: activeSession, workspaceId: workspaceId, taskId: task.id) { [weak self] task, events in
-                    self?.activeTask = task
-                    self?.taskEvents = events
-                    self?.setStatus(
+                    guard let self,
+                          self.isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId),
+                          self.activeTask?.id == task.id else { return }
+                    self.activeTask = task
+                    self.taskEvents = events
+                    self.setStatus(
                         "grading.task_progress",
                         statusLabel(task.status),
                         String(task.progress.clamped(to: 0...100))
                     )
                 }
+                guard isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId),
+                      selectedHomeworkId == homeworkId else { return }
                 lastGradingTask = finished
                 try await refreshHomeworks(activeSession: activeSession, workspaceId: workspaceId)
                 try? await refreshLearningUnits(activeSession: activeSession, workspaceId: workspaceId)
                 statusMessage = "Homework grading complete."
             } catch {
+                guard isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId),
+                      selectedHomeworkId == homeworkId else { return }
                 showError(error)
             }
         }
@@ -2110,7 +2615,11 @@ final class NotePatchViewModel: ObservableObject {
         guard let activeSession = currentSessionOrError(), let workspaceId = selectedWorkspaceId else { return }
         Task {
             isBusy = true
-            defer { isBusy = false }
+            defer {
+                if isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) {
+                    isBusy = false
+                }
+            }
             do {
                 let client = clientFor(activeSession)
                 let response = try await client.getStudyNoteDownloadURL(
@@ -2124,9 +2633,13 @@ final class NotePatchViewModel: ObservableObject {
                     downloadURL: response.downloadURL,
                     filename: response.filename,
                     mimeType: "text/html",
-                    completionMessage: "Study note downloaded."
+                    completionMessage: "Study note downloaded.",
+                    shouldApply: { [weak self] in
+                        self?.isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) == true
+                    }
                 )
             } catch {
+                guard isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) else { return }
                 showError(error)
             }
         }
@@ -2142,16 +2655,26 @@ final class NotePatchViewModel: ObservableObject {
         }
         Task {
             isBusy = true
+            defer {
+                if isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) {
+                    isBusy = false
+                }
+            }
             errorMessage = nil
             statusMessage = "Loading artifacts..."
             do {
+                let loadedArtifacts = try await clientFor(activeSession).listArtifacts(
+                    workspaceId: workspaceId,
+                    documentId: document.id
+                )
+                guard isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) else { return }
                 selectedArtifactDocumentId = document.id
-                selectedArtifacts = try await clientFor(activeSession).listArtifacts(workspaceId: workspaceId, documentId: document.id)
+                selectedArtifacts = loadedArtifacts
                 statusMessage = "Artifacts loaded."
             } catch {
+                guard isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) else { return }
                 showError(error)
             }
-            isBusy = false
         }
     }
 
@@ -2165,18 +2688,25 @@ final class NotePatchViewModel: ObservableObject {
         }
         Task {
             isBusy = true
+            defer {
+                if isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) {
+                    isBusy = false
+                }
+            }
             errorMessage = nil
             statusMessage = "Loading OCR results..."
             do {
-                selectedOcrDocumentId = document.id
-                selectedOcrArtifacts = try await clientFor(activeSession)
+                let loadedArtifacts = try await clientFor(activeSession)
                     .getOcrArtifacts(workspaceId: workspaceId, documentId: document.id, includeDownloadURL: true)
                     .artifacts
+                guard isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) else { return }
+                selectedOcrDocumentId = document.id
+                selectedOcrArtifacts = loadedArtifacts
                 statusMessage = selectedOcrArtifacts.isEmpty ? "No OCR results yet." : "OCR results loaded."
             } catch {
+                guard isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) else { return }
                 showError(error)
             }
-            isBusy = false
         }
     }
 
@@ -2201,11 +2731,16 @@ final class NotePatchViewModel: ObservableObject {
 
         Task {
             var deletionAccepted = false
-            defer { isBusy = false }
+            defer {
+                if isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) {
+                    isBusy = false
+                }
+            }
             do {
                 let client = clientFor(activeSession)
                 let response = try await client.deleteDocument(workspaceId: workspaceId, documentId: documentId)
                 deletionAccepted = true
+                guard isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) else { return }
                 retryableDocumentPurgeId = response.documentId
                 removeDeletedDocumentFromLocalState(response.documentId)
                 selectedTab = .documents
@@ -2213,21 +2748,27 @@ final class NotePatchViewModel: ObservableObject {
                 statusMessage = "Document deleted. Cleaning up original and derivative data..."
 
                 let initialTask = try await client.getTask(workspaceId: workspaceId, taskId: response.purgeTaskId)
+                guard isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) else { return }
                 activeTask = initialTask
                 let finishedTask = try await pollTask(
                     activeSession: activeSession,
                     workspaceId: workspaceId,
                     taskId: response.purgeTaskId
                 ) { [weak self] task, events in
-                    self?.activeTask = task
-                    self?.taskEvents = events
-                    self?.setStatus(
+                    guard let self,
+                          self.isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId),
+                          self.activeTask?.id == response.purgeTaskId else { return }
+                    self.activeTask = task
+                    self.taskEvents = events
+                    self.setStatus(
                         "document.cleanup_progress",
                         statusLabel(task.status),
                         String(task.progress.clamped(to: 0...100))
                     )
                 }
 
+                guard isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId),
+                      activeTask?.id == response.purgeTaskId else { return }
                 guard finishedTask.status == "succeeded" else { return }
                 retryableDocumentPurgeId = nil
                 isDocumentPurgeRetryAvailable = false
@@ -2236,6 +2777,7 @@ final class NotePatchViewModel: ObservableObject {
                     handlePostCommitRefreshFailure(refreshError, completionKey: "operation.document_cleanup_completed")
                 }
             } catch {
+                guard isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) else { return }
                 if deletionAccepted && !shouldStopPostCommitRefresh(for: error) {
                     isDocumentPurgeRetryAvailable = true
                 }
@@ -2269,6 +2811,11 @@ final class NotePatchViewModel: ObservableObject {
         }
         Task {
             isBusy = true
+            defer {
+                if isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) {
+                    isBusy = false
+                }
+            }
             errorMessage = nil
             statusMessage = "Fetching artifact download link..."
             do {
@@ -2286,17 +2833,20 @@ final class NotePatchViewModel: ObservableObject {
                     downloadURL: response.downloadURL,
                     filename: filename,
                     mimeType: response.mimeType ?? artifact.mimeType,
-                    completionMessage: "\(artifactTypeLabel(artifact.artifactType)) downloaded."
+                    completionMessage: "\(artifactTypeLabel(artifact.artifactType)) downloaded.",
+                    shouldApply: { [weak self] in
+                        self?.isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) == true
+                    }
                 )
             } catch {
+                guard isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) else { return }
                 showError(error)
             }
-            isBusy = false
         }
     }
 
     func downloadAndPreview(_ artifact: OcrArtifactItem) {
-        guard let activeSession = currentSessionOrError() else {
+        guard let activeSession = currentSessionOrError(), let workspaceId = selectedWorkspaceId else {
             return
         }
         guard let downloadURL = artifact.downloadURL, !downloadURL.isEmpty else {
@@ -2305,6 +2855,11 @@ final class NotePatchViewModel: ObservableObject {
         }
         Task {
             isBusy = true
+            defer {
+                if isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) {
+                    isBusy = false
+                }
+            }
             errorMessage = nil
             statusMessage = "Downloading OCR results..."
             do {
@@ -2313,12 +2868,15 @@ final class NotePatchViewModel: ObservableObject {
                     downloadURL: downloadURL,
                     filename: defaultArtifactFilename(type: artifact.artifactType, mimeType: artifact.mimeType, fallback: artifact.id),
                     mimeType: artifact.mimeType,
-                    completionMessage: "\(artifactTypeLabel(artifact.artifactType)) downloaded."
+                    completionMessage: "\(artifactTypeLabel(artifact.artifactType)) downloaded.",
+                    shouldApply: { [weak self] in
+                        self?.isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) == true
+                    }
                 )
             } catch {
+                guard isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) else { return }
                 showError(error)
             }
-            isBusy = false
         }
     }
 
@@ -2332,21 +2890,28 @@ final class NotePatchViewModel: ObservableObject {
         }
         Task {
             isBusy = true
+            defer {
+                if isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) {
+                    isBusy = false
+                }
+            }
             errorMessage = nil
             statusMessage = "Fetching download link..."
             do {
                 let client = clientFor(activeSession)
                 let response = try await client.getDownloadURL(workspaceId: workspaceId, documentId: document.id)
+                guard isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) else { return }
                 statusMessage = "Downloading file..."
                 let directory = cacheDirectory.appendingPathComponent("downloads", isDirectory: true)
                 let targetURL = directory.appendingPathComponent(sanitizeFileName(document.originalFilename))
                 let downloadedURL = try await client.download(downloadURL: response.downloadURL, targetURL: targetURL)
+                guard isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) else { return }
                 downloadedPreview = DownloadedPreview(url: downloadedURL, mimeType: document.mimeType ?? contentTypeForFilename(document.originalFilename))
                 statusMessage = document.mimeType?.hasPrefix("image/") == true ? "Image downloaded." : "File downloaded."
             } catch {
+                guard isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) else { return }
                 showError(error)
             }
-            isBusy = false
         }
     }
 
@@ -2355,13 +2920,15 @@ final class NotePatchViewModel: ObservableObject {
         downloadURL: String,
         filename: String,
         mimeType: String?,
-        completionMessage: String
+        completionMessage: String,
+        shouldApply: @escaping @MainActor () -> Bool = { true }
     ) async throws {
         statusMessage = "Downloading file..."
         let directory = cacheDirectory.appendingPathComponent("downloads", isDirectory: true)
         let safeFilename = sanitizeFileName(filename)
         let targetURL = directory.appendingPathComponent(safeFilename)
         let downloadedURL = try await client.download(downloadURL: downloadURL, targetURL: targetURL)
+        guard shouldApply() else { throw CancellationError() }
         downloadedPreview = DownloadedPreview(url: downloadedURL, mimeType: mimeType ?? contentTypeForFilename(safeFilename))
         statusMessage = completionMessage
     }
@@ -2417,6 +2984,15 @@ final class NotePatchViewModel: ObservableObject {
             return nil
         }
         return session
+    }
+
+    private func isCurrentWorkspaceContext(_ activeSession: SavedSession, workspaceId: String) -> Bool {
+        guard let currentSession = session else { return false }
+        return currentSession.userId == activeSession.userId && selectedWorkspaceId == workspaceId
+    }
+
+    private func isCurrentSessionContext(_ activeSession: SavedSession) -> Bool {
+        session?.userId == activeSession.userId
     }
 
     private func showError(_ error: Error) {
@@ -2561,8 +3137,8 @@ final class NotePatchViewModel: ObservableObject {
             Flashcard(
                 id: "card-1",
                 knowledgePointId: "point-1",
-                front: "What does a ratio compare?",
-                back: "The relationship between two quantities.",
+                front: "What does a **ratio** compare?",
+                back: "The relationship between **two quantities**.",
                 priorityScore: 1.8,
                 priorityFactors: ["base": .number(1), "error_pressure": .number(0.4), "success_pressure": .number(0.1), "recent_correct_streak": .number(0)],
                 rank: 1,
@@ -2571,8 +3147,8 @@ final class NotePatchViewModel: ObservableObject {
             Flashcard(
                 id: "card-2",
                 knowledgePointId: "point-2",
-                front: "How do you solve a proportion?",
-                back: "Set the cross products equal, then solve for the unknown.",
+                front: "## How do you solve a proportion?",
+                back: "1. Set the cross products equal.\n2. Solve for the `unknown`.",
                 priorityScore: 1.2,
                 priorityFactors: ["base": .number(1), "recent_correct_streak": .number(1)],
                 rank: 2,
@@ -2634,7 +3210,21 @@ final class NotePatchViewModel: ObservableObject {
         stopStudyNoteGenerationPolling()
         stopScanTracking(clearDocuments: true)
         invalidateDeferredContentLoads()
+        aiPreferenceGeneration = UUID()
+        aiPreferenceTask?.cancel()
+        aiPreferenceTask = nil
+        uploadImportGeneration = UUID()
+        uploadQueueGeneration = UUID()
+        learningUnitSelectionGeneration = UUID()
+        workspaceContentGeneration = UUID()
+        learningContentGeneration = UUID()
+        homeworkContentGeneration = UUID()
+        studyNoteReaderGeneration = UUID()
+        studyNoteSaveGeneration = UUID()
         settings.clearSession()
+        isBusy = false
+        uploadProgressPercent = nil
+        uploadProgressLabel = ""
         isOfflineTestMode = false
         didRestoreSession = false
         session = nil
@@ -2649,13 +3239,7 @@ final class NotePatchViewModel: ObservableObject {
         taskEvents = []
         retryableDocumentPurgeId = nil
         isDocumentPurgeRetryAvailable = false
-        conversations = []
-        selectedConversationId = nil
-        openClawMessages = [welcomeChatMessage]
-        openClawComposerState.clearDraft(removeAttachmentFiles: true)
-        isOpenClawSending = false
-        isChatHistoryLoading = false
-        isConversationMutating = false
+        clearChatWorkspaceState()
         isAIPreferenceUpdating = false
         clearAIModelState()
         learningUnits = []
@@ -2685,6 +3269,13 @@ final class NotePatchViewModel: ObservableObject {
         try? FileManager.default.removeItem(at: file.url)
     }
 
+    private func discardImportedUploadFiles(_ files: [LocalUploadFile]) {
+        for file in files {
+            UploadThumbnailCache.shared.remove(file: file)
+            removeCachedUploadFile(file)
+        }
+    }
+
     private func saveSession(_ updated: SavedSession) {
         if !isOfflineTestMode {
             settings.saveSession(updated)
@@ -2702,6 +3293,7 @@ final class NotePatchViewModel: ObservableObject {
         if selectedWorkspaceId != workspaceId {
             invalidateDeferredContentLoads()
             clearAIModelState()
+            clearChatWorkspaceState()
         }
         selectedWorkspaceId = workspaceId
         if !isOfflineTestMode {
@@ -3088,12 +3680,25 @@ final class NotePatchViewModel: ObservableObject {
     }
 
     private func refreshWorkspaceContent(activeSession: SavedSession, workspaceId: String) async throws {
-        documents = try await clientFor(activeSession).listDocuments(
+        let generation = UUID()
+        workspaceContentGeneration = generation
+        let requestedStatus = statusFilter.nilIfBlank
+        let requestedDocumentKind = documentKindFilter.nilIfBlank
+        let requestedFileType = fileTypeFilter.nilIfBlank
+        let loadedDocuments = try await clientFor(activeSession).listDocuments(
             workspaceId: workspaceId,
-            status: statusFilter.isEmpty ? nil : statusFilter,
-            documentKind: documentKindFilter.isEmpty ? nil : documentKindFilter,
-            fileType: fileTypeFilter.isEmpty ? nil : fileTypeFilter
+            status: requestedStatus,
+            documentKind: requestedDocumentKind,
+            fileType: requestedFileType
         )
+        guard workspaceContentGeneration == generation,
+              isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId),
+              statusFilter.nilIfBlank == requestedStatus,
+              documentKindFilter.nilIfBlank == requestedDocumentKind,
+              fileTypeFilter.nilIfBlank == requestedFileType else {
+            throw CancellationError()
+        }
+        documents = loadedDocuments
         registerScanningDocuments(documents, workspaceId: workspaceId)
         if let selectedArtifactDocumentId,
            !documents.contains(where: { $0.id == selectedArtifactDocumentId }) {
@@ -3249,21 +3854,12 @@ final class NotePatchViewModel: ObservableObject {
     private func loadWorkspaces(activeSession: SavedSession, preferredWorkspaceId: String?) async throws {
         let client = clientFor(activeSession)
         let user = try await client.me()
+        guard isCurrentSessionContext(activeSession) else { throw CancellationError() }
         if user.email != activeSession.email || user.fullName != activeSession.fullName || user.aiHistoryEnabled != activeSession.aiHistoryEnabled {
-            saveSession(
-                SavedSession(
-                    baseURL: activeSession.baseURL,
-                    tusBaseURL: activeSession.tusBaseURL,
-                    accessToken: activeSession.accessToken,
-                    refreshToken: activeSession.refreshToken,
-                    expiresAt: activeSession.expiresAt,
-                    userId: user.id,
-                    email: user.email,
-                    fullName: user.fullName,
-                    selectedWorkspaceId: activeSession.selectedWorkspaceId,
-                    aiHistoryEnabled: user.aiHistoryEnabled
-                )
-            )
+            guard let currentSession = session, currentSession.userId == activeSession.userId else {
+                throw CancellationError()
+            }
+            saveSession(currentSession.withUser(user))
         }
 
         var loadedWorkspaces = try await client.listWorkspaces()
@@ -3274,6 +3870,7 @@ final class NotePatchViewModel: ObservableObject {
                 loadedWorkspaces = try await client.listWorkspaces()
             }
         }
+        guard isCurrentSessionContext(activeSession) else { throw CancellationError() }
         let personalWorkspaces = loadedWorkspaces.filter { $0.type == "personal" }
         let selectableWorkspaces = personalWorkspaces.isEmpty ? loadedWorkspaces : personalWorkspaces
         workspaces = selectableWorkspaces
@@ -3527,7 +4124,8 @@ final class NotePatchViewModel: ObservableObject {
                 events: [],
                 citations: chatMessage.citations ?? [],
                 sourceStatus: chatMessage.sourceStatus,
-                modelId: chatMessage.modelId
+                modelId: chatMessage.modelId,
+                attachments: chatAttachmentsByMessageId[chatMessage.id] ?? []
             )
         }
         openClawMessages = messages.isEmpty ? [welcomeChatMessage] : messages
@@ -3578,12 +4176,32 @@ final class NotePatchViewModel: ObservableObject {
     }
 
     private func refreshLearningUnits(activeSession: SavedSession, workspaceId: String) async throws {
-        learningUnits = try await clientFor(activeSession).listLearningUnits(workspaceId: workspaceId)
-        if let selectedLearningUnitId, learningUnits.contains(where: { $0.id == selectedLearningUnitId }) {
-            studyNotes = try await clientFor(activeSession).listStudyNotes(workspaceId: workspaceId, learningUnitId: selectedLearningUnitId)
-        } else if selectedLearningUnitId != nil {
+        let generation = UUID()
+        learningContentGeneration = generation
+        let loadedUnits = try await clientFor(activeSession).listLearningUnits(workspaceId: workspaceId)
+        guard learningContentGeneration == generation,
+              isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) else {
+            throw CancellationError()
+        }
+        let requestedUnitId = selectedLearningUnitId
+        var loadedNotes: [StudyNoteVersion] = []
+        if let requestedUnitId, loadedUnits.contains(where: { $0.id == requestedUnitId }) {
+            loadedNotes = try await clientFor(activeSession).listStudyNotes(
+                workspaceId: workspaceId,
+                learningUnitId: requestedUnitId
+            )
+            guard learningContentGeneration == generation,
+                  isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId),
+                  selectedLearningUnitId == requestedUnitId else {
+                throw CancellationError()
+            }
+        }
+        learningUnits = loadedUnits
+        if requestedUnitId != nil, !loadedUnits.contains(where: { $0.id == requestedUnitId }) {
             self.selectedLearningUnitId = nil
             studyNotes = []
+        } else if requestedUnitId != nil {
+            studyNotes = loadedNotes
         }
     }
 
@@ -3595,6 +4213,9 @@ final class NotePatchViewModel: ObservableObject {
         let notes = try await clientFor(activeSession)
             .listStudyNotes(workspaceId: workspaceId, learningUnitId: learningUnit.id)
             .sorted { $0.versionNo > $1.versionNo }
+        guard isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) else {
+            throw CancellationError()
+        }
         let items = notes.map { StudyNoteListItem(learningUnit: learningUnit, note: $0) }
         let group = StudyNoteGroup(learningUnit: learningUnit, notes: items)
         if let index = studyNoteGroups.firstIndex(where: { $0.learningUnit.id == learningUnit.id }) {
@@ -3806,12 +4427,40 @@ final class NotePatchViewModel: ObservableObject {
         workspaceId: String,
         preserveGradingDrafts: Bool = false
     ) async throws {
+        let generation = UUID()
+        homeworkContentGeneration = generation
         let shouldPreserveDrafts = preserveGradingDrafts && isGradingConfigDirty
         let client = clientFor(activeSession)
-        homeworks = try await client.listHomeworks(workspaceId: workspaceId)
-        gradingDocuments = try await client.listDocuments(workspaceId: workspaceId, pageSize: 100)
-        guard let selectedHomeworkId else { return }
-        guard let selected = homeworks.first(where: { $0.id == selectedHomeworkId }) else {
+        async let homeworksRequest = client.listHomeworks(workspaceId: workspaceId)
+        async let documentsRequest = client.listDocuments(workspaceId: workspaceId, pageSize: 100)
+        let loadedHomeworks = try await homeworksRequest
+        let loadedDocuments = try await documentsRequest
+        guard homeworkContentGeneration == generation,
+              isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) else {
+            throw CancellationError()
+        }
+
+        let requestedHomeworkId = selectedHomeworkId
+        var loadedReferences: [HomeworkReferenceItem] = []
+        if let requestedHomeworkId, loadedHomeworks.contains(where: { $0.id == requestedHomeworkId }) {
+            loadedReferences = try await client.listHomeworkReferences(
+                workspaceId: workspaceId,
+                homeworkId: requestedHomeworkId
+            )
+            guard homeworkContentGeneration == generation,
+                  isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId),
+                  selectedHomeworkId == requestedHomeworkId else {
+                throw CancellationError()
+            }
+        }
+
+        homeworks = loadedHomeworks
+        gradingDocuments = loadedDocuments
+        guard let requestedHomeworkId else {
+            homeworkReferences = []
+            return
+        }
+        guard let selected = loadedHomeworks.first(where: { $0.id == requestedHomeworkId }) else {
             self.selectedHomeworkId = nil
             homeworkReferences = []
             return
@@ -3820,11 +4469,28 @@ final class NotePatchViewModel: ObservableObject {
             homeworkRubricText = selected.rubricText ?? ""
             homeworkMaxScoreText = formatScore(selected.maxScore)
         }
-        homeworkReferences = try await clientFor(activeSession).listHomeworkReferences(workspaceId: workspaceId, homeworkId: selectedHomeworkId)
+        homeworkReferences = loadedReferences
     }
 
     private func clearLearningWorkspaceState() {
         invalidateDeferredContentLoads()
+        homeworkSelectionGeneration = UUID()
+        homeworkSelectionTask?.cancel()
+        homeworkSelectionTask = nil
+        knowledgeSearchGeneration = UUID()
+        knowledgeSearchTask?.cancel()
+        knowledgeSearchTask = nil
+        uploadImportGeneration = UUID()
+        uploadQueueGeneration = UUID()
+        learningUnitSelectionGeneration = UUID()
+        workspaceContentGeneration = UUID()
+        learningContentGeneration = UUID()
+        homeworkContentGeneration = UUID()
+        studyNoteReaderGeneration = UUID()
+        studyNoteSaveGeneration = UUID()
+        isBusy = false
+        uploadProgressPercent = nil
+        uploadProgressLabel = ""
         stopScanTracking(clearDocuments: true)
         isLearningUnitMergePresented = false
         isLearningUnitMergeConfirmationPresented = false
@@ -3839,6 +4505,7 @@ final class NotePatchViewModel: ObservableObject {
         queuedUploadItems = []
         knowledgeResults = []
         hasSearchedKnowledge = false
+        isKnowledgeSearching = false
         homeworks = []
         gradingDocuments = []
         selectedHomeworkId = nil
@@ -3853,9 +4520,44 @@ final class NotePatchViewModel: ObservableObject {
         flashcardIndex = 0
         isFlashcardShowingBack = false
         isFlashcardsLoading = false
+        isHomeworkLoading = false
         flashcardError = nil
         studyNoteGroups = []
         closeStudyNoteReader()
+    }
+
+    private func clearChatWorkspaceState() {
+        openClawChatGeneration = UUID()
+        openClawChatTask?.cancel()
+        openClawChatTask = nil
+        conversationLoadGeneration = UUID()
+        conversationLoadTask?.cancel()
+        conversationLoadTask = nil
+        conversationMutationGeneration = UUID()
+
+        var cachedFiles: [UUID: LocalUploadFile] = [:]
+        for attachment in chatAttachmentsByMessageId.values.flatMap({ $0 }) {
+            cachedFiles[attachment.file.id] = attachment.file
+        }
+        for message in openClawMessages {
+            for attachment in message.attachments {
+                cachedFiles[attachment.file.id] = attachment.file
+            }
+        }
+        for file in cachedFiles.values {
+            UploadThumbnailCache.shared.remove(file: file)
+            removeCachedUploadFile(file)
+        }
+        chatAttachmentsByMessageId = [:]
+        preparedChatAttachmentDocuments = [:]
+
+        conversations = []
+        selectedConversationId = nil
+        openClawMessages = [welcomeChatMessage]
+        openClawComposerState.clearDraft(removeAttachmentFiles: true)
+        isOpenClawSending = false
+        isChatHistoryLoading = false
+        isConversationMutating = false
     }
 }
 

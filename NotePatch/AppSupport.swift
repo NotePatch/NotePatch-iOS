@@ -365,3 +365,21 @@ func formatBytes(_ sizeBytes: Int64?) -> String {
     }
     return String(format: "%.1f MB", kb / 1024.0)
 }
+
+func keyboardAvoidanceOffset(contentFrame: CGRect, keyboardFrame: CGRect) -> CGFloat {
+    guard !contentFrame.isNull,
+          !keyboardFrame.isNull,
+          keyboardFrame.width > 0,
+          keyboardFrame.height > 0,
+          keyboardFrame.maxX > contentFrame.minX,
+          keyboardFrame.minX < contentFrame.maxX,
+          keyboardFrame.maxY > contentFrame.minY,
+          keyboardFrame.minY < contentFrame.maxY else {
+        return 0
+    }
+    return max(0, contentFrame.maxY - keyboardFrame.minY)
+}
+
+func workbenchBottomBarAdditionalPadding(safeAreaBottom: CGFloat) -> CGFloat {
+    safeAreaBottom > 0.5 ? 0 : 8
+}

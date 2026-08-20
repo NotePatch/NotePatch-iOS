@@ -191,6 +191,12 @@ private struct WorkbenchScreen: View {
     @State private var isUploadPresented = false
 
     var body: some View {
+        GeometryReader { geometry in
+            workbenchLayout(bottomSafeAreaInset: geometry.safeAreaInsets.bottom)
+        }
+    }
+
+    private func workbenchLayout(bottomSafeAreaInset: CGFloat) -> some View {
         VStack(spacing: 0) {
             StatusBanner(
                 isBusy: model.isBusy || model.isConversationMutating || model.isAIPreferenceUpdating || model.isHomeworkLoading || model.isStudyNoteSaving,
@@ -203,24 +209,24 @@ private struct WorkbenchScreen: View {
         }
         .background(NPColors.background, ignoresSafeAreaEdges: .all)
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            WorkbenchBottomGlassGroup(spacing: 10) {
-                HStack(spacing: 10) {
-                    WorkbenchBottomNavigation(selection: $model.selectedTab)
-
-                    UploadActionButton {
-                        isUploadPresented = true
-                    }
-                }
+            KeyboardAwareWorkbenchBottomBar(selection: $model.selectedTab) {
+                isUploadPresented = true
             }
             .padding(.horizontal, 16)
             .padding(.top, 8)
-            .padding(.bottom, 8)
+            .padding(
+                .bottom,
+                workbenchBottomBarAdditionalPadding(safeAreaBottom: bottomSafeAreaInset)
+            )
         }
+        .modifier(WorkbenchKeyboardSafeAreaModifier(keepsBottomBarFixed: model.selectedTab == .openClaw))
         .fullScreenCover(isPresented: $isUploadPresented) {
             UploadScreen(model: model, isPresented: $isUploadPresented)
         }
         .onChange(of: model.selectedTab) { newTab in
-            if newTab != .openClaw { dismissActiveKeyboard() }
+            if newTab != .openClaw {
+                dismissActiveKeyboard()
+            }
             model.ensureContentForSelectedTabLoaded()
         }
         .onAppear {
@@ -243,6 +249,57 @@ private struct WorkbenchScreen: View {
             )
         case .profile:
             ProfileTab(model: model)
+        }
+    }
+}
+
+private struct KeyboardAwareWorkbenchBottomBar: View {
+    @Binding var selection: WorkbenchTab
+    let uploadAction: () -> Void
+    @State private var isKeyboardVisible = false
+
+    var body: some View {
+        WorkbenchBottomGlassGroup(spacing: 10) {
+            HStack(spacing: 10) {
+                WorkbenchBottomNavigation(selection: $selection)
+                UploadActionButton(action: uploadAction)
+            }
+        }
+        .opacity(isKeyboardVisible ? 0 : 1)
+        .allowsHitTesting(!isKeyboardVisible)
+        .accessibilityHidden(isKeyboardVisible)
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) {
+            updateKeyboardVisibility(from: $0)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+            isKeyboardVisible = false
+        }
+        .onChange(of: selection) { newSelection in
+            if newSelection != .openClaw {
+                isKeyboardVisible = false
+            }
+        }
+    }
+
+    private func updateKeyboardVisibility(from notification: Notification) {
+        guard selection == .openClaw,
+              let frame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect else {
+            isKeyboardVisible = false
+            return
+        }
+        isKeyboardVisible = frame.height > 0
+    }
+}
+
+private struct WorkbenchKeyboardSafeAreaModifier: ViewModifier {
+    let keepsBottomBarFixed: Bool
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if keepsBottomBarFixed {
+            content.ignoresSafeArea(.keyboard, edges: .bottom)
+        } else {
+            content
         }
     }
 }
@@ -1063,6 +1120,8 @@ private struct UploadDocumentScreen: View {
     @State private var isShowingPhotoLibrary = false
     @State private var isShowingFileImporter = false
     @State private var queuedPreview: DownloadedPreview?
+    @State private var pickerUserId: String?
+    @State private var pickerWorkspaceId: String?
 
     var body: some View {
         ScrollView {
@@ -1071,8 +1130,14 @@ private struct UploadDocumentScreen: View {
                     UploadPanel(
                         model: model,
                         onCameraUpload: { isShowingCamera = true },
-                        onGalleryUpload: { isShowingPhotoLibrary = true },
-                        onFileUpload: { isShowingFileImporter = true }
+                        onGalleryUpload: {
+                            capturePickerContext()
+                            isShowingPhotoLibrary = true
+                        },
+                        onFileUpload: {
+                            capturePickerContext()
+                            isShowingFileImporter = true
+                        }
                     )
                 }
 
@@ -1125,7 +1190,11 @@ private struct UploadDocumentScreen: View {
         .background(NPColors.background.ignoresSafeArea())
         .fileImporter(isPresented: $isShowingFileImporter, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
             if case .success(let urls) = result {
-                model.uploadPickedFiles(from: urls)
+                model.uploadPickedFiles(
+                    from: urls,
+                    expectedUserId: pickerUserId,
+                    expectedWorkspaceId: pickerWorkspaceId
+                )
             }
         }
         .sheet(isPresented: $isShowingCamera) {
@@ -1140,9 +1209,15 @@ private struct UploadDocumentScreen: View {
                 guard let result else { return }
                 switch result {
                 case .success(let files):
-                    model.stageImportedUploadFiles(files)
+                    model.stageImportedUploadFiles(
+                        files,
+                        expectedUserId: pickerUserId,
+                        expectedWorkspaceId: pickerWorkspaceId
+                    )
                 case .failure(let error):
-                    model.errorMessage = friendlyError(error)
+                    if model.isCurrentImportContext(userId: pickerUserId, workspaceId: pickerWorkspaceId) {
+                        model.errorMessage = friendlyError(error)
+                    }
                 }
             }
             .ignoresSafeArea()
@@ -1154,6 +1229,11 @@ private struct UploadDocumentScreen: View {
                 QuickLookPreview(url: preview.url)
             }
         }
+    }
+
+    private func capturePickerContext() {
+        pickerUserId = model.session?.userId
+        pickerWorkspaceId = model.selectedWorkspaceId
     }
 }
 
@@ -1749,12 +1829,22 @@ private struct OpenClawChatTab: View {
     @State private var isComposerFocused = false
     @State private var isShowingAIPhotoLibrary = false
     @State private var isShowingAIFileImporter = false
+    @State private var attachmentPickerUserId: String?
+    @State private var attachmentPickerWorkspaceId: String?
+    @State private var keyboardFrame: CGRect = .null
 
     var body: some View {
-        VStack(spacing: 0) {
-            // ——— Brand Hero ———
-            ScrollView {
-                VStack(spacing: 0) {
+        GeometryReader { geometry in
+            let keyboardOffset = keyboardAvoidanceOffset(
+                contentFrame: geometry.frame(in: .global),
+                keyboardFrame: keyboardFrame
+            )
+            let isKeyboardPresented = keyboardOffset > 0
+
+            VStack(spacing: 0) {
+                // ——— Brand Hero ———
+                ScrollView {
+                    VStack(spacing: 0) {
                     ChatScrollPanObserver { value in
                         dismissKeyboardIfNeeded(
                             startLocation: value.startLocation,
@@ -1769,7 +1859,7 @@ private struct OpenClawChatTab: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, NPSpacing.outer)
                         .padding(.top, NPSpacing.medium)
-                .padding(.bottom, NPSpacing.small)
+                        .padding(.bottom, NPSpacing.small)
 
                     Text("Patch your knowledge together.")
                         .font(.system(size: 13, weight: .regular, design: .default))
@@ -1835,7 +1925,7 @@ private struct OpenClawChatTab: View {
                                 .background(NPColors.interactive.opacity(0.4))
                                 .clipShape(Circle())
                         }
-                        .disabled(chatState.isHistoryLoading || chatState.isConversationMutating)
+                        .disabled(chatState.isHistoryLoading || chatState.isConversationMutating || chatState.isSending)
                         .accessibilityLabel("Conversation actions")
                     }
                     .padding(.horizontal, NPSpacing.outer)
@@ -1887,19 +1977,37 @@ private struct OpenClawChatTab: View {
                         }
                     }
                     .accessibilityIdentifier("openClawMessages")
+                    }
                 }
+                // ——— Composer bar ———
+                VStack(spacing: 0) {
+                    Divider()
+                        .background(NPColors.interactive.opacity(0.4))
+                        .opacity(isKeyboardPresented ? 0 : 1)
+                    composer
+                        .padding(.horizontal, NPSpacing.outer)
+                        .padding(.vertical, 10)
+                }
+                .background {
+                    Rectangle()
+                        .fill(.thinMaterial)
+                        .opacity(isKeyboardPresented ? 0 : 1)
+                }
+                .padding(.bottom, isKeyboardPresented ? NPSpacing.small : 0)
+                .offset(y: -keyboardOffset)
+                .animation(.easeOut(duration: 0.22), value: keyboardOffset)
             }
-            // ——— Composer bar ———
-            VStack(spacing: 0) {
-                Divider().background(NPColors.interactive.opacity(0.4))
-                composer
-                    .padding(.horizontal, NPSpacing.outer)
-                    .padding(.vertical, 10)
-                    .animation(.npInteractive, value: isComposerExpanded)
-            }
-            .background(.thinMaterial)
         }
-        .onDisappear { dismissComposer() }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) {
+            updateKeyboardFrame(from: $0)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) {
+            updateKeyboardFrame(from: $0, forceHidden: true)
+        }
+        .onDisappear {
+            keyboardFrame = .null
+            dismissComposer()
+        }
         .fileImporter(
             isPresented: $isShowingAIFileImporter,
             allowedContentTypes: [.item],
@@ -1908,7 +2016,12 @@ private struct OpenClawChatTab: View {
             if case .success(let urls) = result {
                 addAIFileAttachments(urls)
             } else if case .failure(let error) = result {
-                model.errorMessage = friendlyError(error)
+                if model.isCurrentImportContext(
+                    userId: attachmentPickerUserId,
+                    workspaceId: attachmentPickerWorkspaceId
+                ) {
+                    model.errorMessage = friendlyError(error)
+                }
             }
         }
         .sheet(isPresented: $isShowingAIPhotoLibrary) {
@@ -1917,9 +2030,18 @@ private struct OpenClawChatTab: View {
                 guard let result else { return }
                 switch result {
                 case .success(let files):
-                    composerState.attachments.append(contentsOf: files)
+                    model.stageOpenClawDraftAttachments(
+                        files,
+                        expectedUserId: attachmentPickerUserId,
+                        expectedWorkspaceId: attachmentPickerWorkspaceId
+                    )
                 case .failure(let error):
-                    model.errorMessage = friendlyError(error)
+                    if model.isCurrentImportContext(
+                        userId: attachmentPickerUserId,
+                        workspaceId: attachmentPickerWorkspaceId
+                    ) {
+                        model.errorMessage = friendlyError(error)
+                    }
                 }
             }
             .ignoresSafeArea()
@@ -1937,6 +2059,14 @@ private struct OpenClawChatTab: View {
         .background(NPColors.background)
     }
 
+    private func updateKeyboardFrame(from notification: Notification, forceHidden: Bool = false) {
+        let frame = forceHidden
+            ? CGRect.null
+            : (notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect) ?? .null
+        guard keyboardFrame != frame else { return }
+        keyboardFrame = frame
+    }
+
     private func dismissComposer() {
         isComposerFocused = false
         dismissActiveKeyboard()
@@ -1948,11 +2078,15 @@ private struct OpenClawChatTab: View {
         translation: CGSize,
         scrollBottomY: CGFloat
     ) {
+        let composerControlsHeight: CGFloat = 56
+        let dismissalBoundary = keyboardFrame.isNull
+            ? scrollBottomY + composerState.measuredTextHeight
+            : keyboardFrame.minY - composerControlsHeight
         guard isComposerFocused,
               translation.height > 12,
               translation.height > abs(translation.width),
               startLocation.y < scrollBottomY,
-              location.y >= scrollBottomY + composerState.measuredTextHeight else {
+              location.y >= dismissalBoundary else {
             return
         }
         dismissComposer()
@@ -1976,12 +2110,6 @@ private struct OpenClawChatTab: View {
                 let textViewWidth = max(0, geometry.size.width)
 
                 ZStack(alignment: .topLeading) {
-                    if expanded {
-                        RoundedRectangle(cornerRadius: NPRadius.sheet, style: .continuous)
-                            .fill(NPColors.surface)
-                            .modifier(NPCardShadow())
-                    }
-
                     Text("Ask AI Co-pilot")
                         .foregroundStyle(NPColors.textSecondary)
                         .padding(.leading, expanded ? NPSpacing.outer : 54)
@@ -2024,8 +2152,42 @@ private struct OpenClawChatTab: View {
                     height: composerHeight,
                     alignment: .topLeading
                 )
+                .modifier(AIComposerInputSurface(isActive: expanded))
             }
             .frame(height: composerHeight)
+        }
+    }
+
+    private struct AIComposerInputSurface: ViewModifier {
+        let isActive: Bool
+
+        func body(content: Content) -> some View {
+            content
+                .background {
+                    AIComposerSurfaceBackground()
+                        .overlay {
+                            RoundedRectangle(cornerRadius: NPRadius.sheet, style: .continuous)
+                                .stroke(Color.white.opacity(0.38), lineWidth: 0.5)
+                        }
+                        .modifier(NPCardShadow())
+                        .opacity(isActive ? 1 : 0)
+                        .allowsHitTesting(false)
+                }
+        }
+    }
+
+    private struct AIComposerSurfaceBackground: View {
+        @ViewBuilder
+        var body: some View {
+            if #available(iOS 26.0, *) {
+                Color.clear.glassEffect(
+                    .regular,
+                    in: RoundedRectangle(cornerRadius: NPRadius.sheet, style: .continuous)
+                )
+            } else {
+                RoundedRectangle(cornerRadius: NPRadius.sheet, style: .continuous)
+                    .fill(.thinMaterial)
+            }
         }
     }
 
@@ -2033,12 +2195,14 @@ private struct OpenClawChatTab: View {
         Menu {
             Button {
                 dismissComposer()
+                captureAttachmentPickerContext()
                 isShowingAIPhotoLibrary = true
             } label: {
                 Label("Choose photo", systemImage: "photo.on.rectangle")
             }
             Button {
                 dismissComposer()
+                captureAttachmentPickerContext()
                 isShowingAIFileImporter = true
             } label: {
                 Label("Choose file", systemImage: "folder")
@@ -2070,25 +2234,32 @@ private struct OpenClawChatTab: View {
 
     private func addAIFileAttachments(_ urls: [URL]) {
         let cacheDirectory = aiAttachmentCacheDirectory
+        let expectedUserId = attachmentPickerUserId
+        let expectedWorkspaceId = attachmentPickerWorkspaceId
         Task {
             let outcomes = await FileImportService.shared.importFiles(
                 urls,
                 fallbackPrefix: "ai-attachment",
                 cacheDirectory: cacheDirectory
             )
-            composerState.attachments.append(contentsOf: outcomes.compactMap(\.file))
-            if let message = outcomes.compactMap(\.errorMessage).first {
+            let didStage = model.stageOpenClawDraftAttachments(
+                outcomes.compactMap(\.file),
+                expectedUserId: expectedUserId,
+                expectedWorkspaceId: expectedWorkspaceId
+            )
+            if didStage, let message = outcomes.compactMap(\.errorMessage).first {
                 model.errorMessage = message
             }
         }
     }
 
     private func removeAIDraftAttachment(_ file: LocalUploadFile) {
-        composerState.removeAttachment(file)
-        UploadThumbnailCache.shared.remove(file: file)
-        Task.detached(priority: .utility) {
-            try? FileManager.default.removeItem(at: file.url)
-        }
+        model.removeOpenClawDraftAttachment(file)
+    }
+
+    private func captureAttachmentPickerContext() {
+        attachmentPickerUserId = model.session?.userId
+        attachmentPickerWorkspaceId = model.selectedWorkspaceId
     }
 
     private var aiAttachmentCacheDirectory: URL {
@@ -2097,13 +2268,15 @@ private struct OpenClawChatTab: View {
     }
 
     private var composerSendButton: some View {
-        let canSend = !chatState.isSending && !composerState.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let hasPrompt = !composerState.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let canSend = !chatState.isSending && (hasPrompt || !composerState.attachments.isEmpty)
 
         return Button {
             dismissComposer()
-            if model.startOpenClawChat(prompt: composerState.text) {
-                composerState.clearDraft(removeAttachmentFiles: true)
-            }
+            _ = model.startOpenClawChat(
+                prompt: composerState.text,
+                attachments: composerState.attachments
+            )
         } label: {
             Image(systemName: "arrow.up")
                 .font(.system(size: 16, weight: .bold))
@@ -2526,10 +2699,13 @@ private struct FlashcardsSection: View {
                     Text(model.isFlashcardShowingBack ? localized("flashcards.back") : localized("flashcards.front"))
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(NPColors.brand)
-                    Text(model.isFlashcardShowingBack ? card.back : card.front)
-                        .font(.title3.weight(.medium))
-                        .foregroundStyle(NPColors.textPrimary)
-                        .multilineTextAlignment(.center)
+                    LightweightMarkdownText(
+                        markdown: model.isFlashcardShowingBack ? card.back : card.front,
+                        color: NPColors.textPrimary,
+                        horizontalAlignment: .center,
+                        textAlignment: .center,
+                        paragraphFont: .title3.weight(.medium)
+                    )
                         .frame(maxWidth: .infinity)
                     Text(localized("flashcards.tap_to_flip"))
                         .npCaption()
@@ -2750,6 +2926,7 @@ private struct HomeworkGradingSection: View {
                     ForEach(model.homeworks) { homework in Text(homework.title).tag(homework.id) }
                 }
                 .pickerStyle(.menu)
+                .disabled(model.isHomeworkLoading)
                 .accessibilityIdentifier("homeworkPicker")
             }
 
@@ -2834,8 +3011,9 @@ private struct HomeworkGradingSection: View {
                     }
                     .pickerStyle(.menu)
                     Button {
-                        model.addHomeworkReference(documentId: selectedReferenceDocumentId)
-                        selectedReferenceDocumentId = ""
+                        model.addHomeworkReference(documentId: selectedReferenceDocumentId) {
+                            selectedReferenceDocumentId = ""
+                        }
                     } label: {
                         Label("Add grading reference", systemImage: "plus")
                     }
@@ -2913,16 +3091,15 @@ private struct HomeworkCreateSheet: View {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { isPresented = false } }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Create") {
-                        if model.createHomework(
+                        _ = model.createHomework(
                             documentId: documentId,
                             title: title,
                             description: description,
                             dueAt: hasDueDate ? dueAt : nil,
                             rubricText: rubricText,
-                            maxScoreText: maxScoreText
-                        ) {
-                            isPresented = false
-                        }
+                            maxScoreText: maxScoreText,
+                            onCommitted: { isPresented = false }
+                        )
                     }
                     .disabled(documentId.isEmpty || title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
@@ -2984,6 +3161,16 @@ private struct OpenClawMessageBubble: View {
                     Text(message.content)
                         .foregroundStyle(foregroundColor)
                 }
+                if !message.attachments.isEmpty {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: NPSpacing.small) {
+                            ForEach(message.attachments) { attachment in
+                                OpenClawMessageAttachmentView(attachment: attachment)
+                            }
+                        }
+                    }
+                    .accessibilityIdentifier("openClawMessageAttachments")
+                }
                 if let errorEvent = message.events.last(where: { $0.level == "error" }) {
                     Text(localizedFormat("chat.error_event", errorEvent.message))
                         .npCaption()
@@ -3044,6 +3231,37 @@ private struct OpenClawMessageBubble: View {
             return NPColors.textPrimary
         }
         return NPColors.textPrimary
+    }
+}
+
+private struct OpenClawMessageAttachmentView: View {
+    let attachment: OpenClawChatAttachment
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            ZStack {
+                UploadThumbnailImage(
+                    file: attachment.file,
+                    size: CGSize(width: 112, height: 88),
+                    cornerRadius: 10
+                )
+                if attachment.status == .uploading {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(Color.black.opacity(0.28))
+                    ProgressView()
+                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                }
+            }
+            .frame(width: 112, height: 88)
+
+            Text(attachment.file.filename)
+                .font(.caption2)
+                .foregroundStyle(NPColors.textSecondary)
+                .lineLimit(1)
+                .frame(width: 112, alignment: .leading)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(localizedFormat("chat.attachment_accessibility", attachment.file.filename))
     }
 }
 
@@ -3366,26 +3584,34 @@ private struct WorkspaceManagementSection: View {
 private struct LightweightMarkdownText: View {
     let markdown: String
     let color: Color
+    var horizontalAlignment: HorizontalAlignment = .leading
+    var textAlignment: TextAlignment = .leading
+    var paragraphFont: Font = .body
     @StateObject private var renderer = MarkdownRenderState()
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 7) {
+        VStack(alignment: horizontalAlignment, spacing: 7) {
             ForEach(renderer.blocks) { block in
                 switch block.type {
                 case .heading:
                     Text(block.text)
                         .font(block.level == 1 ? .title3.weight(.semibold) : .subheadline.weight(.semibold))
                         .foregroundStyle(color)
+                        .frame(maxWidth: .infinity, alignment: contentAlignment)
                 case .bullet:
                     HStack(alignment: .firstTextBaseline, spacing: 5) {
                         Text("•")
                         MarkdownInlineText(tokens: block.inlineTokens, color: color)
                     }
+                    .font(paragraphFont)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 case .ordered:
                     HStack(alignment: .firstTextBaseline, spacing: 5) {
-                        Text("1.")
+                        Text("\(max(1, block.level)).")
                         MarkdownInlineText(tokens: block.inlineTokens, color: color)
                     }
+                    .font(paragraphFont)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 case .quote:
                     HStack(spacing: NPSpacing.small) {
                         RoundedRectangle(cornerRadius: 2)
@@ -3393,6 +3619,7 @@ private struct LightweightMarkdownText: View {
                             .frame(width: 4)
                             .frame(height: 38)
                         MarkdownInlineText(tokens: block.inlineTokens, color: NPColors.textPrimary)
+                            .font(paragraphFont)
                     }
                     .padding(NPSpacing.small)
                     .background(NPColors.surface)
@@ -3407,11 +3634,25 @@ private struct LightweightMarkdownText: View {
                         .clipShape(RoundedRectangle(cornerRadius: NPRadius.xs))
                 case .paragraph:
                     MarkdownInlineText(tokens: block.inlineTokens, color: color)
+                        .font(paragraphFont)
+                        .frame(maxWidth: .infinity, alignment: contentAlignment)
                 }
             }
         }
+        .multilineTextAlignment(textAlignment)
         .task(id: markdown) {
             renderer.load(markdown)
+        }
+    }
+
+    private var contentAlignment: Alignment {
+        switch textAlignment {
+        case .center:
+            return .center
+        case .trailing:
+            return .trailing
+        default:
+            return .leading
         }
     }
 }

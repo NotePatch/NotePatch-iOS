@@ -126,8 +126,10 @@ final class NotePatchUITests: XCTestCase {
         let card = app.buttons["flashcardCard"]
         XCTAssertTrue(card.waitForExistence(timeout: 3))
         XCTAssertTrue(app.staticTexts["What does a ratio compare?"].exists)
+        XCTAssertFalse(app.staticTexts["What does a **ratio** compare?"].exists)
         card.tap()
         XCTAssertTrue(app.staticTexts["The relationship between two quantities."].waitForExistence(timeout: 2))
+        XCTAssertFalse(app.staticTexts["The relationship between **two quantities**."].exists)
         app.buttons["下一张"].tap()
         XCTAssertTrue(app.staticTexts["How do you solve a proportion?"].waitForExistence(timeout: 2))
     }
@@ -245,12 +247,20 @@ final class NotePatchUITests: XCTestCase {
         XCTAssertTrue(app.otherElements["workbenchTabs"].waitForExistence(timeout: 5))
         app.buttons["tab.ai"].tap()
 
+        let bottomNavigation = app.otherElements["workbenchTabs"]
+        XCTAssertTrue(bottomNavigation.waitForExistence(timeout: 3))
+        let bottomNavigationFrameBeforeKeyboard = bottomNavigation.frame
+        XCTAssertLessThanOrEqual(app.frame.maxY - bottomNavigationFrameBeforeKeyboard.maxY, 36)
+
         let editor = app.textViews["openClawComposerTextView"]
         XCTAssertTrue(editor.waitForExistence(timeout: 3))
         editor.tap()
 
         let keyboard = app.keyboards.firstMatch
         XCTAssertTrue(keyboard.waitForExistence(timeout: 3))
+        XCTAssertEqual(bottomNavigation.frame.minY, bottomNavigationFrameBeforeKeyboard.minY, accuracy: 1)
+        XCTAssertEqual(bottomNavigation.frame.maxY, bottomNavigationFrameBeforeKeyboard.maxY, accuracy: 1)
+        XCTAssertLessThanOrEqual(editor.frame.maxY, keyboard.frame.minY + 1)
         editor.typeText("a")
         XCTAssertTrue(keyboard.exists)
         XCTAssertFalse(app.buttons["收起键盘"].exists)
@@ -279,6 +289,8 @@ final class NotePatchUITests: XCTestCase {
             evaluatedWith: keyboard
         )
         wait(for: [keyboardDismissed], timeout: 3)
+        XCTAssertEqual(bottomNavigation.frame.minY, bottomNavigationFrameBeforeKeyboard.minY, accuracy: 1)
+        XCTAssertEqual(bottomNavigation.frame.maxY, bottomNavigationFrameBeforeKeyboard.maxY, accuracy: 1)
     }
 
     @MainActor

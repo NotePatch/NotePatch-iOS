@@ -1543,6 +1543,21 @@ struct SavedSession: Equatable {
             aiHistoryEnabled: enabled
         )
     }
+
+    func withUser(_ user: BackendUser) -> SavedSession {
+        SavedSession(
+            baseURL: baseURL,
+            tusBaseURL: tusBaseURL,
+            accessToken: accessToken,
+            refreshToken: refreshToken,
+            expiresAt: expiresAt,
+            userId: user.id,
+            email: user.email,
+            fullName: user.fullName,
+            selectedWorkspaceId: selectedWorkspaceId,
+            aiHistoryEnabled: user.aiHistoryEnabled
+        )
+    }
 }
 
 enum JSONValue: Codable, Equatable {
