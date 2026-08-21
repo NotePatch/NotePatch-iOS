@@ -338,12 +338,13 @@ private struct WorkbenchScreen: View {
             .allowsHitTesting(!navigationState.isUploadPresented)
             .zIndex(10)
 
-            if navigationState.isUploadPresented {
-                UploadScreen(model: model, isPresented: $navigationState.isUploadPresented)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(NPColors.background.ignoresSafeArea())
-                    .zIndex(20)
-            }
+            UploadScreen(model: model, isPresented: $navigationState.isUploadPresented)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(NPColors.background.ignoresSafeArea())
+                .opacity(navigationState.isUploadPresented ? 1 : 0)
+                .allowsHitTesting(navigationState.isUploadPresented)
+                .accessibilityHidden(!navigationState.isUploadPresented)
+                .zIndex(20)
         }
         .coordinateSpace(name: "workbench")
         .onPreferenceChange(WorkbenchBottomBarFramePreferenceKey.self) { frame in
@@ -500,9 +501,9 @@ private struct WorkbenchBottomNavigation: View {
                             .lineLimit(1)
                             .minimumScaleFactor(0.8)
                     }
-                        .foregroundStyle(selection == tab ? NPColors.brandDark : NPColors.textSecondary)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .contentShape(Rectangle())
+                    .foregroundStyle(selection == tab ? NPColors.brandDark : NPColors.textSecondary)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(tab.title)
@@ -515,6 +516,7 @@ private struct WorkbenchBottomNavigation: View {
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("workbenchTabs")
     }
+
 }
 
 private extension WorkbenchTab {
@@ -1723,75 +1725,86 @@ private struct UploadDocumentScreen: View {
     @State private var pickerWorkspaceId: String?
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: NPSpacing.section) {
-                NPSection {
-                    UploadPanel(
-                        model: model,
-                        onCameraUpload: { isShowingCamera = true },
-                        onGalleryUpload: {
-                            capturePickerContext()
-                            isShowingPhotoLibrary = true
-                        },
-                        onFileUpload: {
-                            capturePickerContext()
-                            isShowingFileImporter = true
-                        }
-                    )
-                }
+        ZStack {
+            ScrollView {
+                VStack(spacing: NPSpacing.section) {
+                    NPSection {
+                        UploadPanel(
+                            model: model,
+                            onCameraUpload: { isShowingCamera = true },
+                            onGalleryUpload: {
+                                capturePickerContext()
+                                isShowingPhotoLibrary = true
+                            },
+                            onFileUpload: {
+                                capturePickerContext()
+                                isShowingFileImporter = true
+                            }
+                        )
+                    }
 
-                NPSection {
-                    VStack(alignment: .leading, spacing: 12) {
-                        HStack {
-                            Label(localized("upload.queue.pending"), systemImage: "tray.and.arrow.up")
-                                .npSubheading()
-                            Spacer()
-                            Text(localizedFormat("upload.items_count", String(model.queuedUploadItems.count)))
-                                .npCaption()
-                        }
+                    NPSection {
+                        VStack(alignment: .leading, spacing: 12) {
+                            HStack {
+                                Label(localized("upload.queue.pending"), systemImage: "tray.and.arrow.up")
+                                    .npSubheading()
+                                Spacer()
+                                Text(localizedFormat("upload.items_count", String(model.queuedUploadItems.count)))
+                                    .npCaption()
+                            }
 
-                        if model.queuedUploadItems.isEmpty {
-                            NPEmptyState(
-                                systemImage: "tray",
-                                title: localized("upload.queue.empty.title"),
-                                message: localized("upload.queue.empty.message")
-                            )
-                        } else {
-                            LazyVStack(spacing: 10) {
-                                ForEach(model.queuedUploadItems) { item in
-                                    QueuedUploadRow(
-                                        item: item,
-                                        isBusy: model.isBusy,
-                                        onToggle: { model.toggleQueuedUpload(item.id) },
-                                        onPreview: {
-                                            queuedPreview = DownloadedPreview(
-                                                url: item.file.url,
-                                                mimeType: item.file.mimeType,
-                                                filename: item.file.filename,
-                                                fileSize: item.file.fileSize
-                                            )
-                                        },
-                                        onRemove: { model.removeQueuedUpload(item.id) }
-                                    )
+                            if model.queuedUploadItems.isEmpty {
+                                NPEmptyState(
+                                    systemImage: "tray",
+                                    title: localized("upload.queue.empty.title"),
+                                    message: localized("upload.queue.empty.message")
+                                )
+                            } else {
+                                LazyVStack(spacing: 10) {
+                                    ForEach(model.queuedUploadItems) { item in
+                                        QueuedUploadRow(
+                                            item: item,
+                                            isBusy: model.isBusy,
+                                            onToggle: { model.toggleQueuedUpload(item.id) },
+                                            onPreview: {
+                                                queuedPreview = DownloadedPreview(
+                                                    url: item.file.url,
+                                                    mimeType: item.file.mimeType,
+                                                    filename: item.file.filename,
+                                                    fileSize: item.file.fileSize
+                                                )
+                                            },
+                                            onRemove: { model.removeQueuedUpload(item.id) }
+                                        )
+                                    }
                                 }
-                            }
 
-                            Button {
-                                model.uploadSelectedQueuedFiles()
-                            } label: {
-                                Label(localizedFormat("upload.selected_count", String(model.queuedUploadItems.filter(\.isSelected).count)), systemImage: "arrow.up.circle.fill")
-                                    .frame(maxWidth: .infinity)
+                                Button {
+                                    model.uploadSelectedQueuedFiles()
+                                } label: {
+                                    Label(localizedFormat("upload.selected_count", String(model.queuedUploadItems.filter(\.isSelected).count)), systemImage: "arrow.up.circle.fill")
+                                        .frame(maxWidth: .infinity)
+                                }
+                                .buttonStyle(NPPrimaryButtonStyle())
+                                .disabled(model.isBusy || !model.queuedUploadItems.contains(where: \.isSelected))
+                                .accessibilityIdentifier("uploadSelectedQueueButton")
                             }
-                            .buttonStyle(NPPrimaryButtonStyle())
-                            .disabled(model.isBusy || !model.queuedUploadItems.contains(where: \.isSelected))
-                            .accessibilityIdentifier("uploadSelectedQueueButton")
                         }
                     }
                 }
+                .padding(.horizontal, NPSpacing.outer)
+                .padding(.top, 14)
+                .padding(.bottom, NPSpacing.section)
             }
-            .padding(.horizontal, NPSpacing.outer)
-            .padding(.top, 14)
-            .padding(.bottom, NPSpacing.section)
+            .allowsHitTesting(queuedPreview == nil)
+
+            UploadQueuedPreviewOverlay(preview: queuedPreview) {
+                self.queuedPreview = nil
+            }
+            .opacity(queuedPreview == nil ? 0 : 1)
+            .allowsHitTesting(queuedPreview != nil)
+            .accessibilityHidden(queuedPreview == nil)
+            .zIndex(10)
         }
         .background(NPColors.background.ignoresSafeArea())
         .fileImporter(isPresented: $isShowingFileImporter, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
@@ -1828,23 +1841,136 @@ private struct UploadDocumentScreen: View {
             }
             .ignoresSafeArea()
         }
-        .sheet(item: $queuedPreview) { preview in
-            switch preview.previewKind(
-                canQuickLookPreview: QLPreviewController.canPreview(preview.url as NSURL)
-            ) {
-            case .image:
-                ImagePreview(url: preview.url)
-            case .quickLook:
-                QuickLookPreview(url: preview.url)
-            case .unsupported:
-                UnsupportedFilePreview(preview: preview)
-            }
-        }
     }
 
     private func capturePickerContext() {
         pickerUserId = model.session?.userId
         pickerWorkspaceId = model.selectedWorkspaceId
+    }
+}
+
+private struct UploadQueuedPreviewOverlay: View {
+    let preview: DownloadedPreview?
+    let onClose: () -> Void
+
+    @ViewBuilder
+    var body: some View {
+        if let preview {
+            switch preview.previewKind(
+                canQuickLookPreview: QLPreviewController.canPreview(preview.url as NSURL)
+        ) {
+        case .image:
+            QueuedImagePreview(url: preview.url, onClose: onClose)
+            case .quickLook:
+                ZStack(alignment: .topTrailing) {
+                    QuickLookPreview(url: preview.url)
+                        .ignoresSafeArea()
+                    previewCloseButton
+                }
+                .background(NPColors.background.ignoresSafeArea())
+            case .unsupported:
+                UnsupportedFilePreview(preview: preview, onClose: onClose)
+            }
+        } else {
+            Color.clear
+        }
+    }
+
+    private var previewCloseButton: some View {
+        Button(action: onClose) {
+            Label(localized("common.close"), systemImage: "xmark.circle.fill")
+                .labelStyle(.iconOnly)
+                .font(.title)
+                .foregroundStyle(NPColors.textPrimary)
+                .padding(18)
+        }
+        .accessibilityIdentifier("imagePreviewCloseButton")
+    }
+}
+
+private struct QueuedImagePreview: View {
+    let url: URL
+    let onClose: () -> Void
+
+    @State private var image: UIImage?
+    @State private var scale: CGFloat = 1
+    @State private var baseScale: CGFloat = 1
+    @State private var offset: CGSize = .zero
+    @State private var baseOffset: CGSize = .zero
+
+    var body: some View {
+        ZStack(alignment: .topTrailing) {
+            Color.black.ignoresSafeArea()
+
+            if let image {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFit()
+                    .scaleEffect(scale)
+                    .offset(offset)
+                    .gesture(magnificationGesture)
+                    .simultaneousGesture(dragGesture)
+                    .onTapGesture(count: 2) {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            if scale > 1 {
+                                scale = 1
+                                baseScale = 1
+                                offset = .zero
+                                baseOffset = .zero
+                            } else {
+                                scale = 2.5
+                                baseScale = 2.5
+                            }
+                        }
+                    }
+            } else {
+                ProgressView()
+                    .tint(.white)
+                    .controlSize(.large)
+            }
+
+            Button(action: onClose) {
+                Label(localized("common.close"), systemImage: "xmark.circle.fill")
+                    .labelStyle(.iconOnly)
+                    .font(.title)
+                    .foregroundStyle(Color.white)
+                    .padding(18)
+            }
+            .accessibilityIdentifier("imagePreviewCloseButton")
+        }
+        .task(id: url) {
+            image = await Task.detached(priority: .userInitiated) {
+                downsampleUploadImage(at: url, maxPixelSize: 4096)
+            }.value
+        }
+    }
+
+    private var magnificationGesture: some Gesture {
+        MagnificationGesture()
+            .onChanged { value in
+                scale = min(5, max(1, baseScale * value))
+            }
+            .onEnded { _ in
+                baseScale = scale
+                if scale == 1 {
+                    offset = .zero
+                    baseOffset = .zero
+                }
+            }
+    }
+
+    private var dragGesture: some Gesture {
+        DragGesture()
+            .onChanged { value in
+                guard scale > 1 else { return }
+                offset = CGSize(
+                    width: baseOffset.width + value.translation.width,
+                    height: baseOffset.height + value.translation.height
+                )
+            }
+            .onEnded { _ in
+                baseOffset = offset
+            }
     }
 }
 
@@ -2475,7 +2601,6 @@ private struct OpenClawChatTab: View {
     @State private var titleDraft = ""
     @State private var messageRevisionDraft = ""
     @State private var isConversationDrawerOpen = false
-    @State private var composerViewGeneration = 0
     @State private var isComposerFocused = false
     @State private var isShowingAIPhotoLibrary = false
     @State private var isShowingAIFileImporter = false
@@ -2649,13 +2774,12 @@ private struct OpenClawChatTab: View {
             .animation(.easeOut(duration: 0.22), value: keyboardOffset)
             }
 
-            if !isConversationDrawerOpen {
-                drawerEdgeHotZone
-            }
-            if isConversationDrawerOpen {
-                conversationDrawer
-                    .transition(.move(edge: .leading))
-            }
+            conversationDrawer
+                .offset(x: isConversationDrawerOpen ? 0 : -420)
+                .opacity(isConversationDrawerOpen ? 1 : 0)
+                .allowsHitTesting(isConversationDrawerOpen)
+                .accessibilityHidden(!isConversationDrawerOpen)
+                .animation(.npInteractive, value: isConversationDrawerOpen)
         }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) {
             updateKeyboardFrame(from: $0)
@@ -2667,6 +2791,7 @@ private struct OpenClawChatTab: View {
             keyboardFrame = .null
             dismissComposer()
         }
+        .simultaneousGesture(drawerOpenGesture)
         .fileImporter(
             isPresented: $isShowingAIFileImporter,
             allowedContentTypes: [.item],
@@ -2766,30 +2891,20 @@ private struct OpenClawChatTab: View {
         withAnimation(.npInteractive) {
             isConversationDrawerOpen = false
         }
-        composerViewGeneration += 1
     }
 
-    private var drawerEdgeHotZone: some View {
-        HStack(spacing: 0) {
-            Color.clear
-                .frame(width: 20)
-                .frame(maxHeight: .infinity)
-                .contentShape(Rectangle())
-                .simultaneousGesture(
-                    DragGesture(minimumDistance: 12)
-                        .onEnded { value in
-                            guard value.translation.width > 40,
-                                  value.translation.width > abs(value.translation.height) * 1.5 else { return }
-                            dismissComposer()
-                            withAnimation(.npInteractive) {
-                                isConversationDrawerOpen = true
-                            }
-                        }
-                )
-            Spacer(minLength: 0)
-        }
-        .allowsHitTesting(true)
-        .accessibilityHidden(true)
+    private var drawerOpenGesture: some Gesture {
+        DragGesture(minimumDistance: 12)
+            .onEnded { value in
+                guard !isConversationDrawerOpen,
+                      value.startLocation.x <= 20,
+                      value.translation.width > 40,
+                      value.translation.width > abs(value.translation.height) * 1.5 else { return }
+                dismissComposer()
+                withAnimation(.npInteractive) {
+                    isConversationDrawerOpen = true
+                }
+            }
     }
 
     private var conversationDrawer: some View {
@@ -2801,10 +2916,21 @@ private struct OpenClawChatTab: View {
             ZStack(alignment: .leading) {
                 Color.black.opacity(0.32)
                     .ignoresSafeArea()
-                    .accessibilityIdentifier("chatConversationBackdrop")
-                    .onTapGesture {
-                        closeConversationDrawer()
+                    .allowsHitTesting(false)
+
+                HStack(spacing: 0) {
+                    Color.clear
+                        .frame(width: drawerWidth)
+                        .allowsHitTesting(false)
+                    Color.clear
+                        .contentShape(Rectangle())
+                        .accessibilityIdentifier("chatConversationBackdrop")
+                        .onTapGesture {
+                            closeConversationDrawer()
+                        }
                     }
+                    .ignoresSafeArea()
+
                 conversationDrawerPanel(
                     topSafeAreaInset: topSafeAreaInset,
                     bottomSafeAreaInset: bottomSafeAreaInset
@@ -3008,7 +3134,6 @@ private struct OpenClawChatTab: View {
                         horizontalInset: textHorizontalInset,
                         maximumLines: expanded ? 7 : 1
                     )
-                    .id(composerViewGeneration)
                     .frame(
                         width: textViewWidth,
                         height: expanded ? composerState.measuredTextHeight : 44
@@ -5746,6 +5871,7 @@ private struct CameraPicker: UIViewControllerRepresentable {
 
 private struct UnsupportedFilePreview: View {
     let preview: DownloadedPreview
+    var onClose: (() -> Void)? = nil
     @Environment(\.dismiss) private var dismiss
     @State private var isSharing = false
 
@@ -5794,7 +5920,13 @@ private struct UnsupportedFilePreview: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button(localized("common.done")) { dismiss() }
+                    Button(localized("common.done")) {
+                        if let onClose {
+                            onClose()
+                        } else {
+                            dismiss()
+                        }
+                    }
                 }
             }
         }
@@ -5910,6 +6042,14 @@ private struct ZoomableImagePreview: UIViewRepresentable {
         }
     }
 
+    static func dismantleUIView(_ uiView: UIScrollView, coordinator: Coordinator) {
+        uiView.isUserInteractionEnabled = false
+        uiView.gestureRecognizers?.forEach(uiView.removeGestureRecognizer)
+        uiView.delegate = nil
+        coordinator.scrollView = nil
+        coordinator.loadGeneration = UUID()
+    }
+
     final class Coordinator: NSObject, UIScrollViewDelegate {
         weak var scrollView: UIScrollView?
         var loadedURL: URL?
@@ -5979,6 +6119,7 @@ private struct ZoomableImagePreview: UIViewRepresentable {
 
 private struct ImagePreview: View {
     let url: URL
+    var onClose: (() -> Void)? = nil
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -5987,7 +6128,11 @@ private struct ImagePreview: View {
             ZoomableImagePreview(url: url)
                 .ignoresSafeArea()
             Button {
-                dismiss()
+                if let onClose {
+                    onClose()
+                } else {
+                    dismiss()
+                }
             } label: {
                 Label(localized("common.close"), systemImage: "xmark.circle.fill")
                     .labelStyle(.iconOnly)

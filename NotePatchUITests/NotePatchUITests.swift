@@ -186,6 +186,61 @@ final class NotePatchUITests: XCTestCase {
     }
 
     @MainActor
+    func testUploadPreviewCloseDoesNotBlockTabSwitch() throws {
+        let app = makeApp(["-NotePatchUITestWorkbench", "-NotePatchUITestPendingImage"])
+        app.launch()
+        XCTAssertTrue(app.otherElements["workbenchTabs"].waitForExistence(timeout: 5))
+
+        app.buttons["uploadFAB"].tap()
+        XCTAssertTrue(app.descendants(matching: .any)["uploadScreen"].waitForExistence(timeout: 3))
+        app.buttons["uploadQueueThumbnail"].tap()
+        XCTAssertTrue(app.buttons["imagePreviewCloseButton"].waitForExistence(timeout: 3))
+        app.buttons["imagePreviewCloseButton"].tap()
+        XCTAssertFalse(app.buttons["imagePreviewCloseButton"].exists)
+        app.buttons["closeUploadScreenButton"].tap()
+        XCTAssertFalse(app.buttons["closeUploadScreenButton"].isHittable)
+
+        let uploadButton = app.buttons["uploadFAB"]
+        XCTAssertTrue(uploadButton.isHittable)
+        uploadButton.tap()
+        XCTAssertTrue(app.buttons["closeUploadScreenButton"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.buttons["closeUploadScreenButton"].isHittable)
+        app.buttons["closeUploadScreenButton"].tap()
+        XCTAssertFalse(app.buttons["closeUploadScreenButton"].isHittable)
+
+        let aiTab = app.buttons["tab.ai"]
+        XCTAssertTrue(aiTab.isHittable)
+        aiTab.tap()
+        XCTAssertTrue(app.buttons["chatHistoryButton"].waitForExistence(timeout: 3))
+    }
+
+    @MainActor
+    func testFailedTaskPageDoesNotBlockTabSwitch() throws {
+        let app = makeApp(["-NotePatchUITestWorkbench", "-NotePatchUITestPurgeFailure"])
+        app.launch()
+        XCTAssertTrue(app.otherElements["workbenchTabs"].waitForExistence(timeout: 5))
+
+        app.buttons["homeActiveTask"].tap()
+        XCTAssertTrue(app.descendants(matching: .any)["taskScreen"].waitForExistence(timeout: 3))
+        app.navigationBars.buttons.firstMatch.tap()
+        app.buttons["tab.ai"].tap()
+        XCTAssertTrue(app.buttons["chatHistoryButton"].waitForExistence(timeout: 3))
+    }
+
+    @MainActor
+    func testScrolledContentDoesNotStealBottomNavigationTaps() throws {
+        let app = makeApp(["-NotePatchUITestWorkbench"])
+        app.launch()
+        XCTAssertTrue(app.otherElements["workbenchTabs"].waitForExistence(timeout: 5))
+
+        app.swipeUp()
+        let aiTab = app.buttons["tab.ai"]
+        XCTAssertTrue(aiTab.isHittable)
+        aiTab.tap()
+        XCTAssertTrue(app.buttons["chatHistoryButton"].waitForExistence(timeout: 3))
+    }
+
+    @MainActor
     func testGlobalFeedbackPinsDismissesWithoutSwallowingTapAndCanBeDisabled() throws {
         let app = makeApp(["-NotePatchUITestWorkbench", "-NotePatchUITestFeedbackSuccess"])
         app.launch()
