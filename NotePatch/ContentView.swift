@@ -919,8 +919,17 @@ private struct CompactPageHeader: View {
                 .buttonStyle(NPToolbarIconButtonStyle())
                 .accessibilityLabel(actionAccessibilityLabel ?? title)
             }
+            CompactPageLogo()
         }
         .frame(minHeight: 56)
+    }
+}
+
+private struct CompactPageLogo: View {
+    var body: some View {
+        NotePatchLogoImage(height: 20)
+            .frame(width: 48, height: 32, alignment: .trailing)
+            .accessibilityHidden(true)
     }
 }
 
@@ -2499,6 +2508,7 @@ private struct OpenClawChatTab: View {
                         }
                         .disabled(chatState.isHistoryLoading || chatState.isConversationMutating || chatState.isSending)
                         .accessibilityLabel(localized("chat.conversation_actions"))
+                        CompactPageLogo()
                     }
                     .padding(.horizontal, NPSpacing.outer)
                     .padding(.vertical, 14)
