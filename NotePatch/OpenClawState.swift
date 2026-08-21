@@ -8,8 +8,10 @@ final class OpenClawViewState: ObservableObject {
     @Published var conversations: [ChatConversation] = []
     @Published var selectedConversationId: String?
     @Published var isSending = false
+    @Published var cancellingTaskId: String?
     @Published var isHistoryLoading = false
     @Published var isConversationMutating = false
+    @Published var isMessageRevising = false
 
     init(messages: [OpenClawChatMessage] = []) {
         self.messages = messages
@@ -36,6 +38,17 @@ final class OpenClawViewState: ObservableObject {
         }
         messages[index] = updated
         return true
+    }
+
+    @discardableResult
+    func updateMessage(
+        taskId: String,
+        transform: (inout OpenClawChatMessage) -> Void
+    ) -> Bool {
+        guard let messageId = messages.last(where: { $0.taskId == taskId })?.id else {
+            return false
+        }
+        return updateMessage(id: messageId, transform: transform)
     }
 }
 

@@ -87,6 +87,82 @@ final class LearningBackendClient {
         try await authedJSON("GET", "/auth/me", payload: nil, as: BackendUser.self)
     }
 
+    func getUserProfile() async throws -> UserProfileSnapshot {
+        let request = try request(method: "GET", pathOrURL: "/user/profile")
+        let (data, response) = try await authedResponse(for: request, allowRefresh: true)
+        let envelope = try await decode(APIResponseEnvelope<UserProfile>.self, from: data)
+        return UserProfileSnapshot(
+            profile: envelope.data,
+            etag: response.value(forHTTPHeaderField: "ETag") ?? "\"profile-\(envelope.data.profileVersion)\""
+        )
+    }
+
+    func updateUserProfile(
+        etag: String,
+        idempotencyKey: String,
+        fields: [String: Any]
+    ) async throws -> UserProfileSnapshot {
+        var profileRequest = try request(method: "PUT", pathOrURL: "/user/profile")
+        profileRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        profileRequest.setValue(etag, forHTTPHeaderField: "If-Match")
+        profileRequest.setValue(idempotencyKey, forHTTPHeaderField: "Idempotency-Key")
+        profileRequest.httpBody = try JSONSerialization.data(withJSONObject: fields)
+        let (data, response) = try await authedResponse(for: profileRequest, allowRefresh: true)
+        let envelope = try await decode(APIResponseEnvelope<UserProfile>.self, from: data)
+        return UserProfileSnapshot(
+            profile: envelope.data,
+            etag: response.value(forHTTPHeaderField: "ETag") ?? "\"profile-\(envelope.data.profileVersion)\""
+        )
+    }
+
+    func uploadUserAvatar(
+        data avatarData: Data,
+        mimeType: String,
+        filename: String,
+        etag: String,
+        idempotencyKey: String
+    ) async throws -> UserProfileSnapshot {
+        let boundary = "NotePatch-\(UUID().uuidString)"
+        var body = Data()
+        body.append(Data("--\(boundary)\r\n".utf8))
+        body.append(Data("Content-Disposition: form-data; name=\"file\"; filename=\"\(sanitizeFileName(filename))\"\r\n".utf8))
+        body.append(Data("Content-Type: \(mimeType)\r\n\r\n".utf8))
+        body.append(avatarData)
+        body.append(Data("\r\n--\(boundary)--\r\n".utf8))
+
+        var avatarRequest = try request(method: "POST", pathOrURL: "/user/avatar/upload")
+        avatarRequest.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        avatarRequest.setValue(etag, forHTTPHeaderField: "If-Match")
+        avatarRequest.setValue(idempotencyKey, forHTTPHeaderField: "Idempotency-Key")
+        avatarRequest.httpBody = body
+        let (data, response) = try await authedResponse(for: avatarRequest, allowRefresh: true)
+        let envelope = try await decode(APIResponseEnvelope<UserProfile>.self, from: data)
+        return UserProfileSnapshot(
+            profile: envelope.data,
+            etag: response.value(forHTTPHeaderField: "ETag") ?? "\"profile-\(envelope.data.profileVersion)\""
+        )
+    }
+
+    func getUserAvatarData() async throws -> Data {
+        let envelope = try await authedJSON(
+            "GET",
+            "/user/avatar/download-url",
+            payload: nil,
+            as: APIResponseEnvelope<AvatarDownloadURL>.self
+        )
+        let url = try resolveServiceURL(envelope.data.downloadURL)
+        var avatarRequest = URLRequest(url: url)
+        avatarRequest.httpMethod = "GET"
+        avatarRequest.timeoutInterval = 30
+        if url.path.contains("/api/v1/user/avatar/") {
+            let (data, _) = try await authedResponse(for: avatarRequest, allowRefresh: true)
+            return data
+        }
+        let (data, response) = try await data(for: avatarRequest)
+        try validate(response: response, data: data)
+        return data
+    }
+
     func updateAIPreferences(aiHistoryEnabled: Bool) async throws -> AIHistoryPreferenceResponse {
         try await authedJSON(
             "PATCH",
@@ -350,12 +426,13 @@ final class LearningBackendClient {
         workspaceId: String,
         prompt: String,
         conversationId: String? = nil,
-        input: [String: Any] = [:]
+        input: [String: Any] = [:],
+        options: [String: Any] = [:]
     ) async throws -> TaskItem {
         var payload: [String: Any] = [
             "prompt": prompt,
             "input": input,
-            "options": [:]
+            "options": options
         ]
         if let conversationId, !conversationId.isEmpty {
             payload["conversation_id"] = conversationId
@@ -364,6 +441,15 @@ final class LearningBackendClient {
             "POST",
             "/workspaces/\(workspaceId.pathSegment)/ai/chat",
             payload: payload,
+            as: TaskItem.self
+        )
+    }
+
+    func cancelTask(workspaceId: String, taskId: String) async throws -> TaskItem {
+        try await authedJSON(
+            "POST",
+            "/workspaces/\(workspaceId.pathSegment)/tasks/\(taskId.pathSegment)/cancel",
+            payload: [:],
             as: TaskItem.self
         )
     }
@@ -401,6 +487,26 @@ final class LearningBackendClient {
             "/workspaces/\(workspaceId.pathSegment)/ai/conversations/\(conversationId.pathSegment)",
             payload: nil
         )
+    }
+
+    func reviseChatMessage(
+        workspaceId: String,
+        conversationId: String,
+        messageId: String,
+        prompt: String,
+        options: [String: Any]
+    ) async throws -> TaskItem {
+        let response = try await authedJSON(
+            "POST",
+            "/workspaces/\(workspaceId.pathSegment)/ai/conversations/\(conversationId.pathSegment)/messages/\(messageId.pathSegment)/revisions",
+            payload: [
+                "prompt": prompt,
+                "input": NSNull(),
+                "options": options
+            ],
+            as: APIResponseEnvelope<TaskItem>.self
+        )
+        return response.data
     }
 
     func listLearningUnits(workspaceId: String) async throws -> [LearningUnit] {
@@ -771,6 +877,35 @@ final class LearningBackendClient {
         return data
     }
 
+    private func authedResponse(
+        for originalRequest: URLRequest,
+        allowRefresh: Bool
+    ) async throws -> (Data, HTTPURLResponse) {
+        var authenticatedRequest = originalRequest
+        authenticatedRequest.setValue(try bearerHeader(), forHTTPHeaderField: "Authorization")
+        let (data, response) = try await data(for: authenticatedRequest)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw LearningBackendError(localizedKey: "error.server.invalid_response")
+        }
+        if httpResponse.statusCode == 401, allowRefresh {
+            guard let refreshToken else {
+                throw LearningBackendError(
+                    localizedKey: "error.session.expired",
+                    statusCode: 401,
+                    shouldClearSession: true
+                )
+            }
+            let attemptedRefreshToken = refreshToken
+            let refreshed = try await refreshTokenSingleFlight(attemptedRefreshToken)
+            accessToken = refreshed.accessToken
+            self.refreshToken = refreshed.refreshToken
+            onTokenRefreshed?(refreshed, attemptedRefreshToken)
+            return try await authedResponse(for: originalRequest, allowRefresh: false)
+        }
+        try validate(response: httpResponse, data: data)
+        return (data, httpResponse)
+    }
+
     private func openTaskEventStream(
         workspaceId: String,
         taskId: String,
@@ -930,9 +1065,14 @@ final class LearningBackendClient {
         }
         let data = Data(body.utf8)
         let json = try? JSONSerialization.jsonObject(with: data)
-        guard let object = json as? [String: Any], let detail = object["detail"] else {
+        guard let object = json as? [String: Any] else {
             return defaultErrorMessage(status)
         }
+        if let message = object["message"] as? String,
+           !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return message
+        }
+        guard let detail = object["detail"] else { return defaultErrorMessage(status) }
         if let message = detail as? String {
             return message.isEmpty ? defaultErrorMessage(status) : message
         }

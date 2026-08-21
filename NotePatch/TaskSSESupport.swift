@@ -117,6 +117,7 @@ struct TaskSSEParser {
                 level: payload.level,
                 message: payload.message,
                 progress: payload.progress,
+                data: payload.data,
                 dataText: payload.data?.displayString,
                 createdAt: payload.createdAt
             ))

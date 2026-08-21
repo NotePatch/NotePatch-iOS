@@ -754,6 +754,9 @@ struct ChatMessage: Decodable, Equatable, Identifiable {
     let sourceStatus: String?
     let modelId: String?
     let attachments: [ChatMessageAttachment]?
+    let revisionOfMessageId: String?
+    let supersededByMessageId: String?
+    let supersededAt: String?
     let createdAt: String
 
     enum CodingKeys: String, CodingKey {
@@ -768,7 +771,56 @@ struct ChatMessage: Decodable, Equatable, Identifiable {
         case sourceStatus = "source_status"
         case modelId = "model_id"
         case attachments
+        case revisionOfMessageId = "revision_of_message_id"
+        case supersededByMessageId = "superseded_by_message_id"
+        case supersededAt = "superseded_at"
         case createdAt = "created_at"
+    }
+}
+
+struct APIResponseEnvelope<Value: Decodable>: Decodable {
+    let code: String
+    let message: String
+    let data: Value
+}
+
+struct UserProfile: Decodable, Equatable, Identifiable {
+    let id: String
+    let name: String
+    let email: String
+    let avatarURL: String?
+    let profileVersion: Int
+    let reauthenticationRequired: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case email
+        case avatarURL = "avatar_url"
+        case profileVersion = "profile_version"
+        case reauthenticationRequired = "reauthentication_required"
+    }
+}
+
+struct UserProfileSnapshot: Equatable {
+    let profile: UserProfile
+    let etag: String
+}
+
+struct AvatarDownloadURL: Decodable, Equatable {
+    let downloadURL: String
+
+    enum CodingKeys: String, CodingKey {
+        case downloadURL = "download_url"
+        case url
+        case avatarURL = "avatar_url"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        downloadURL = try container.decodeIfPresent(String.self, forKey: .downloadURL)
+            ?? container.decodeIfPresent(String.self, forKey: .url)
+            ?? container.decode(String.self, forKey: .avatarURL)
     }
 }
 
@@ -1562,6 +1614,7 @@ struct TaskEventItem: Decodable, Equatable, Identifiable {
     let level: String
     let message: String
     let progress: Int?
+    let data: JSONValue?
     let dataText: String?
     let createdAt: String
 
@@ -1588,7 +1641,8 @@ struct TaskEventItem: Decodable, Equatable, Identifiable {
         level = try container.decodeIfPresent(String.self, forKey: .level) ?? ""
         message = try container.decodeIfPresent(String.self, forKey: .message) ?? ""
         progress = try container.decodeIfPresent(Int.self, forKey: .progress)
-        dataText = try container.decodeIfPresent(JSONValue.self, forKey: .data)?.displayString
+        data = try container.decodeIfPresent(JSONValue.self, forKey: .data)
+        dataText = data?.displayString
         createdAt = try container.decodeIfPresent(String.self, forKey: .createdAt) ?? ""
     }
 
@@ -1601,6 +1655,7 @@ struct TaskEventItem: Decodable, Equatable, Identifiable {
         level: String,
         message: String,
         progress: Int?,
+        data: JSONValue? = nil,
         dataText: String?,
         createdAt: String
     ) {
@@ -1612,6 +1667,7 @@ struct TaskEventItem: Decodable, Equatable, Identifiable {
         self.level = level
         self.message = message
         self.progress = progress
+        self.data = data
         self.dataText = dataText
         self.createdAt = createdAt
     }
@@ -1671,6 +1727,21 @@ struct SavedSession: Equatable {
             fullName: user.fullName,
             selectedWorkspaceId: selectedWorkspaceId,
             aiHistoryEnabled: user.aiHistoryEnabled
+        )
+    }
+
+    func withProfile(_ profile: UserProfile) -> SavedSession {
+        SavedSession(
+            baseURL: baseURL,
+            tusBaseURL: tusBaseURL,
+            accessToken: accessToken,
+            refreshToken: refreshToken,
+            expiresAt: expiresAt,
+            userId: profile.id,
+            email: profile.email,
+            fullName: profile.name,
+            selectedWorkspaceId: selectedWorkspaceId,
+            aiHistoryEnabled: aiHistoryEnabled
         )
     }
 }

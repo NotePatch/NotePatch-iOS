@@ -466,11 +466,22 @@ struct NotePatchTests {
         #expect(workbenchBottomObstruction(containerHeight: 700, bottomBarFrame: bar, isVisible: true) == 0)
     }
 
+    @Test func statusOverlayPositionStaysInLowerViewportAndAboveBottomObstruction() {
+        let fullScreen = workbenchStatusCenterY(containerHeight: 844, topSafeArea: 59, bottomObstruction: 122)
+        #expect(fullScreen > 844 * 0.5)
+        #expect(fullScreen <= 844 - 122 - 56)
+
+        let smallScreen = workbenchStatusCenterY(containerHeight: 667, topSafeArea: 20, bottomObstruction: 98)
+        #expect(smallScreen > 667 * 0.5)
+        #expect(smallScreen <= 667 - 98 - 56)
+    }
+
     @Test @MainActor func workbenchTabsHaveExpectedOrderAndDefault() throws {
         #expect(WorkbenchTab.allCases == [.home, .notes, .openClaw, .profile])
         let model = NotePatchViewModel()
         #expect(model.selectedTab == .home)
-        #expect(model.selectedNotesSection == .notes)
+        #expect(model.selectedLearningSection == .notes)
+        #expect(LearningSection.allCases == [.notes, .units, .search, .homework, .flashcards])
 
         var rootPublicationCount = 0
         let rootPublication = model.objectWillChange.sink { rootPublicationCount += 1 }
@@ -535,6 +546,12 @@ struct NotePatchTests {
                 return Self.response(request, status: 200, body: #"[{"id":"note-1","learning_unit_id":"unit-1","version_no":1,"title":"笔记","html_object_key":"h","json_object_key":"j","download_urls":{}}]"#)
             case "/api/v1/workspaces/ws-1/ai/models":
                 return Self.response(request, status: 200, body: #"{"provider":"openai","default_model":"model-default","selected_model":"model-default","items":[],"fetched_at":"","stale":false}"#)
+            case "/api/v1/user/profile":
+                return Self.response(
+                    request,
+                    status: 200,
+                    body: #"{"code":"ok","message":"Profile loaded","data":{"id":"u-1","name":"User","email":"user@example.com","avatar_url":null,"profile_version":1,"reauthentication_required":false}}"#
+                )
             default:
                 return Self.response(request, status: 500, body: #"{"detail":"unexpected request"}"#)
             }
@@ -593,14 +610,15 @@ struct NotePatchTests {
         model.selectedTab = .profile
         model.ensureContentForSelectedTabLoaded()
         try await Self.waitUntil { model.aiModelCatalog != nil && !model.isAIModelsLoading }
-        #expect(paths.count == requestsBeforeProfile + 1)
+        #expect(paths.count == requestsBeforeProfile + 2)
         #expect(paths.filter { $0 == "/api/v1/workspaces/ws-1/ai/models" }.count == 1)
+        #expect(paths.filter { $0 == "/api/v1/user/profile" }.count == 1)
         model.ensureContentForSelectedTabLoaded()
         try await Task.sleep(nanoseconds: 50_000_000)
         #expect(paths.filter { $0 == "/api/v1/workspaces/ws-1/ai/models" }.count == 1)
 
         model.selectedTab = .notes
-        model.selectedNotesSection = .review
+        model.selectedLearningSection = .units
         model.ensureContentForSelectedTabLoaded()
         try await Self.waitUntil { !model.isLearningLoading && !model.isHomeworkLoading }
         #expect(paths.filter { $0 == "/api/v1/workspaces/ws-1/learning-units" }.count == 1)
@@ -640,7 +658,7 @@ struct NotePatchTests {
         try await Self.waitUntil { !model.isNotesLoading }
 
         #expect(model.studyNoteGroups.map(\.learningUnit.id) == ["unit-1"])
-        #expect(model.statusMessage.contains("1 个单元加载失败"))
+        #expect(model.statusMessage == localizedFormat("notes.partial_load", "1", "1"))
     }
 
     @Test @MainActor func markdownRenderingCachesStableBlocks() async throws {
@@ -1325,6 +1343,12 @@ struct NotePatchTests {
         )
         #expect(LearningBackendClient.parseErrorMessage("", status: 409) == localized("error.http.conflict"))
         #expect(LearningBackendClient.parseErrorMessage("", status: 410) == localized("error.http.gone"))
+        #expect(
+            LearningBackendClient.parseErrorMessage(
+                #"{"code":"profile_version_mismatch","message":"Profile changed elsewhere"}"#,
+                status: 412
+            ) == "Profile changed elsewhere"
+        )
     }
 
     @Test func openClawAndMarkdownHelpers_matchAndroidBehavior() {
@@ -1654,6 +1678,368 @@ struct NotePatchTests {
         #expect(attachments?.first?["mime_type"] as? String == "image/png")
         #expect(capturedBody?["options"] as? [String: Any] != nil)
         #expect(task.id == "task-1")
+    }
+
+    @Test func openClawChat_sendsThinkingOptions() async throws {
+        var capturedBody: [String: Any]?
+        let session = Self.mockSession { request in
+            if let body = Self.requestBodyData(request) {
+                capturedBody = try JSONSerialization.jsonObject(with: body) as? [String: Any]
+            }
+            return Self.response(request, status: 200, body: Self.taskJSON)
+        }
+
+        let client = LearningBackendClient(
+            baseURL: "https://api.test",
+            accessToken: "access",
+            refreshToken: "refresh",
+            session: session
+        )
+        _ = try await client.openClawChat(
+            workspaceId: "ws-1",
+            prompt: "解释这道题",
+            conversationId: nil,
+            input: [:],
+            options: ["thinking": ["enabled": true, "effort": "adaptive"]]
+        )
+
+        let options = capturedBody?["options"] as? [String: Any]
+        let thinking = options?["thinking"] as? [String: Any]
+        #expect(thinking?["enabled"] as? Bool == true)
+        #expect(thinking?["effort"] as? String == "adaptive")
+    }
+
+    @Test func cancelTask_usesDocumentedEndpoint() async throws {
+        var capturedRequest: URLRequest?
+        let session = Self.mockSession { request in
+            capturedRequest = request
+            return Self.response(request, status: 202, body: Self.taskJSON)
+        }
+
+        let client = LearningBackendClient(
+            baseURL: "https://api.test",
+            accessToken: "access",
+            refreshToken: "refresh",
+            session: session
+        )
+        let task = try await client.cancelTask(workspaceId: "ws-1", taskId: "task-1")
+
+        #expect(capturedRequest?.httpMethod == "POST")
+        #expect(capturedRequest?.url?.path == "/api/v1/workspaces/ws-1/tasks/task-1/cancel")
+        #expect(task.id == "task-1")
+    }
+
+    @Test @MainActor func reviseChatMessage_usesRevisionEndpointAndInheritsAttachments() async throws {
+        var capturedRequest: URLRequest?
+        var capturedBody: [String: Any]?
+        let session = Self.mockSession { request in
+            capturedRequest = request
+            if let body = Self.requestBodyData(request) {
+                capturedBody = try JSONSerialization.jsonObject(with: body) as? [String: Any]
+            }
+            return Self.response(
+                request,
+                status: 202,
+                body: #"{"code":"ok","message":"Chat message revised","data":{"id":"task-1","workspace_id":"ws-1","task_type":"openclaw_agent_run","status":"queued","payload":{"conversation_id":"c-1","revised_message_id":"m-1"},"progress":0}}"#
+            )
+        }
+        let client = LearningBackendClient(
+            baseURL: "https://api.test",
+            accessToken: "access",
+            refreshToken: "refresh",
+            session: session
+        )
+
+        let task = try await client.reviseChatMessage(
+            workspaceId: "ws/1",
+            conversationId: "conversation/1",
+            messageId: "message/1",
+            prompt: "修改后的问题",
+            options: ["thinking": ["enabled": true, "effort": "adaptive"]]
+        )
+
+        #expect(capturedRequest?.httpMethod == "POST")
+        let encodedPath = capturedRequest?.url.flatMap {
+            URLComponents(url: $0, resolvingAgainstBaseURL: false)?.percentEncodedPath
+        }
+        #expect(encodedPath == "/api/v1/workspaces/ws%2F1/ai/conversations/conversation%2F1/messages/message%2F1/revisions")
+        #expect(capturedBody?["prompt"] as? String == "修改后的问题")
+        #expect(capturedBody?["input"] is NSNull)
+        let options = capturedBody?["options"] as? [String: Any]
+        let thinking = options?["thinking"] as? [String: Any]
+        #expect(thinking?["enabled"] as? Bool == true)
+        #expect(task.id == "task-1")
+    }
+
+    @Test @MainActor func userProfileRequestsUseETagIdempotencyAndMultipart() async throws {
+        var requests: [URLRequest] = []
+        let profileOne = #"{"code":"ok","message":"Profile loaded","data":{"id":"u-1","name":"Alice","email":"alice@example.com","avatar_url":null,"profile_version":3,"reauthentication_required":false}}"#
+        let profileTwo = #"{"code":"ok","message":"Profile saved","data":{"id":"u-1","name":"Alice Chen","email":"alice@example.com","avatar_url":"/api/v1/user/avatar/content?v=2","profile_version":4,"reauthentication_required":false}}"#
+        let session = Self.mockSession { request in
+            requests.append(request)
+            let body = request.httpMethod == "GET" ? profileOne : profileTwo
+            let etag = request.httpMethod == "GET" ? "\"profile-3\"" : "\"profile-4\""
+            let response = HTTPURLResponse(
+                url: try #require(request.url),
+                statusCode: request.httpMethod == "GET" ? 200 : 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json", "ETag": etag]
+            )!
+            return (response, Data(body.utf8))
+        }
+        let client = LearningBackendClient(
+            baseURL: "https://api.test",
+            accessToken: "access",
+            refreshToken: "refresh",
+            session: session
+        )
+
+        let loaded = try await client.getUserProfile()
+        let updated = try await client.updateUserProfile(
+            etag: loaded.etag,
+            idempotencyKey: "profile-key",
+            fields: ["name": "Alice Chen"]
+        )
+        _ = try await client.uploadUserAvatar(
+            data: Data([0xff, 0xd8, 0xff, 0xd9]),
+            mimeType: "image/jpeg",
+            filename: "avatar.jpg",
+            etag: updated.etag,
+            idempotencyKey: "avatar-key"
+        )
+
+        #expect(loaded.etag == "\"profile-3\"")
+        #expect(updated.profile.name == "Alice Chen")
+        #expect(requests.count == 3)
+        #expect(requests[1].value(forHTTPHeaderField: "If-Match") == "\"profile-3\"")
+        #expect(requests[1].value(forHTTPHeaderField: "Idempotency-Key") == "profile-key")
+        #expect(requests[2].value(forHTTPHeaderField: "If-Match") == "\"profile-4\"")
+        #expect(requests[2].value(forHTTPHeaderField: "Idempotency-Key") == "avatar-key")
+        #expect(requests[2].value(forHTTPHeaderField: "Content-Type")?.hasPrefix("multipart/form-data; boundary=") == true)
+        let multipart = try #require(Self.requestBodyData(requests[2]))
+        #expect(String(data: multipart, encoding: .isoLatin1)?.contains("name=\"file\"; filename=\"avatar.jpg\"") == true)
+    }
+
+    @Test @MainActor func profileValidationRequiresValidEmailAndPasswordForEmailChanges() {
+        let model = NotePatchViewModel()
+        model.session = SavedSession(
+            baseURL: "https://api.test",
+            tusBaseURL: "https://tus.test/files/",
+            accessToken: "a",
+            refreshToken: "r",
+            expiresAt: "x",
+            userId: "u-1",
+            email: "alice@example.com",
+            fullName: "Alice",
+            selectedWorkspaceId: "ws-1",
+            aiHistoryEnabled: true
+        )
+        model.userProfileState.apply(UserProfileSnapshot(
+            profile: UserProfile(
+                id: "u-1",
+                name: "Alice",
+                email: "alice@example.com",
+                avatarURL: nil,
+                profileVersion: 1,
+                reauthenticationRequired: false
+            ),
+            etag: "\"profile-1\""
+        ))
+
+        model.userProfileState.emailDraft = "not-an-email"
+        model.saveUserProfile()
+        #expect(model.errorMessage == localized("profile.validation.email_invalid"))
+
+        model.userProfileState.emailDraft = "new@example.com"
+        model.userProfileState.currentPassword = ""
+        model.saveUserProfile()
+        #expect(model.errorMessage == localized("profile.validation.password_required"))
+    }
+
+    @Test @MainActor func avatarRetryReusesIdempotencyKeyForSamePreparedImage() async throws {
+        let suiteName = "NotePatchAvatarRetryTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        var uploadKeys: [String] = []
+        let responseBody = #"{"code":"ok","message":"Avatar saved","data":{"id":"u-1","name":"Alice","email":"alice@example.com","avatar_url":"/api/v1/user/avatar/content?v=2","profile_version":2,"reauthentication_required":false}}"#
+        let session = Self.mockSession { request in
+            uploadKeys.append(request.value(forHTTPHeaderField: "Idempotency-Key") ?? "")
+            if uploadKeys.count == 1 {
+                return Self.response(request, status: 503, body: #"{"code":"storage_unavailable","message":"Storage unavailable"}"#)
+            }
+            let response = HTTPURLResponse(
+                url: try #require(request.url),
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json", "ETag": "\"profile-2\""]
+            )!
+            return (response, Data(responseBody.utf8))
+        }
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("NotePatchAvatarRetryTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let image = UIGraphicsImageRenderer(size: CGSize(width: 32, height: 32)).image { context in
+            UIColor.systemGreen.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 32, height: 32))
+        }
+        let file = try writeImageToUploadCache(image, cacheDirectory: root)
+        let model = NotePatchViewModel(
+            settings: SettingsStore(defaults: defaults, keychain: KeychainStore(service: suiteName)),
+            backendSession: session,
+            tusSession: session,
+            cacheDirectory: root
+        )
+        model.session = SavedSession(
+            baseURL: "https://api.test",
+            tusBaseURL: "https://tus.test/files/",
+            accessToken: "a",
+            refreshToken: "r",
+            expiresAt: "x",
+            userId: "u-1",
+            email: "alice@example.com",
+            fullName: "Alice",
+            selectedWorkspaceId: "ws-1",
+            aiHistoryEnabled: true
+        )
+        model.userProfileState.apply(UserProfileSnapshot(
+            profile: UserProfile(
+                id: "u-1",
+                name: "Alice",
+                email: "alice@example.com",
+                avatarURL: nil,
+                profileVersion: 1,
+                reauthenticationRequired: false
+            ),
+            etag: "\"profile-1\""
+        ))
+
+        model.uploadUserAvatar(file)
+        try await Self.waitUntil { !model.userProfileState.isAvatarUploading }
+        #expect(model.userProfileState.hasPendingAvatarRetry)
+        model.retryPendingAvatarUpload()
+        try await Self.waitUntil { !model.userProfileState.isAvatarUploading }
+
+        #expect(uploadKeys.count == 2)
+        #expect(uploadKeys[0] == uploadKeys[1])
+        #expect(!model.userProfileState.hasPendingAvatarRetry)
+    }
+
+    @Test @MainActor func profileConflictReloadsLatestAndPreservesDraft() async throws {
+        let suiteName = "NotePatchProfileConflictTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let session = Self.mockSession { request in
+            if request.httpMethod == "PUT" {
+                return Self.response(
+                    request,
+                    status: 412,
+                    body: #"{"code":"profile_version_mismatch","message":"Profile changed elsewhere"}"#
+                )
+            }
+            let response = HTTPURLResponse(
+                url: try #require(request.url),
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json", "ETag": "\"profile-2\""]
+            )!
+            return (
+                response,
+                Data(#"{"code":"ok","message":"Profile loaded","data":{"id":"u-1","name":"Server Name","email":"alice@example.com","avatar_url":null,"profile_version":2,"reauthentication_required":false}}"#.utf8)
+            )
+        }
+        let model = Self.profileModelForTests(defaults: defaults, session: session, service: suiteName)
+        model.userProfileState.nameDraft = "Local Name"
+        model.saveUserProfile()
+        try await Self.waitUntil { !model.userProfileState.isSaving }
+
+        #expect(model.userProfileState.hasConflict)
+        #expect(model.userProfileState.snapshot?.etag == "\"profile-2\"")
+        #expect(model.userProfileState.snapshot?.profile.name == "Server Name")
+        #expect(model.userProfileState.nameDraft == "Local Name")
+    }
+
+    @Test @MainActor func emailProfileUpdateClearsTokensWhenReauthenticationIsRequired() async throws {
+        let suiteName = "NotePatchProfileReauthenticationTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        var body: [String: Any]?
+        let session = Self.mockSession { request in
+            if let data = Self.requestBodyData(request) {
+                body = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+            }
+            let response = HTTPURLResponse(
+                url: try #require(request.url),
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json", "ETag": "\"profile-2\""]
+            )!
+            return (
+                response,
+                Data(#"{"code":"ok","message":"Profile saved","data":{"id":"u-1","name":"Alice","email":"new@example.com","avatar_url":null,"profile_version":2,"reauthentication_required":true}}"#.utf8)
+            )
+        }
+        let model = Self.profileModelForTests(defaults: defaults, session: session, service: suiteName)
+        model.userProfileState.emailDraft = "new@example.com"
+        model.userProfileState.currentPassword = "secret"
+        model.saveUserProfile()
+        try await Self.waitUntil { model.session == nil }
+
+        #expect(body?["email"] as? String == "new@example.com")
+        #expect(body?["current_password"] as? String == "secret")
+        #expect(model.statusMessage == localized("profile.reauthentication_required"))
+        #expect(
+            SettingsStore(
+                defaults: defaults,
+                keychain: KeychainStore(service: suiteName)
+            ).loadSession() == nil
+        )
+    }
+
+    @Test func taskEventItem_preservesStructuredDataForStreaming() throws {
+        let json = #"{"id":"event-1","workspace_id":"ws-1","task_id":"task-1","sequence_no":3,"event_type":"chat_answer_delta","level":"info","message":"chunk","progress":null,"data":{"stream":"answer","delta":"你好","chunk_index":1,"attempt":1,"characters":2},"created_at":""}"#
+        let event = try JSONDecoder.notepatch.decode(TaskEventItem.self, from: Data(json.utf8))
+
+        #expect(event.eventType == "chat_answer_delta")
+        #expect(event.data?.objectStringValue(for: "stream") == "answer")
+        #expect(event.data?.objectStringValue(for: "delta") == "你好")
+        #expect(event.dataText != nil)
+    }
+
+    @Test @MainActor func chatStreamReducer_appendsDeltasAndHandlesControlEvents() {
+        func event(_ type: String, _ sequence: Int, delta: String? = nil) -> TaskEventItem {
+            TaskEventItem(
+                id: "event-\(sequence)",
+                workspaceId: "ws-1",
+                taskId: "task-1",
+                sequenceNo: sequence,
+                eventType: type,
+                level: "info",
+                message: "",
+                progress: nil,
+                data: delta.map { .object(["delta": .string($0)]) },
+                dataText: nil,
+                createdAt: ""
+            )
+        }
+
+        let events = [
+            event("chat_stream_started", 1),
+            event("chat_reasoning_delta", 2, delta: "先审题"),
+            event("chat_answer_delta", 3, delta: "答案是"),
+            event("chat_answer_delta", 4, delta: " 42"),
+            event("chat_stream_started", 5),
+            event("chat_answer_delta", 6, delta: "重新回答"),
+            event("chat_stream_truncated", 7),
+            event("chat_reasoning_unavailable", 8)
+        ]
+
+        let state = NotePatchViewModel.reduceChatStreamEvents(events)
+
+        #expect(state.answer == "重新回答")
+        #expect(state.reasoning == "")
+        #expect(state.truncated)
+        #expect(state.reasoningUnavailable)
     }
 
     @Test @MainActor func openClawAttachmentUploadFailure_keepsComposerDraft() async throws {
@@ -2048,7 +2434,7 @@ struct NotePatchTests {
         )
         #expect(decoded.downloadURLs.isEmpty)
         #expect(decoded.sourceVersionId == "n-0")
-        #expect(decoded.revisionOriginLabel == "用户修订")
+        #expect(decoded.revisionOriginLabel == localized("note.origin.user"))
 
         var revisionBodies: [[String: Any]] = []
         var phase = 0
@@ -2330,10 +2716,10 @@ struct NotePatchTests {
         try await Self.waitUntil { !model.isConversationMutating }
         #expect(renameCount == 1)
         #expect(model.selectedConversation?.title == "新标题")
-        #expect(model.statusMessage == "对话标题已保存。")
+        #expect(model.statusMessage == localized("chat.title_saved"))
 
         model.renameCurrentConversation(to: String(repeating: "a", count: 161))
-        #expect(model.errorMessage == "对话标题不能超过 160 个字符。")
+        #expect(model.errorMessage == localized("chat.error.title_length"))
         #expect(renameCount == 1)
 
         model.deleteCurrentConversation()
@@ -2344,7 +2730,7 @@ struct NotePatchTests {
         #expect(deleteCount == 1)
         #expect(model.conversations.isEmpty)
         #expect(model.selectedConversationId == nil)
-        #expect(model.statusMessage == "对话已删除。")
+        #expect(model.statusMessage == localized("chat.conversation_deleted"))
     }
 
     @Test @MainActor func conversationSelection_ignoresLateResponseFromPreviousSelection() async throws {
@@ -3059,7 +3445,7 @@ struct NotePatchTests {
         #expect(model.session?.email == "uitest")
         #expect(model.selectedWorkspaceId == "ui-workspace")
         #expect(model.workspaces.first?.name == "My Workspace")
-        #expect(model.statusMessage == "UI 离线测试模式")
+        #expect(model.statusMessage == localized("operation.offline_test_mode"))
         #expect(settings.loadSession() == nil)
         #expect(requestCount == 0)
 
@@ -3080,7 +3466,7 @@ struct NotePatchTests {
         model.passwordText = ""
         model.authenticate(register: true)
         #expect(model.session == nil)
-        #expect(model.errorMessage == "请输入邮箱和密码。")
+        #expect(model.errorMessage == localized("auth.error.credentials_required"))
     }
 
     @Test @MainActor func htmlNotesAndFlashcards_decodeLatestContractAndGenerationStates() throws {
@@ -3291,7 +3677,6 @@ struct NotePatchTests {
         model.emailText = "uitest"
         model.authenticate(register: false)
         model.selectedTab = .notes
-        model.selectedNotesSection = .review
         model.selectedLearningSection = .flashcards
         model.ensureContentForSelectedTabLoaded()
 
@@ -3623,6 +4008,46 @@ private extension NotePatchTests {
         return (response, Data(body.utf8))
     }
 
+    @MainActor
+    static func profileModelForTests(
+        defaults: UserDefaults,
+        session: URLSession,
+        service: String
+    ) -> NotePatchViewModel {
+        let settings = SettingsStore(defaults: defaults, keychain: KeychainStore(service: service))
+        let savedSession = SavedSession(
+            baseURL: "https://api.test",
+            tusBaseURL: "https://tus.test/files/",
+            accessToken: "a",
+            refreshToken: "r",
+            expiresAt: "x",
+            userId: "u-1",
+            email: "alice@example.com",
+            fullName: "Alice",
+            selectedWorkspaceId: "ws-1",
+            aiHistoryEnabled: true
+        )
+        settings.saveSession(savedSession)
+        let model = NotePatchViewModel(
+            settings: settings,
+            backendSession: session,
+            tusSession: session
+        )
+        model.session = savedSession
+        model.userProfileState.apply(UserProfileSnapshot(
+            profile: UserProfile(
+                id: "u-1",
+                name: "Alice",
+                email: "alice@example.com",
+                avatarURL: nil,
+                profileVersion: 1,
+                reauthenticationRequired: false
+            ),
+            etag: "\"profile-1\""
+        ))
+        return model
+    }
+
     static func requestBodyData(_ request: URLRequest) -> Data? {
         if let body = request.httpBody {
             return body
@@ -3724,8 +4149,6 @@ private extension NotePatchTests {
         }
     }
 
-}
-
 @MainActor
 private final class TestWebViewNavigationProbe: NSObject, WKNavigationDelegate {
     private var continuation: CheckedContinuation<Void, Error>?
@@ -3816,8 +4239,12 @@ private final class TestWebViewNavigationProbe: NSObject, WKNavigationDelegate {
 
         let input = try #require(chatBody?["input"] as? [String: Any])
         let attachments = try #require(input["attachments"] as? [[String: Any]])
-        #expect(attachments == [["document_id": "doc-completed"]])
+        #expect(attachments.count == 1)
+        #expect(attachments.first?["document_id"] as? String == "doc-completed")
+        #expect(attachments.first?.count == 1)
     }
+
+}
 
 private final class MockURLProtocol: URLProtocol {
     static var handler: ((URLRequest) throws -> (HTTPURLResponse, Data))?

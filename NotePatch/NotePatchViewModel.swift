@@ -20,6 +20,13 @@ private struct DeferredWorkspaceLoadKey: Hashable {
     let content: DeferredWorkspaceContent
 }
 
+private struct PendingProfileUpdate: Equatable {
+    let name: String
+    let email: String
+    let currentPassword: String
+    let idempotencyKey: String
+}
+
 enum WorkbenchTab: Int, CaseIterable, Identifiable {
     case home
     case notes
@@ -64,20 +71,6 @@ final class AuthenticationState: ObservableObject {
     }
 }
 
-enum NotesSection: String, CaseIterable, Identifiable {
-    case notes
-    case review
-
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .notes: return localized("notes.section.notes")
-        case .review: return localized("notes.section.review")
-        }
-    }
-}
-
 enum DocumentsSection: String, CaseIterable, Identifiable {
     case documents
     case tasks
@@ -100,17 +93,19 @@ enum HomeDestination: String, Identifiable {
 }
 
 enum LearningSection: String, CaseIterable, Identifiable {
+    case notes
     case units
     case search
-    case grading
+    case homework
     case flashcards
 
     var id: String { rawValue }
     var title: String {
         switch self {
+        case .notes: return localized("review.section.notes")
         case .units: return localized("review.section.units")
         case .search: return localized("review.section.search")
-        case .grading: return localized("review.section.grading")
+        case .homework: return localized("review.section.homework")
         case .flashcards: return localized("review.section.flashcards")
         }
     }
@@ -126,6 +121,7 @@ enum OpenClawMessageStatus: Equatable {
     case sending
     case done
     case error
+    case stopped
 }
 
 enum OpenClawAttachmentStatus: Equatable {
@@ -152,6 +148,8 @@ struct OpenClawChatMessage: Identifiable, Equatable {
     let id: String
     let role: OpenClawChatRole
     var content: String
+    var streamingContent: String
+    var reasoningContent: String
     var status: OpenClawMessageStatus
     var taskId: String?
     var progress: Int?
@@ -160,11 +158,15 @@ struct OpenClawChatMessage: Identifiable, Equatable {
     var sourceStatus: String?
     var modelId: String?
     var attachments: [OpenClawChatAttachment]
+    var streamTruncated: Bool
+    var reasoningUnavailable: Bool
 
     init(
         id: String,
         role: OpenClawChatRole,
         content: String,
+        streamingContent: String = "",
+        reasoningContent: String = "",
         status: OpenClawMessageStatus,
         taskId: String?,
         progress: Int?,
@@ -172,11 +174,15 @@ struct OpenClawChatMessage: Identifiable, Equatable {
         citations: [ChatCitation] = [],
         sourceStatus: String? = nil,
         modelId: String? = nil,
-        attachments: [OpenClawChatAttachment] = []
+        attachments: [OpenClawChatAttachment] = [],
+        streamTruncated: Bool = false,
+        reasoningUnavailable: Bool = false
     ) {
         self.id = id
         self.role = role
         self.content = content
+        self.streamingContent = streamingContent
+        self.reasoningContent = reasoningContent
         self.status = status
         self.taskId = taskId
         self.progress = progress
@@ -185,6 +191,8 @@ struct OpenClawChatMessage: Identifiable, Equatable {
         self.sourceStatus = sourceStatus
         self.modelId = modelId
         self.attachments = attachments
+        self.streamTruncated = streamTruncated
+        self.reasoningUnavailable = reasoningUnavailable
     }
 }
 
@@ -193,6 +201,7 @@ final class NotePatchViewModel: ObservableObject {
     let homeDashboardState: HomeDashboardState
     let workbenchNavigationState: WorkbenchNavigationState
     let authenticationState: AuthenticationState
+    let userProfileState: UserProfileState
     @Published var apiBaseURLText: String
     @Published var tusBaseURLText: String
     @Published var emailText: String
@@ -202,7 +211,6 @@ final class NotePatchViewModel: ObservableObject {
     @Published private var statusDisplayText: AppDisplayText = .raw("")
     @Published private var errorDisplayText: AppDisplayText?
     @Published var selectedDocumentsSection: DocumentsSection = .documents
-    @Published var selectedNotesSection: NotesSection = .notes
 
     @Published var workspaces: [WorkspaceItem] = []
     @Published var selectedWorkspaceId: String?
@@ -253,7 +261,7 @@ final class NotePatchViewModel: ObservableObject {
     @Published private var studyNoteEditorErrorText: AppDisplayText?
     @Published var isStudyNoteSaving = false
     @Published var isStudyNoteConflictPending = false
-    @Published var selectedLearningSection: LearningSection = .units
+    @Published var selectedLearningSection: LearningSection = .notes
     @Published var isLearningUnitMergePresented = false
     @Published var isLearningUnitMergeConfirmationPresented = false
     @Published var mergeTargetLearningUnitId = ""
@@ -318,12 +326,20 @@ final class NotePatchViewModel: ObservableObject {
     private var conversationLoadTask: Task<Void, Never>?
     private var conversationLoadGeneration = UUID()
     private var conversationMutationGeneration = UUID()
+    private var messageRevisionTask: Task<Void, Never>?
+    private var messageRevisionGeneration = UUID()
     private var aiPreferenceTask: Task<Void, Never>?
     private var aiPreferenceGeneration = UUID()
     private var homeworkSelectionTask: Task<Void, Never>?
     private var homeworkSelectionGeneration = UUID()
     private var knowledgeSearchTask: Task<Void, Never>?
     private var knowledgeSearchGeneration = UUID()
+    private var profileLoadTask: Task<Void, Never>?
+    private var profileSaveTask: Task<Void, Never>?
+    private var avatarUploadTask: Task<Void, Never>?
+    private var profileGeneration = UUID()
+    private var pendingProfileUpdate: PendingProfileUpdate?
+    private var pendingAvatarUpload: (data: Data, key: String)?
     private var uploadImportGeneration = UUID()
     private var uploadQueueGeneration = UUID()
     private var learningUnitSelectionGeneration = UUID()
@@ -401,6 +417,11 @@ final class NotePatchViewModel: ObservableObject {
         errorDisplayText = displayText
     }
 
+    func presentStatus(_ key: String, _ arguments: String...) {
+        statusDisplayText = .localized(key, arguments)
+        errorDisplayText = nil
+    }
+
     var openClawInput: String {
         get { openClawComposerState.text }
         set { openClawComposerState.text = newValue }
@@ -458,6 +479,7 @@ final class NotePatchViewModel: ObservableObject {
         self.homeDashboardState = HomeDashboardState()
         self.workbenchNavigationState = WorkbenchNavigationState()
         self.authenticationState = AuthenticationState(session: loadedSession)
+        self.userProfileState = UserProfileState()
         self.openClawState = OpenClawViewState()
         self.openClawComposerState = OpenClawComposerState()
         self.settings = settings
@@ -524,7 +546,7 @@ final class NotePatchViewModel: ObservableObject {
             stopStudyNoteGenerationPolling()
             loadHomeDashboard(force: false)
         case .notes:
-            if selectedNotesSection == .notes {
+            if selectedLearningSection == .notes {
                 loadNotesOverview(force: false)
             } else {
                 loadLearningDashboard(force: false)
@@ -539,6 +561,7 @@ final class NotePatchViewModel: ObservableObject {
         case .profile:
             stopStudyNoteGenerationPolling()
             loadAIModels()
+            loadUserProfile()
         }
     }
 
@@ -1262,6 +1285,7 @@ final class NotePatchViewModel: ObservableObject {
             defer { finishOpenClawChat(generation: chatGeneration) }
             var latestEvents: [TaskEventItem] = []
             var taskWasAccepted = false
+            var acceptedTaskId: String?
             do {
                 var uploadedDocuments: [LearningDocumentItem] = []
                 for (index, file) in files.enumerated() {
@@ -1312,9 +1336,11 @@ final class NotePatchViewModel: ObservableObject {
                     workspaceId: workspaceId,
                     prompt: prompt,
                     conversationId: requestedConversationId,
-                    input: input
+                    input: input,
+                    options: ["thinking": ["enabled": true, "effort": "adaptive"]]
                 )
                 taskWasAccepted = true
+                acceptedTaskId = task.id
                 openClawComposerState.clearDraft(removeAttachmentFiles: false)
                 files.forEach { preparedChatAttachmentDocuments[$0.id] = nil }
                 let taskConversationId = task.payload?.objectStringValue(for: "conversation_id")
@@ -1333,8 +1359,13 @@ final class NotePatchViewModel: ObservableObject {
                 }
                 let finishedTask = try await pollTask(activeSession: chatSession, workspaceId: workspaceId, taskId: task.id) { [weak self] updatedTask, events in
                     latestEvents = events
+                    let streamState = Self.reduceChatStreamEvents(events)
                     self?.updateOpenClawMessage(assistantMessageId) {
-                        $0.content = "Thinking..."
+                        $0.content = streamState.answer.isEmpty ? localized("chat.thinking") : streamState.answer
+                        $0.streamingContent = streamState.answer
+                        $0.reasoningContent = streamState.reasoning
+                        $0.streamTruncated = streamState.truncated
+                        $0.reasoningUnavailable = streamState.reasoningUnavailable
                         $0.taskId = updatedTask.id
                         $0.progress = updatedTask.progress.clamped(to: 0...100)
                         $0.events = events
@@ -1355,6 +1386,17 @@ final class NotePatchViewModel: ObservableObject {
                                 && self?.selectedConversationId == conversationId
                         }
                     )
+                    let streamState = Self.reduceChatStreamEvents(latestEvents)
+                    if let serverAssistantMessageId = task.payload?.objectStringValue(for: "assistant_message_id")
+                        ?? openClawMessages.last(where: { $0.taskId == task.id })?.id {
+                        updateOpenClawMessage(serverAssistantMessageId) {
+                            $0.streamingContent = streamState.answer
+                            $0.reasoningContent = streamState.reasoning
+                            $0.streamTruncated = streamState.truncated
+                            $0.reasoningUnavailable = streamState.reasoningUnavailable
+                            $0.events = latestEvents
+                        }
+                    }
                     try? await refreshConversations(activeSession: chatSession, workspaceId: workspaceId)
                 } else {
                     let answer = formatOpenClawTaskResult(finishedTask.resultText)
@@ -1368,6 +1410,16 @@ final class NotePatchViewModel: ObservableObject {
                 }
             } catch {
                 if error is CancellationError {
+                    return
+                }
+                if let acceptedTaskId,
+                   openClawState.cancellingTaskId == acceptedTaskId {
+                    updateOpenClawMessage(assistantMessageId) {
+                        $0.status = .stopped
+                        $0.progress = nil
+                        $0.events = latestEvents
+                    }
+                    openClawState.cancellingTaskId = nil
                     return
                 }
                 if !taskWasAccepted {
@@ -1396,7 +1448,251 @@ final class NotePatchViewModel: ObservableObject {
     private func finishOpenClawChat(generation: UUID) {
         guard openClawChatGeneration == generation else { return }
         openClawChatTask = nil
+        openClawState.cancellingTaskId = nil
         isOpenClawSending = false
+    }
+
+    func stopOpenClawChat() {
+        guard isOpenClawSending,
+              let assistantMessage = openClawMessages.last(where: { $0.role == .assistant && $0.status == .sending }),
+              let taskId = assistantMessage.taskId,
+              openClawState.cancellingTaskId == nil,
+              let workspaceId = selectedWorkspaceId,
+              let activeSession = currentSessionOrError() else {
+            return
+        }
+
+        openClawState.cancellingTaskId = taskId
+
+        Task {
+            do {
+                _ = try await clientFor(activeSession).cancelTask(workspaceId: workspaceId, taskId: taskId)
+            } catch {
+                guard openClawState.cancellingTaskId == taskId else { return }
+                openClawState.cancellingTaskId = nil
+                showError(error)
+            }
+        }
+    }
+
+    func copyOpenClawMessage(_ message: OpenClawChatMessage) {
+        let content = message.content.trimmingCharacters(in: .whitespacesAndNewlines)
+        let attachmentLines = message.attachments.map {
+            localizedFormat("chat.copy.attachment", $0.file.filename)
+        }
+        let text = ([content].filter { !$0.isEmpty } + attachmentLines).joined(separator: "\n")
+        guard !text.isEmpty else { return }
+        UIPasteboard.general.string = text
+        presentStatus("chat.copy.message_complete")
+    }
+
+    func copyOpenClawConversation() {
+        let blocks = openClawMessages.compactMap { message -> String? in
+            guard (message.role == .user || message.role == .assistant),
+                  message.status != .error else { return nil }
+            let role = message.role == .user
+                ? localized("chat.copy.role.user")
+                : localized("chat.copy.role.assistant")
+            let content = message.content.trimmingCharacters(in: .whitespacesAndNewlines)
+            let attachmentLines = message.attachments.map {
+                localizedFormat("chat.copy.attachment", $0.file.filename)
+            }
+            let body = ([content].filter { !$0.isEmpty } + attachmentLines).joined(separator: "\n")
+            guard !body.isEmpty else { return nil }
+            return "\(role)\n\(body)"
+        }
+        guard !blocks.isEmpty else {
+            setError("chat.copy.empty")
+            return
+        }
+        UIPasteboard.general.string = blocks.joined(separator: "\n\n")
+        presentStatus("chat.copy.conversation_complete")
+    }
+
+    func reviseOpenClawMessage(
+        _ message: OpenClawChatMessage,
+        prompt: String,
+        onAccepted: @escaping @MainActor () -> Void
+    ) {
+        let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard message.role == .user,
+              !message.id.hasPrefix("local-"),
+              message.id != "system",
+              !trimmed.isEmpty else {
+            setError("chat.revision.prompt_required")
+            return
+        }
+        guard let activeSession = currentSessionOrError(),
+              let workspaceId = selectedWorkspaceId,
+              let conversationId = selectedConversationId,
+              !openClawState.isMessageRevising else { return }
+
+        messageRevisionTask?.cancel()
+        let requestGeneration = UUID()
+        messageRevisionGeneration = requestGeneration
+        openClawState.isMessageRevising = true
+        errorMessage = nil
+
+        messageRevisionTask = Task {
+            defer {
+                if messageRevisionGeneration == requestGeneration {
+                    messageRevisionTask = nil
+                    openClawState.isMessageRevising = false
+                }
+            }
+            do {
+                let task = try await clientFor(activeSession).reviseChatMessage(
+                    workspaceId: workspaceId,
+                    conversationId: conversationId,
+                    messageId: message.id,
+                    prompt: trimmed,
+                    options: ["thinking": ["enabled": true, "effort": "adaptive"]]
+                )
+                guard messageRevisionGeneration == requestGeneration,
+                      isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId),
+                      selectedConversationId == conversationId else { throw CancellationError() }
+
+                openClawChatGeneration = UUID()
+                openClawChatTask?.cancel()
+                let serverUserMessageId = task.payload?.objectStringValue(for: "user_message_id")
+                    ?? task.payload?.objectStringValue(for: "revised_message_id")
+                    ?? message.id
+                let serverAssistantMessageId = task.payload?.objectStringValue(for: "assistant_message_id")
+                    ?? allocateOpenClawMessageId()
+                if let index = openClawMessages.firstIndex(where: { $0.id == message.id }) {
+                    let revisedMessage = OpenClawChatMessage(
+                        id: serverUserMessageId,
+                        role: .user,
+                        content: trimmed,
+                        status: .done,
+                        taskId: nil,
+                        progress: nil,
+                        events: [],
+                        attachments: message.attachments
+                    )
+                    let assistant = OpenClawChatMessage(
+                        id: serverAssistantMessageId,
+                        role: .assistant,
+                        content: localized("chat.thinking"),
+                        status: .sending,
+                        taskId: task.id,
+                        progress: task.progress.clamped(to: 0...100),
+                        events: []
+                    )
+                    openClawMessages = Array(openClawMessages.prefix(index)) + [revisedMessage, assistant]
+                }
+                onAccepted()
+                presentStatus("chat.revision.accepted")
+                isOpenClawSending = true
+
+                let chatGeneration = UUID()
+                openClawChatGeneration = chatGeneration
+                openClawChatTask = Task {
+                    defer { finishOpenClawChat(generation: chatGeneration) }
+                    var latestEvents: [TaskEventItem] = []
+                    do {
+                        let finishedTask = try await pollTask(
+                            activeSession: activeSession,
+                            workspaceId: workspaceId,
+                            taskId: task.id
+                        ) { [weak self] updatedTask, events in
+                            guard let self else { return }
+                            latestEvents = events
+                            let stream = Self.reduceChatStreamEvents(events)
+                            self.openClawState.updateMessage(taskId: task.id) {
+                                $0.content = stream.answer.isEmpty ? localized("chat.thinking") : stream.answer
+                                $0.streamingContent = stream.answer
+                                $0.reasoningContent = stream.reasoning
+                                $0.streamTruncated = stream.truncated
+                                $0.reasoningUnavailable = stream.reasoningUnavailable
+                                $0.progress = updatedTask.progress.clamped(to: 0...100)
+                                $0.events = events
+                            }
+                        }
+                        guard isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId),
+                              selectedConversationId == conversationId else { throw CancellationError() }
+                        try await refreshConversationMessages(
+                            activeSession: activeSession,
+                            workspaceId: workspaceId,
+                            conversationId: conversationId
+                        )
+                        let stream = Self.reduceChatStreamEvents(latestEvents)
+                        if let finalMessageId = task.payload?.objectStringValue(for: "assistant_message_id")
+                            ?? openClawMessages.last(where: { $0.taskId == task.id })?.id {
+                            updateOpenClawMessage(finalMessageId) {
+                                $0.streamingContent = stream.answer
+                                $0.reasoningContent = stream.reasoning
+                                $0.streamTruncated = stream.truncated
+                                $0.reasoningUnavailable = stream.reasoningUnavailable
+                                $0.events = latestEvents
+                                $0.modelId = taskProviderModelId(finishedTask)
+                            }
+                        }
+                        try? await refreshConversations(activeSession: activeSession, workspaceId: workspaceId)
+                    } catch is CancellationError {
+                        return
+                    } catch {
+                        if openClawState.cancellingTaskId == task.id {
+                            openClawState.updateMessage(taskId: task.id) {
+                                $0.status = .stopped
+                                $0.progress = nil
+                                $0.events = latestEvents
+                            }
+                            openClawState.cancellingTaskId = nil
+                        } else {
+                            openClawState.updateMessage(taskId: task.id) {
+                                $0.status = .error
+                                $0.content = friendlyError(error)
+                                $0.progress = nil
+                                $0.events = latestEvents
+                            }
+                        }
+                    }
+                }
+            } catch is CancellationError {
+                return
+            } catch {
+                guard messageRevisionGeneration == requestGeneration else { return }
+                showError(error)
+            }
+        }
+    }
+
+    struct ChatStreamState: Equatable {
+        var answer = ""
+        var reasoning = ""
+        var truncated = false
+        var reasoningUnavailable = false
+    }
+
+    static func reduceChatStreamEvents(_ events: [TaskEventItem]) -> ChatStreamState {
+        let sorted = events.sorted {
+            if $0.sequenceNo != $1.sequenceNo { return $0.sequenceNo < $1.sequenceNo }
+            return $0.createdAt < $1.createdAt
+        }
+        var state = ChatStreamState()
+        for event in sorted {
+            switch event.eventType {
+            case "chat_stream_started":
+                state.answer = ""
+                state.reasoning = ""
+                state.truncated = false
+                state.reasoningUnavailable = false
+            case "chat_answer_delta":
+                guard let delta = event.data?.objectStringValue(for: "delta") else { continue }
+                state.answer += delta
+            case "chat_reasoning_delta":
+                guard let delta = event.data?.objectStringValue(for: "delta") else { continue }
+                state.reasoning += delta
+            case "chat_stream_truncated":
+                state.truncated = true
+            case "chat_reasoning_unavailable":
+                state.reasoningUnavailable = true
+            default:
+                continue
+            }
+        }
+        return state
     }
 
     private func waitForChatAttachment(
@@ -1694,6 +1990,277 @@ final class NotePatchViewModel: ObservableObject {
                 showError(error)
             }
         }
+    }
+
+    func loadUserProfile(force: Bool = false) {
+        if isOfflineTestMode {
+            guard let session else { return }
+            userProfileState.apply(UserProfileSnapshot(
+                profile: UserProfile(
+                    id: session.userId,
+                    name: session.fullName ?? localized("account.default_user"),
+                    email: session.email,
+                    avatarURL: nil,
+                    profileVersion: 1,
+                    reauthenticationRequired: false
+                ),
+                etag: "\"profile-1\""
+            ))
+            return
+        }
+        guard force || userProfileState.snapshot == nil else { return }
+        guard let activeSession = currentSessionOrError() else { return }
+        profileLoadTask?.cancel()
+        let generation = UUID()
+        profileGeneration = generation
+        userProfileState.isLoading = true
+        profileLoadTask = Task {
+            defer {
+                if profileGeneration == generation {
+                    profileLoadTask = nil
+                    userProfileState.isLoading = false
+                }
+            }
+            do {
+                let client = clientFor(activeSession)
+                let snapshot = try await client.getUserProfile()
+                guard profileGeneration == generation, session?.userId == activeSession.userId else {
+                    throw CancellationError()
+                }
+                userProfileState.apply(snapshot)
+                saveSession(activeSession.withProfile(snapshot.profile))
+                await loadUserAvatar(using: client, profile: snapshot.profile, generation: generation)
+            } catch is CancellationError {
+                return
+            } catch {
+                guard profileGeneration == generation else { return }
+                showError(error)
+            }
+        }
+    }
+
+    func saveUserProfile() {
+        saveUserProfile(forceOverwrite: false)
+    }
+
+    func confirmUserProfileOverwrite() {
+        userProfileState.hasConflict = false
+        saveUserProfile(forceOverwrite: true)
+    }
+
+    func cancelUserProfileOverwrite() {
+        userProfileState.hasConflict = false
+    }
+
+    private func saveUserProfile(forceOverwrite: Bool) {
+        guard let activeSession = currentSessionOrError(),
+              let snapshot = userProfileState.snapshot,
+              !userProfileState.isSaving else { return }
+        let name = userProfileState.nameDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        let email = userProfileState.emailDraft.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let password = userProfileState.currentPassword
+        guard !name.isEmpty else {
+            setError("profile.validation.name_required")
+            return
+        }
+        guard Self.isValidEmailAddress(email) else {
+            setError("profile.validation.email_invalid")
+            return
+        }
+        let emailChanged = email != snapshot.profile.email.lowercased()
+        guard !emailChanged || !password.isEmpty else {
+            setError("profile.validation.password_required")
+            return
+        }
+        let nameChanged = name != snapshot.profile.name
+        guard nameChanged || emailChanged else {
+            presentStatus("profile.no_changes")
+            return
+        }
+
+        let matchingPending = pendingProfileUpdate.flatMap { pending -> PendingProfileUpdate? in
+            guard !forceOverwrite,
+                  pending.name == name,
+                  pending.email == email,
+                  pending.currentPassword == password else { return nil }
+            return pending
+        }
+        let pending = matchingPending ?? PendingProfileUpdate(
+            name: name,
+            email: email,
+            currentPassword: password,
+            idempotencyKey: UUID().uuidString
+        )
+        pendingProfileUpdate = pending
+        let generation = profileGeneration
+        userProfileState.isSaving = true
+        profileSaveTask?.cancel()
+        profileSaveTask = Task {
+            defer {
+                profileSaveTask = nil
+                userProfileState.isSaving = false
+            }
+            var fields: [String: Any] = [:]
+            if nameChanged { fields["name"] = name }
+            if emailChanged {
+                fields["email"] = email
+                fields["current_password"] = password
+            }
+            do {
+                let updated = try await clientFor(activeSession).updateUserProfile(
+                    etag: snapshot.etag,
+                    idempotencyKey: pending.idempotencyKey,
+                    fields: fields
+                )
+                guard profileGeneration == generation, session?.userId == activeSession.userId else {
+                    throw CancellationError()
+                }
+                pendingProfileUpdate = nil
+                userProfileState.apply(updated)
+                if updated.profile.reauthenticationRequired {
+                    clearLocalSession()
+                    presentStatus("profile.reauthentication_required")
+                } else {
+                    saveSession(activeSession.withProfile(updated.profile))
+                    presentStatus("profile.saved")
+                }
+            } catch is CancellationError {
+                return
+            } catch let error as LearningBackendError where error.statusCode == 412 {
+                do {
+                    let latest = try await clientFor(activeSession).getUserProfile()
+                    guard profileGeneration == generation else { return }
+                    userProfileState.apply(latest)
+                    userProfileState.nameDraft = name
+                    userProfileState.emailDraft = email
+                    userProfileState.currentPassword = password
+                    pendingProfileUpdate = nil
+                    userProfileState.hasConflict = true
+                } catch {
+                    showError(error)
+                }
+            } catch {
+                showError(error)
+            }
+        }
+    }
+
+    func uploadUserAvatar(_ file: LocalUploadFile, forceOverwrite: Bool = false) {
+        performAvatarUpload(file, preparedData: nil, forceOverwrite: forceOverwrite)
+    }
+
+    private func performAvatarUpload(
+        _ file: LocalUploadFile,
+        preparedData: Data?,
+        forceOverwrite: Bool
+    ) {
+        guard let activeSession = currentSessionOrError(),
+              let snapshot = userProfileState.snapshot,
+              !userProfileState.isAvatarUploading else { return }
+        userProfileState.isAvatarUploading = true
+        avatarUploadTask?.cancel()
+        let generation = profileGeneration
+        avatarUploadTask = Task {
+            defer {
+                avatarUploadTask = nil
+                userProfileState.isAvatarUploading = false
+            }
+            do {
+                let avatarData: Data
+                if let preparedData {
+                    avatarData = preparedData
+                } else {
+                    avatarData = try await Task.detached(priority: .userInitiated) {
+                        guard let image = downsampleUploadImage(at: file.url, maxPixelSize: 2_048),
+                              let data = image.jpegData(compressionQuality: 0.86) else {
+                            throw LearningBackendError(localizedKey: "profile.avatar.invalid")
+                        }
+                        return data
+                    }.value
+                }
+                let pending: (data: Data, key: String)
+                if !forceOverwrite, let existing = pendingAvatarUpload, existing.data == avatarData {
+                    pending = existing
+                } else {
+                    pending = (avatarData, UUID().uuidString)
+                }
+                pendingAvatarUpload = pending
+                userProfileState.hasPendingAvatarRetry = true
+                let updated = try await clientFor(activeSession).uploadUserAvatar(
+                    data: pending.data,
+                    mimeType: "image/jpeg",
+                    filename: "avatar.jpg",
+                    etag: snapshot.etag,
+                    idempotencyKey: pending.key
+                )
+                guard profileGeneration == generation, session?.userId == activeSession.userId else {
+                    throw CancellationError()
+                }
+                pendingAvatarUpload = nil
+                userProfileState.hasPendingAvatarRetry = false
+                userProfileState.apply(updated)
+                userProfileState.avatarImage = UIImage(data: pending.data)
+                saveSession(activeSession.withProfile(updated.profile))
+                presentStatus("profile.avatar.saved")
+            } catch is CancellationError {
+                return
+            } catch let error as LearningBackendError where error.statusCode == 412 {
+                do {
+                    let latest = try await clientFor(activeSession).getUserProfile()
+                    guard profileGeneration == generation else { return }
+                    userProfileState.apply(latest)
+                    userProfileState.avatarImage = pendingAvatarUpload.flatMap { UIImage(data: $0.data) }
+                    userProfileState.hasAvatarConflict = true
+                } catch {
+                    showError(error)
+                }
+            } catch {
+                showError(error)
+            }
+        }
+    }
+
+    func confirmAvatarOverwrite() {
+        userProfileState.hasAvatarConflict = false
+        retryPendingAvatarUpload(forceOverwrite: true)
+    }
+
+    func retryPendingAvatarUpload(forceOverwrite: Bool = false) {
+        guard let pending = pendingAvatarUpload,
+              let image = UIImage(data: pending.data),
+              let file = try? writeImageToUploadCache(image, cacheDirectory: cacheDirectory) else { return }
+        performAvatarUpload(file, preparedData: pending.data, forceOverwrite: forceOverwrite)
+    }
+
+    func cancelAvatarOverwrite() {
+        userProfileState.hasAvatarConflict = false
+    }
+
+    private func loadUserAvatar(
+        using client: LearningBackendClient,
+        profile: UserProfile,
+        generation: UUID
+    ) async {
+        guard profile.avatarURL?.isEmpty == false else {
+            userProfileState.avatarImage = nil
+            return
+        }
+        do {
+            let data = try await client.getUserAvatarData()
+            let image = await Task.detached(priority: .utility) { UIImage(data: data) }.value
+            guard profileGeneration == generation else { return }
+            userProfileState.avatarImage = image
+        } catch {
+            guard profileGeneration == generation else { return }
+            userProfileState.avatarImage = nil
+        }
+    }
+
+    private static func isValidEmailAddress(_ email: String) -> Bool {
+        email.range(
+            of: #"^[^\s@]+@[^\s@]+\.[^\s@]+$"#,
+            options: .regularExpression
+        ) != nil
     }
 
     func loadAIModels(force: Bool = false) {
@@ -2275,7 +2842,7 @@ final class NotePatchViewModel: ObservableObject {
     }
 
     func ensureFlashcardsLoaded(force: Bool = false) {
-        guard selectedTab == .notes, selectedNotesSection == .review, selectedLearningSection == .flashcards else { return }
+        guard selectedTab == .notes, selectedLearningSection == .flashcards else { return }
         let unitId = selectedFlashcardLearningUnitId.nilIfBlank
             ?? selectedLearningUnitId
             ?? learningUnits.first?.id
@@ -3551,6 +4118,16 @@ final class NotePatchViewModel: ObservableObject {
         homeworkContentGeneration = UUID()
         studyNoteReaderGeneration = UUID()
         studyNoteSaveGeneration = UUID()
+        profileGeneration = UUID()
+        profileLoadTask?.cancel()
+        profileLoadTask = nil
+        profileSaveTask?.cancel()
+        profileSaveTask = nil
+        avatarUploadTask?.cancel()
+        avatarUploadTask = nil
+        pendingProfileUpdate = nil
+        pendingAvatarUpload = nil
+        userProfileState.clear()
         settings.clearSession()
         DocumentThumbnailPipeline.shared.removeAll()
         isBusy = false
@@ -3959,7 +4536,7 @@ final class NotePatchViewModel: ObservableObject {
                       let workspaceId = self.selectedWorkspaceId else { break }
 
                 do {
-                    if self.selectedNotesSection == .notes {
+                    if self.selectedLearningSection == .notes {
                         try await self.loadNotesOverviewContent(
                             activeSession: activeSession,
                             workspaceId: workspaceId,
@@ -4005,11 +4582,10 @@ final class NotePatchViewModel: ObservableObject {
     }
 
     private var needsStudyRefreshPolling: Bool {
-        if selectedNotesSection == .notes {
+        if selectedLearningSection == .notes {
             return studyNoteGroups.contains(where: { $0.generationState == .generating })
         }
-        return selectedNotesSection == .review
-            && learningUnits.contains(where: { ["merging", "rebuilding"].contains($0.mergeStatus ?? "") })
+        return learningUnits.contains(where: { ["merging", "rebuilding"].contains($0.mergeStatus ?? "") })
     }
 
     private func stopStudyNoteGenerationPolling() {
@@ -4895,6 +5471,9 @@ final class NotePatchViewModel: ObservableObject {
         conversationLoadTask?.cancel()
         conversationLoadTask = nil
         conversationMutationGeneration = UUID()
+        messageRevisionGeneration = UUID()
+        messageRevisionTask?.cancel()
+        messageRevisionTask = nil
 
         var cachedFiles: [UUID: LocalUploadFile] = [:]
         for attachment in chatAttachmentsByMessageId.values.flatMap({ $0 }) {
@@ -4919,6 +5498,8 @@ final class NotePatchViewModel: ObservableObject {
         isOpenClawSending = false
         isChatHistoryLoading = false
         isConversationMutating = false
+        openClawState.isMessageRevising = false
+        openClawState.cancellingTaskId = nil
     }
 }
 
