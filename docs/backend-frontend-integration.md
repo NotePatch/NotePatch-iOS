@@ -1150,11 +1150,24 @@ Content-Type: application/json
   "metadata": {},
   "created_by_user_id": "582d4cfc-57be-4fba-8370-d4283df4365c",
   "created_at": "2026-07-10T07:00:00Z",
-  "updated_at": "2026-07-10T07:12:00Z"
+  "updated_at": "2026-07-10T07:12:00Z",
+  "latest_grading_result": null
 }
 ```
 
 `description/document_id/due_at/rubric_text` 可能为 `null`。该接口是真正的部分更新：省略字段会保持原值；显式传 `rubric_text: null` 或空白字符串才会清除 rubric；空对象返回 `422`；`max_score` 必须大于 `0`。更新配置会取消尚未完成的评分 task，前端应重新触发评分。
+
+### Grading Results
+
+`GET /workspaces/{workspace_id}/homeworks` 和 `GET /workspaces/{workspace_id}/homeworks/{homework_id}` 都包含 `latest_grading_result`。未评分时为 `null`；评分成功后包含 `score/max_score/grading_mode/confidence/feedback/created_at`，前端应从这里显示最新分数，而不是只读取 Homework 自身的 `max_score`。
+
+完整评分历史：
+
+```http
+GET /workspaces/{workspace_id}/homeworks/{homework_id}/grading-results
+```
+
+返回按 `created_at` 倒序排列的 `GradingResultRead[]`。`grading_mode=provisional` 表示没有答案或 rubric 的诊断性评分；只有 `official` 才应显示为正式成绩。评分 task 成功后重新获取 Homework 详情或列表即可看到最新分数。
 
 ### Homework References
 

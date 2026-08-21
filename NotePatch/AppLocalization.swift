@@ -105,7 +105,7 @@ final class AppLocalization: ObservableObject {
         "accessibility.select_file", "accessibility.deselect_file",
         "accessibility.preview_file", "accessibility.remove_file", "accessibility.refresh_named",
         "accessibility.refresh_homework", "accessibility.remove_reference",
-        "knowledge.results_count", "grading.confidence",
+        "knowledge.results_count", "grading.confidence", "grading.latest_result", "grading.history",
         "chat.error_event", "chat.citing_sources", "chat.model_used",
         "ai.model.title", "ai.model.picker", "ai.model.deployment_default",
         "ai.model.current", "ai.model.default", "ai.model.cached_warning",

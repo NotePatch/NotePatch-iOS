@@ -4112,6 +4112,7 @@ private struct HomeworkGradingSection: View {
     @ObservedObject var model: NotePatchViewModel
     @State private var isCreatingHomework = false
     @State private var selectedReferenceDocumentId = ""
+    @State private var isGradingHistoryExpanded = false
 
     var body: some View {
         LazyVStack(alignment: .leading, spacing: NPSpacing.item) {
@@ -4159,6 +4160,9 @@ private struct HomeworkGradingSection: View {
         .accessibilityIdentifier("homeworkGradingSection")
         .sheet(isPresented: $isCreatingHomework) {
             HomeworkCreateSheet(model: model, isPresented: $isCreatingHomework)
+        }
+        .onChange(of: model.selectedHomeworkId) { _ in
+            isGradingHistoryExpanded = false
         }
     }
 
@@ -4248,14 +4252,7 @@ private struct HomeworkGradingSection: View {
                 }
             }
 
-            if let mode = model.gradingModeLabel {
-                HStack {
-                    Text(mode).npSubheading().foregroundStyle(NPColors.textPrimary)
-                    if let confidence = model.gradingConfidence {
-                        Text(localizedFormat("grading.confidence", String(format: "%.4f", confidence))).npCaption()
-                    }
-                }
-            }
+            gradingResultSection
             Button { model.gradeSelectedHomework() } label: {
                 Label(localized("grading.start"), systemImage: "checkmark.seal")
                     .frame(maxWidth: .infinity)
@@ -4264,6 +4261,156 @@ private struct HomeworkGradingSection: View {
             .disabled(model.isHomeworkLoading)
             .accessibilityIdentifier("gradeHomeworkButton")
         }
+    }
+
+    private var gradingResultSection: some View {
+        VStack(alignment: .leading, spacing: NPSpacing.item) {
+            NPSection {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text(localized("grading.latest_result")).npSubheading()
+                    if let result = model.latestGradingResult {
+                        gradingResultContent(result, isLatest: true)
+                    } else {
+                        Label(localized("grading.no_result"), systemImage: "chart.bar.doc.horizontal")
+                            .npBody()
+                            .foregroundStyle(NPColors.textSecondary)
+                            .accessibilityIdentifier("gradingLatestResultEmpty")
+                    }
+                }
+            }
+            .accessibilityIdentifier("gradingLatestResult")
+
+            DisclosureGroup(isExpanded: $isGradingHistoryExpanded) {
+                gradingHistoryContent
+                    .padding(.top, NPSpacing.small)
+            } label: {
+                Label(localized("grading.history"), systemImage: "clock.arrow.circlepath")
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(NPColors.textPrimary)
+                    .frame(minHeight: 44)
+            }
+            .padding(.horizontal, NPSpacing.card)
+            .padding(.vertical, 4)
+            .modifier(NPCardModifier())
+            .accessibilityIdentifier("gradingHistoryDisclosure")
+            .onChange(of: isGradingHistoryExpanded) { isExpanded in
+                if isExpanded {
+                    model.loadGradingHistory()
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var gradingHistoryContent: some View {
+        VStack(alignment: .leading, spacing: NPSpacing.small) {
+            if model.isGradingHistoryLoading {
+                HStack(spacing: NPSpacing.small) {
+                    ProgressView()
+                    Text(localized("grading.history_loading")).npCaption()
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.vertical, NPSpacing.small)
+            }
+            if let error = model.gradingHistoryError {
+                Text(error)
+                    .npCaption()
+                    .foregroundStyle(NPColors.destructive)
+                Button {
+                    model.loadGradingHistory(force: true)
+                } label: {
+                    Label(localized("grading.history_retry"), systemImage: "arrow.clockwise")
+                }
+                .buttonStyle(NPSecondaryButtonStyle())
+                .accessibilityIdentifier("gradingHistoryRetryButton")
+            }
+            if !model.isGradingHistoryLoading || model.isSelectedGradingHistoryLoaded {
+                if model.gradingResults.isEmpty,
+                   model.gradingHistoryError == nil {
+                    Text(localized("grading.history_empty"))
+                        .npCaption()
+                        .foregroundStyle(NPColors.textSecondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.vertical, NPSpacing.small)
+                        .accessibilityIdentifier("gradingHistoryEmpty")
+                } else if !model.gradingResults.isEmpty {
+                    LazyVStack(alignment: .leading, spacing: NPSpacing.small) {
+                        ForEach(model.gradingResults) { result in
+                            gradingResultContent(result, isLatest: false)
+                                .padding(NPSpacing.card)
+                                .background(NPColors.background.opacity(0.65))
+                                .clipShape(RoundedRectangle(cornerRadius: NPRadius.card, style: .continuous))
+                                .overlay {
+                                    RoundedRectangle(cornerRadius: NPRadius.card, style: .continuous)
+                                        .stroke(NPColors.border, lineWidth: 1)
+                                }
+                                .accessibilityIdentifier("gradingHistoryResult.\(result.id)")
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func gradingResultContent(_ result: GradingResult, isLatest: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(alignment: .firstTextBaseline, spacing: NPSpacing.small) {
+                Text(gradingScoreText(result))
+                    .font(isLatest ? .title2.weight(.semibold) : .headline)
+                    .foregroundStyle(NPColors.textPrimary)
+                Spacer(minLength: 8)
+                NPStatusChip(
+                    text: result.gradingMode == "official"
+                        ? localized("grading.mode.official")
+                        : localized("grading.mode.diagnostic"),
+                    variant: result.gradingMode == "official" ? .brand : .warning
+                )
+            }
+            if let confidence = result.confidence {
+                Text(localizedFormat("grading.confidence", String(format: "%.4f", confidence)))
+                    .npCaption()
+            }
+            if let questionId = nonBlank(result.questionId) {
+                Text(localizedFormat("grading.question_id", questionId))
+                    .npCaption()
+                    .lineLimit(1)
+            }
+            if let feedback = nonBlank(result.feedback) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(localized("grading.feedback"))
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(NPColors.textSecondary)
+                    Text(feedback)
+                        .npBody()
+                        .textSelection(.enabled)
+                }
+            }
+            if !result.createdAt.isEmpty {
+                Text(localizedFormat("grading.result_time", compactDateTime(result.createdAt)))
+                    .npCaption()
+            }
+        }
+    }
+
+    private func gradingScoreText(_ result: GradingResult) -> String {
+        guard let score = result.score, let maxScore = result.maxScore else {
+            return localized("grading.score_unavailable")
+        }
+        return localizedFormat("grading.score_value", formattedScore(score), formattedScore(maxScore))
+    }
+
+    private func formattedScore(_ value: Double) -> String {
+        if value.rounded() == value {
+            return String(Int(value))
+        }
+        return String(format: "%.2f", value)
+            .replacingOccurrences(of: #"\.?0+$"#, with: "", options: .regularExpression)
+    }
+
+    private func nonBlank(_ value: String?) -> String? {
+        guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !trimmed.isEmpty else { return nil }
+        return trimmed
     }
 
     private func referenceDocumentName(_ documentId: String) -> String {
@@ -4441,7 +4588,7 @@ private struct OpenClawMessageBubble: View {
                                     .foregroundStyle(NPColors.textSecondary)
                             }
                         }
-                        .accessibilityIdentifier("chatReasoningDisclosure")
+                        .accessibilityIdentifier("chatReasoningDisclosure.\(message.id)")
                     } label: {
                         Label(localized("chat.process_summary"), systemImage: "brain")
                             .font(.caption.weight(.medium))

@@ -625,6 +625,17 @@
 "grading.select_reference" = "Select reference";
 "grading.add_reference_action" = "Add grading reference";
 "grading.start" = "Start grading";
+"grading.latest_result" = "Latest result";
+"grading.no_result" = "This homework has not been graded yet.";
+"grading.score_value" = "%@ / %@";
+"grading.score_unavailable" = "Score unavailable";
+"grading.feedback" = "Feedback";
+"grading.result_time" = "Graded %@";
+"grading.history" = "Grading history";
+"grading.history_loading" = "Loading grading history...";
+"grading.history_empty" = "No grading history yet.";
+"grading.history_retry" = "Retry";
+"grading.question_id" = "Question: %@";
 "grading.homework_document" = "Homework document";
 "grading.document" = "Document";
 "grading.due_date" = "Due date";

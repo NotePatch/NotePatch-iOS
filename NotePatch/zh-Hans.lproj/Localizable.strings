@@ -625,6 +625,17 @@
 "grading.select_reference" = "选择参考资料";
 "grading.add_reference_action" = "添加评分参考资料";
 "grading.start" = "开始评分";
+"grading.latest_result" = "最新评分";
+"grading.no_result" = "这份作业还没有评分结果。";
+"grading.score_value" = "%@ / %@";
+"grading.score_unavailable" = "暂无分数";
+"grading.feedback" = "评分反馈";
+"grading.result_time" = "评分时间：%@";
+"grading.history" = "评分历史";
+"grading.history_loading" = "正在加载评分历史…";
+"grading.history_empty" = "暂无评分历史。";
+"grading.history_retry" = "重试";
+"grading.question_id" = "题目：%@";
 "grading.homework_document" = "作业文档";
 "grading.document" = "文档";
 "grading.due_date" = "截止时间";

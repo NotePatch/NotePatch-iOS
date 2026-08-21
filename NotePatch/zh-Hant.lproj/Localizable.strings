@@ -625,6 +625,17 @@
 "grading.select_reference" = "選擇參考資料";
 "grading.add_reference_action" = "新增評分參考資料";
 "grading.start" = "開始評分";
+"grading.latest_result" = "最新評分";
+"grading.no_result" = "這份作業尚無評分結果。";
+"grading.score_value" = "%@ / %@";
+"grading.score_unavailable" = "暫無分數";
+"grading.feedback" = "評分回饋";
+"grading.result_time" = "評分時間：%@";
+"grading.history" = "評分歷史";
+"grading.history_loading" = "正在載入評分歷史…";
+"grading.history_empty" = "暫無評分歷史。";
+"grading.history_retry" = "重試";
+"grading.question_id" = "題目：%@";
 "grading.homework_document" = "作業文件";
 "grading.document" = "文件";
 "grading.due_date" = "截止時間";

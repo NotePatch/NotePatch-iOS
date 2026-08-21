@@ -587,6 +587,42 @@ final class NotePatchUITests: XCTestCase {
     }
 
     @MainActor
+    func testOfflineHomeworkShowsLatestResultAndExpandableHistory() throws {
+        let app = makeApp(["-NotePatchUITestWorkbench"])
+        app.launch()
+
+        XCTAssertTrue(app.otherElements["workbenchTabs"].waitForExistence(timeout: 5))
+        app.buttons["tab.notes"].tap()
+        XCTAssertTrue(app.descendants(matching: .any)["notesSubsectionPicker"].waitForExistence(timeout: 3))
+        app.buttons["notesSubsection.homework"].tap()
+
+        let learningScroll = app.scrollViews["learningContentScroll"]
+        let latestResult = app.descendants(matching: .any)["gradingLatestResult"]
+        for _ in 0..<5 where !latestResult.exists {
+            learningScroll.swipeUp()
+        }
+        XCTAssertTrue(latestResult.waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["92 / 100"].exists)
+        XCTAssertTrue(app.staticTexts["正式评分"].exists)
+
+        let history = app.descendants(matching: .any)["gradingHistoryDisclosure"]
+        XCTAssertTrue(history.waitForExistence(timeout: 3))
+        XCTAssertFalse(app.descendants(matching: .any)["gradingHistoryResult.grading-result-1"].exists)
+        for _ in 0..<6 where !history.isHittable {
+            learningScroll.swipeUp()
+        }
+        XCTAssertTrue(history.isHittable)
+        history.tap()
+        let priorResult = app.descendants(matching: .any)["gradingHistoryResult.grading-result-1"]
+        for _ in 0..<3 where !priorResult.exists {
+            learningScroll.swipeUp()
+        }
+        XCTAssertTrue(priorResult.waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["诊断性评分"].exists)
+        keepScreenshot(app, name: "homework-grading-results")
+    }
+
+    @MainActor
     func testOfflineLearningUnitMergeConfirmation() throws {
         let app = makeApp(["-NotePatchUITestWorkbench"])
         app.launch()
@@ -848,6 +884,28 @@ final class NotePatchUITests: XCTestCase {
         XCTAssertTrue(selectionCopy.waitForExistence(timeout: 2))
         app.tap()
         keepScreenshot(app, name: "full-markdown-renderer")
+    }
+
+    @MainActor
+    func testOpenClawReasoningIsOptionalAndSeparatedFromAnswer() throws {
+        let app = makeApp(["-NotePatchUITestWorkbench", "-NotePatchUITestReasoningStates"])
+        app.launch()
+        XCTAssertTrue(app.otherElements["workbenchTabs"].waitForExistence(timeout: 5))
+        app.buttons["tab.ai"].tap()
+
+        let messages = app.scrollViews["openClawMessages"]
+        XCTAssertTrue(messages.waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["包含思考摘要的最终回答。"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.descendants(matching: .any)["chatReasoningDisclosure.ui-reasoning-present"].exists)
+        XCTAssertFalse(app.descendants(matching: .any)["chatReasoningDisclosure.ui-reasoning-absent"].exists)
+        XCTAssertTrue(app.staticTexts["先确认问题，再组织最终答案。"].exists)
+
+        for _ in 0..<3 where !app.staticTexts["模型未提供摘要时的最终回答。"].exists {
+            messages.swipeUp()
+        }
+        XCTAssertTrue(app.staticTexts["模型未提供摘要时的最终回答。"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.descendants(matching: .any)["chatReasoningDisclosure.ui-reasoning-unavailable"].exists)
+        XCTAssertTrue(app.staticTexts["该模型本次没有提供思考摘要。"].exists)
     }
 
     @MainActor

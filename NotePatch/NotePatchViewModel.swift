@@ -288,6 +288,9 @@ final class NotePatchViewModel: ObservableObject {
     @Published var gradingDocuments: [LearningDocumentItem] = []
     @Published var selectedHomeworkId: String?
     @Published var homeworkReferences: [HomeworkReferenceItem] = []
+    @Published private(set) var gradingResults: [GradingResult] = []
+    @Published private(set) var isGradingHistoryLoading = false
+    @Published private var gradingHistoryErrorText: AppDisplayText?
     @Published var homeworkRubricText = ""
     @Published var homeworkMaxScoreText = "100"
     @Published var isHomeworkLoading = false
@@ -333,6 +336,10 @@ final class NotePatchViewModel: ObservableObject {
     private var aiPreferenceGeneration = UUID()
     private var homeworkSelectionTask: Task<Void, Never>?
     private var homeworkSelectionGeneration = UUID()
+    private var gradingHistoryTask: Task<Void, Never>?
+    private var gradingHistoryGeneration = UUID()
+    private var gradingHistoryWorkspaceId: String?
+    private var gradingHistoryHomeworkId: String?
     private var flashcardLoadTask: Task<Void, Never>?
     private var flashcardLoadGeneration = UUID()
     private var knowledgeSearchTask: Task<Void, Never>?
@@ -375,6 +382,7 @@ final class NotePatchViewModel: ObservableObject {
     var studyNoteReaderError: String? { studyNoteReaderErrorText?.resolved() }
     var studyNoteEditorError: String? { studyNoteEditorErrorText?.resolved() }
     var flashcardError: String? { flashcardErrorText?.resolved() }
+    var gradingHistoryError: String? { gradingHistoryErrorText?.resolved() }
 
     var selectedHomeDestination: HomeDestination? {
         get { homeDashboardState.destination }
@@ -1704,19 +1712,22 @@ final class NotePatchViewModel: ObservableObject {
             return $0.createdAt < $1.createdAt
         }
         var state = ChatStreamState()
+        var rawAnswer = ""
         for event in sorted {
             switch event.eventType {
             case "chat_stream_started":
-                state.answer = ""
+                rawAnswer = ""
                 state.reasoning = ""
                 state.truncated = false
                 state.reasoningUnavailable = false
-            case "chat_answer_delta":
+            case "chat_answer_delta", "chat_reasoning_delta":
                 guard let delta = event.data?.objectStringValue(for: "delta") else { continue }
-                state.answer += delta
-            case "chat_reasoning_delta":
-                guard let delta = event.data?.objectStringValue(for: "delta") else { continue }
-                state.reasoning += delta
+                let declaredStream = event.data?.objectStringValue(for: "stream")?.lowercased()
+                if declaredStream == "reasoning" || (declaredStream == nil && event.eventType == "chat_reasoning_delta") {
+                    state.reasoning += delta
+                } else {
+                    rawAnswer += delta
+                }
             case "chat_stream_truncated":
                 state.truncated = true
             case "chat_reasoning_unavailable":
@@ -1724,6 +1735,10 @@ final class NotePatchViewModel: ObservableObject {
             default:
                 continue
             }
+        }
+        state.answer = rawAnswer
+        if !state.reasoning.isEmpty {
+            state.reasoningUnavailable = false
         }
         return state
     }
@@ -3034,6 +3049,15 @@ final class NotePatchViewModel: ObservableObject {
         homeworks.first(where: { $0.id == selectedHomeworkId })
     }
 
+    var latestGradingResult: GradingResult? {
+        selectedHomework?.latestGradingResult
+    }
+
+    var isSelectedGradingHistoryLoaded: Bool {
+        gradingHistoryWorkspaceId == selectedWorkspaceId
+            && gradingHistoryHomeworkId == selectedHomeworkId
+    }
+
     var isGradingConfigDirty: Bool {
         guard let selectedHomework else { return false }
         let draftRubric = homeworkRubricText.nilIfBlank
@@ -3056,14 +3080,14 @@ final class NotePatchViewModel: ObservableObject {
     }
 
     var gradingModeLabel: String? {
-        guard let lastGradingTask else { return nil }
-        return lastGradingTask.result?.objectStringValue(for: "grading_mode") == "official"
+        guard let latestGradingResult else { return nil }
+        return latestGradingResult.gradingMode == "official"
             ? localized("grading.mode.official")
             : localized("grading.mode.diagnostic")
     }
 
     var gradingConfidence: Double? {
-        lastGradingTask?.result?.objectDoubleValue(for: "confidence")
+        latestGradingResult?.confidence
     }
 
     var canRetryDocumentPurge: Bool {
@@ -3157,6 +3181,7 @@ final class NotePatchViewModel: ObservableObject {
         selectedHomeworkId = homeworkId
         homeworkReferences = []
         lastGradingTask = nil
+        clearGradingHistoryState()
         if let homework = homeworks.first(where: { $0.id == homeworkId }) {
             homeworkRubricText = homework.rubricText ?? ""
             homeworkMaxScoreText = formatScore(homework.maxScore)
@@ -3183,6 +3208,57 @@ final class NotePatchViewModel: ObservableObject {
                       isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId),
                       selectedHomeworkId == homeworkId else { return }
                 showError(error)
+            }
+        }
+    }
+
+    func loadGradingHistory(force: Bool = false) {
+        guard let activeSession = currentSessionOrError(),
+              let workspaceId = selectedWorkspaceId,
+              let homeworkId = selectedHomeworkId else { return }
+        if !force, isGradingHistoryLoading {
+            return
+        }
+        if !force,
+           gradingHistoryWorkspaceId == workspaceId,
+           gradingHistoryHomeworkId == homeworkId {
+            return
+        }
+
+        gradingHistoryTask?.cancel()
+        let generation = UUID()
+        gradingHistoryGeneration = generation
+        gradingHistoryErrorText = nil
+        isGradingHistoryLoading = true
+        gradingHistoryTask = Task {
+            defer {
+                if gradingHistoryGeneration == generation {
+                    gradingHistoryTask = nil
+                    isGradingHistoryLoading = false
+                }
+            }
+            do {
+                let results = try await clientFor(activeSession).listGradingResults(
+                    workspaceId: workspaceId,
+                    homeworkId: homeworkId
+                )
+                guard gradingHistoryGeneration == generation,
+                      isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId),
+                      selectedHomeworkId == homeworkId else { return }
+                gradingResults = results.sorted { $0.createdAt > $1.createdAt }
+                gradingHistoryWorkspaceId = workspaceId
+                gradingHistoryHomeworkId = homeworkId
+            } catch is CancellationError {
+                return
+            } catch {
+                guard gradingHistoryGeneration == generation,
+                      isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId),
+                      selectedHomeworkId == homeworkId else { return }
+                gradingHistoryErrorText = friendlyDisplayText(error)
+                if let backendError = error as? LearningBackendError,
+                   backendError.shouldClearSession || backendError.statusCode == 403 {
+                    showError(error)
+                }
             }
         }
     }
@@ -3234,6 +3310,7 @@ final class NotePatchViewModel: ObservableObject {
                 }
                 selectedHomeworkId = homework.id
                 homeworkReferences = []
+                clearGradingHistoryState()
                 homeworkRubricText = homework.rubricText ?? ""
                 homeworkMaxScoreText = formatScore(homework.maxScore)
                 setStatus("grading.homework_created")
@@ -3388,7 +3465,12 @@ final class NotePatchViewModel: ObservableObject {
                 guard isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId),
                       selectedHomeworkId == homeworkId else { return }
                 lastGradingTask = finished
+                let shouldRefreshHistory = isSelectedGradingHistoryLoaded
                 try await refreshHomeworks(activeSession: activeSession, workspaceId: workspaceId)
+                if shouldRefreshHistory,
+                   selectedHomeworkId == homeworkId {
+                    loadGradingHistory(force: true)
+                }
                 try? await refreshLearningUnits(activeSession: activeSession, workspaceId: workspaceId)
                 setStatus("grading.complete")
             } catch {
@@ -4048,13 +4130,52 @@ final class NotePatchViewModel: ObservableObject {
                 notes: [StudyNoteListItem(learningUnit: learningUnits[0], note: studyNotes[0])]
             )
         ]
-        homeworks = [HomeworkItem(id: "homework-1", workspaceId: "ui-workspace", title: "Algebra Homework 01", documentId: "homework-doc", rubricText: "10 points per question", maxScore: 100)]
+        let latestGradingResult = GradingResult(
+            id: "grading-result-2",
+            workspaceId: "ui-workspace",
+            homeworkId: "homework-1",
+            questionId: nil,
+            studentUserId: nil,
+            score: 92,
+            maxScore: 100,
+            gradingMode: "official",
+            confidence: 0.94,
+            feedback: "Clear reasoning and accurate final answers.",
+            createdAt: "2026-08-20T08:30:00Z"
+        )
+        homeworks = [HomeworkItem(
+            id: "homework-1",
+            workspaceId: "ui-workspace",
+            title: "Algebra Homework 01",
+            documentId: "homework-doc",
+            rubricText: "10 points per question",
+            maxScore: 100,
+            latestGradingResult: latestGradingResult
+        )]
         homeDashboardState.applySupplementaryContent(
             learningUnits: learningUnits,
             homeworks: homeworks,
             noteGroups: studyNoteGroups
         )
         selectedHomeworkId = "homework-1"
+        gradingResults = [
+            latestGradingResult,
+            GradingResult(
+                id: "grading-result-1",
+                workspaceId: "ui-workspace",
+                homeworkId: "homework-1",
+                questionId: nil,
+                studentUserId: nil,
+                score: 78,
+                maxScore: 100,
+                gradingMode: "provisional",
+                confidence: 0.71,
+                feedback: "Add an answer key before using this as an official grade.",
+                createdAt: "2026-08-19T08:30:00Z"
+            )
+        ]
+        gradingHistoryWorkspaceId = "ui-workspace"
+        gradingHistoryHomeworkId = "homework-1"
         homeworkRubricText = "10 points per question"
         homeworkMaxScoreText = "100"
         gradingDocuments = sampleDocuments
@@ -4120,7 +4241,39 @@ final class NotePatchViewModel: ObservableObject {
                 )
             ]
         }
-        if ProcessInfo.processInfo.arguments.contains("-NotePatchUITestFullMarkdown") {
+        if ProcessInfo.processInfo.arguments.contains("-NotePatchUITestReasoningStates") {
+            openClawMessages = [
+                OpenClawChatMessage(
+                    id: "ui-reasoning-present",
+                    role: .assistant,
+                    content: "包含思考摘要的最终回答。",
+                    reasoningContent: "先确认问题，再组织最终答案。",
+                    status: .done,
+                    taskId: nil,
+                    progress: nil,
+                    events: []
+                ),
+                OpenClawChatMessage(
+                    id: "ui-reasoning-absent",
+                    role: .assistant,
+                    content: "没有思考事件也能正常回答。",
+                    status: .done,
+                    taskId: nil,
+                    progress: nil,
+                    events: []
+                ),
+                OpenClawChatMessage(
+                    id: "ui-reasoning-unavailable",
+                    role: .assistant,
+                    content: "模型未提供摘要时的最终回答。",
+                    status: .done,
+                    taskId: nil,
+                    progress: nil,
+                    events: [],
+                    reasoningUnavailable: true
+                )
+            ]
+        } else if ProcessInfo.processInfo.arguments.contains("-NotePatchUITestFullMarkdown") {
             openClawMessages = [
                 OpenClawChatMessage(
                     id: "ui-full-markdown",
@@ -4519,6 +4672,7 @@ final class NotePatchViewModel: ObservableObject {
         guard let selected = loadedHomeworks.first(where: { $0.id == selectedHomeworkId }) else {
             self.selectedHomeworkId = nil
             homeworkReferences = []
+            clearGradingHistoryState()
             return
         }
         if !isGradingConfigDirty {
@@ -5504,6 +5658,7 @@ final class NotePatchViewModel: ObservableObject {
         guard let selected = loadedHomeworks.first(where: { $0.id == requestedHomeworkId }) else {
             self.selectedHomeworkId = nil
             homeworkReferences = []
+            clearGradingHistoryState()
             return
         }
         if !shouldPreserveDrafts {
@@ -5511,6 +5666,17 @@ final class NotePatchViewModel: ObservableObject {
             homeworkMaxScoreText = formatScore(selected.maxScore)
         }
         homeworkReferences = loadedReferences
+    }
+
+    private func clearGradingHistoryState() {
+        gradingHistoryGeneration = UUID()
+        gradingHistoryTask?.cancel()
+        gradingHistoryTask = nil
+        gradingHistoryWorkspaceId = nil
+        gradingHistoryHomeworkId = nil
+        gradingResults = []
+        gradingHistoryErrorText = nil
+        isGradingHistoryLoading = false
     }
 
     private func clearLearningWorkspaceState() {
@@ -5551,6 +5717,7 @@ final class NotePatchViewModel: ObservableObject {
         gradingDocuments = []
         selectedHomeworkId = nil
         homeworkReferences = []
+        clearGradingHistoryState()
         homeworkRubricText = ""
         homeworkMaxScoreText = "100"
         lastGradingTask = nil

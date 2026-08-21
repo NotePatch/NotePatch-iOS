@@ -1356,6 +1356,34 @@ struct KnowledgeSearchResponse: Decodable, Equatable {
     let items: [KnowledgeSearchItem]
 }
 
+struct GradingResult: Decodable, Equatable, Identifiable {
+    let id: String
+    let workspaceId: String
+    let homeworkId: String
+    let questionId: String?
+    let studentUserId: String?
+    let score: Double?
+    let maxScore: Double?
+    let gradingMode: String
+    let confidence: Double?
+    let feedback: String?
+    let createdAt: String
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case workspaceId = "workspace_id"
+        case homeworkId = "homework_id"
+        case questionId = "question_id"
+        case studentUserId = "student_user_id"
+        case score
+        case maxScore = "max_score"
+        case gradingMode = "grading_mode"
+        case confidence
+        case feedback
+        case createdAt = "created_at"
+    }
+}
+
 struct HomeworkItem: Decodable, Equatable, Identifiable {
     let id: String
     let workspaceId: String
@@ -1370,6 +1398,7 @@ struct HomeworkItem: Decodable, Equatable, Identifiable {
     let createdByUserId: String
     let createdAt: String
     let updatedAt: String
+    let latestGradingResult: GradingResult?
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -1385,6 +1414,7 @@ struct HomeworkItem: Decodable, Equatable, Identifiable {
         case createdByUserId = "created_by_user_id"
         case createdAt = "created_at"
         case updatedAt = "updated_at"
+        case latestGradingResult = "latest_grading_result"
     }
 
     init(
@@ -1400,7 +1430,8 @@ struct HomeworkItem: Decodable, Equatable, Identifiable {
         metadata: JSONValue = .object([:]),
         createdByUserId: String = "",
         createdAt: String = "",
-        updatedAt: String = ""
+        updatedAt: String = "",
+        latestGradingResult: GradingResult? = nil
     ) {
         self.id = id
         self.workspaceId = workspaceId
@@ -1415,6 +1446,7 @@ struct HomeworkItem: Decodable, Equatable, Identifiable {
         self.createdByUserId = createdByUserId
         self.createdAt = createdAt
         self.updatedAt = updatedAt
+        self.latestGradingResult = latestGradingResult
     }
 
     init(from decoder: Decoder) throws {
@@ -1432,6 +1464,7 @@ struct HomeworkItem: Decodable, Equatable, Identifiable {
         createdByUserId = try container.decodeIfPresent(String.self, forKey: .createdByUserId) ?? ""
         createdAt = try container.decodeIfPresent(String.self, forKey: .createdAt) ?? ""
         updatedAt = try container.decodeIfPresent(String.self, forKey: .updatedAt) ?? ""
+        latestGradingResult = try container.decodeIfPresent(GradingResult.self, forKey: .latestGradingResult)
     }
 }
 

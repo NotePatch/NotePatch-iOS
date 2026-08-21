@@ -1,4 +1,5 @@
 import Combine
+import CryptoKit
 import Foundation
 import JavaScriptCore
 import QuickLookThumbnailing
@@ -24,6 +25,18 @@ struct NotePatchTests {
     init() {
         // The shared AppLocalization singleton reads this on first access.
         UserDefaults.standard.set(AppLanguage.simplifiedChinese.rawValue, forKey: "app_language")
+    }
+
+    @Test func backendIntegrationDocument_matchesCurrentContract() throws {
+        let repositoryRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let documentURL = repositoryRoot.appendingPathComponent("docs/backend-frontend-integration.md")
+        let data = try Data(contentsOf: documentURL)
+        let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+
+        #expect(data.split(separator: 0x0A, omittingEmptySubsequences: false).count == 1_338)
+        #expect(digest == "0f71d6bb6f56f145457c02a84850fc0b6ccf9b9bbe0918e240e0a65f6bbc1eb5")
     }
 
     @MainActor
@@ -2277,8 +2290,11 @@ struct NotePatchTests {
     }
 
     @Test @MainActor func chatStreamReducer_appendsDeltasAndHandlesControlEvents() {
-        func event(_ type: String, _ sequence: Int, delta: String? = nil) -> TaskEventItem {
-            TaskEventItem(
+        func event(_ type: String, _ sequence: Int, delta: String? = nil, stream: String? = nil) -> TaskEventItem {
+            var data: [String: JSONValue] = [:]
+            if let delta { data["delta"] = .string(delta) }
+            if let stream { data["stream"] = .string(stream) }
+            return TaskEventItem(
                 id: "event-\(sequence)",
                 workspaceId: "ws-1",
                 taskId: "task-1",
@@ -2287,7 +2303,7 @@ struct NotePatchTests {
                 level: "info",
                 message: "",
                 progress: nil,
-                data: delta.map { .object(["delta": .string($0)]) },
+                data: data.isEmpty ? nil : .object(data),
                 dataText: nil,
                 createdAt: ""
             )
@@ -2310,6 +2326,74 @@ struct NotePatchTests {
         #expect(state.reasoning == "")
         #expect(state.truncated)
         #expect(state.reasoningUnavailable)
+    }
+
+    @Test @MainActor func chatStreamReducer_usesDeclaredStreamAndDoesNotExposeReasoningAsAnswer() {
+        func event(_ type: String, _ sequence: Int, stream: String, delta: String) -> TaskEventItem {
+            TaskEventItem(
+                id: "event-\(sequence)",
+                workspaceId: "ws-1",
+                taskId: "task-1",
+                sequenceNo: sequence,
+                eventType: type,
+                level: "info",
+                message: "",
+                progress: nil,
+                data: .object(["stream": .string(stream), "delta": .string(delta)]),
+                dataText: nil,
+                createdAt: ""
+            )
+        }
+
+        let state = NotePatchViewModel.reduceChatStreamEvents([
+            event("chat_answer_delta", 1, stream: "reasoning", delta: "正在整理上下文"),
+            event("chat_reasoning_delta", 2, stream: "answer", delta: "这是最终回答。"),
+            TaskEventItem(
+                id: "event-3",
+                workspaceId: "ws-1",
+                taskId: "task-1",
+                sequenceNo: 3,
+                eventType: "chat_reasoning_unavailable",
+                level: "info",
+                message: "",
+                progress: nil,
+                data: nil,
+                dataText: nil,
+                createdAt: ""
+            )
+        ])
+
+        #expect(state.answer == "这是最终回答。")
+        #expect(state.reasoning == "正在整理上下文")
+        #expect(!state.reasoningUnavailable)
+    }
+
+    @Test @MainActor func chatStreamReducer_allowsAnswerWithoutAnyReasoningEvents() {
+        let state = NotePatchViewModel.reduceChatStreamEvents([
+            TaskEventItem(
+                id: "event-1",
+                workspaceId: "ws-1",
+                taskId: "task-1",
+                sequenceNo: 1,
+                eventType: "chat_answer_delta",
+                level: "info",
+                message: "",
+                progress: nil,
+                data: .object(["stream": .string("answer"), "delta": .string("直接回答")]),
+                dataText: nil,
+                createdAt: ""
+            )
+        ])
+
+        #expect(state.answer == "直接回答")
+        #expect(state.reasoning.isEmpty)
+        #expect(!state.reasoningUnavailable)
+    }
+
+    @Test func openClawResult_preservesAuthoritativeAnswerWithoutTagGuessing() {
+        let answer = "<think>这是回答中需要原样展示的文本</think>"
+        #expect(formatOpenClawTaskResult(answer) == answer)
+        #expect(formatOpenClawTaskResult(#"{"answer":"<analysis>原样内容</analysis>"}"#) == "<analysis>原样内容</analysis>")
     }
 
     @Test @MainActor func openClawAttachmentUploadFailure_keepsComposerDraft() async throws {
@@ -2882,7 +2966,19 @@ struct NotePatchTests {
 
         let homework = try JSONDecoder.notepatch.decode(
             HomeworkItem.self,
-            from: Data(#"{"id":"h-1","workspace_id":"ws-1","title":"代数作业","description":null,"document_id":"doc-1","due_at":null,"status":"draft","rubric_text":"过程 4 分","max_score":100.0,"metadata":{},"created_by_user_id":"u-1","created_at":"","updated_at":""}"#.utf8)
+            from: Data(#"{"id":"h-1","workspace_id":"ws-1","title":"代数作业","description":null,"document_id":"doc-1","due_at":null,"status":"draft","rubric_text":"过程 4 分","max_score":100.0,"metadata":{},"created_by_user_id":"u-1","created_at":"","updated_at":"","latest_grading_result":{"id":"g-1","workspace_id":"ws-1","homework_id":"h-1","question_id":null,"student_user_id":null,"score":86.5,"max_score":100.0,"grading_mode":"official","confidence":0.91,"feedback":"步骤完整","created_at":"2026-08-21T01:00:00Z"}}"#.utf8)
+        )
+        let gradingResults = try JSONDecoder.notepatch.decode(
+            [GradingResult].self,
+            from: Data(#"[{"id":"g-2","workspace_id":"ws-1","homework_id":"h-1","question_id":"q-1","student_user_id":null,"score":null,"max_score":null,"grading_mode":"provisional","confidence":null,"feedback":null,"created_at":"2026-08-20T01:00:00Z"}]"#.utf8)
+        )
+        let homeworkWithoutResult = try JSONDecoder.notepatch.decode(
+            HomeworkItem.self,
+            from: Data(#"{"id":"h-2","workspace_id":"ws-1","title":"旧响应","status":"draft","max_score":100,"created_by_user_id":"u-1","created_at":"","updated_at":""}"#.utf8)
+        )
+        let homeworkWithNullResult = try JSONDecoder.notepatch.decode(
+            HomeworkItem.self,
+            from: Data(#"{"id":"h-3","workspace_id":"ws-1","title":"未评分","status":"draft","max_score":100,"created_by_user_id":"u-1","created_at":"","updated_at":"","latest_grading_result":null}"#.utf8)
         )
         let references = try JSONDecoder.notepatch.decode(
             [HomeworkReferenceItem].self,
@@ -2893,6 +2989,12 @@ struct NotePatchTests {
             from: Data(#"{"id":"t-1","workspace_id":"ws-1","status":"succeeded","payload":{},"result":{"grading_mode":"provisional","confidence":0.82},"progress":100}"#.utf8)
         )
         #expect(homework.maxScore == 100)
+        #expect(homework.latestGradingResult?.score == 86.5)
+        #expect(homework.latestGradingResult?.gradingMode == "official")
+        #expect(gradingResults.first?.questionId == "q-1")
+        #expect(gradingResults.first?.score == nil)
+        #expect(homeworkWithoutResult.latestGradingResult == nil)
+        #expect(homeworkWithNullResult.latestGradingResult == nil)
         #expect(references.first?.referenceType == "answer_key")
         #expect(task.result?.objectStringValue(for: "grading_mode") == "provisional")
         #expect(task.result?.objectDoubleValue(for: "confidence") == 0.82)
@@ -2900,7 +3002,8 @@ struct NotePatchTests {
 
     @Test func knowledgeAndHomeworkRequests_matchOpenAPI() async throws {
         var bodies: [String: [String: Any]] = [:]
-        let homeworkJSON = #"{"id":"h-1","workspace_id":"ws-1","title":"代数作业","document_id":"doc-1","status":"draft","rubric_text":"过程 4 分","max_score":100.0,"metadata":{},"created_by_user_id":"u-1","created_at":"","updated_at":""}"#
+        let homeworkJSON = #"{"id":"h-1","workspace_id":"ws-1","title":"代数作业","document_id":"doc-1","status":"draft","rubric_text":"过程 4 分","max_score":100.0,"metadata":{},"created_by_user_id":"u-1","created_at":"","updated_at":"","latest_grading_result":{"id":"g-1","workspace_id":"ws-1","homework_id":"h-1","score":86.5,"max_score":100.0,"grading_mode":"official","confidence":0.91,"feedback":"步骤完整","created_at":"2026-08-21T01:00:00Z"}}"#
+        let gradingResultJSON = #"{"id":"g-1","workspace_id":"ws-1","homework_id":"h-1","question_id":null,"student_user_id":null,"score":86.5,"max_score":100.0,"grading_mode":"official","confidence":0.91,"feedback":"步骤完整","created_at":"2026-08-21T01:00:00Z"}"#
         let referenceJSON = #"{"id":"r-1","workspace_id":"ws-1","homework_id":"h-1","document_id":"answer-1","reference_type":"answer_key","created_at":""}"#
         let session = Self.mockSession { request in
             let key = "\(request.httpMethod ?? "") \(request.url?.path ?? "")"
@@ -2916,6 +3019,8 @@ struct NotePatchTests {
                 return Self.response(request, status: request.httpMethod == "POST" ? 201 : 200, body: homeworkJSON)
             case "GET /api/v1/workspaces/ws-1/homeworks/h-1/references":
                 return Self.response(request, status: 200, body: "[\(referenceJSON)]")
+            case "GET /api/v1/workspaces/ws-1/homeworks/h-1/grading-results":
+                return Self.response(request, status: 200, body: "[\(gradingResultJSON)]")
             case "POST /api/v1/workspaces/ws-1/homeworks/h-1/references":
                 return Self.response(request, status: 201, body: referenceJSON)
             case "DELETE /api/v1/workspaces/ws-1/homeworks/h-1/references/r-1":
@@ -2932,6 +3037,7 @@ struct NotePatchTests {
         _ = try await client.getHomework(workspaceId: "ws-1", homeworkId: "h-1")
         _ = try await client.createHomework(workspaceId: "ws-1", input: HomeworkCreateInput(title: "代数作业", description: nil, documentId: "doc-1", dueAt: nil, rubricText: nil, maxScore: 100))
         _ = try await client.updateGradingConfig(workspaceId: "ws-1", homeworkId: "h-1", input: GradingConfigInput(rubricText: nil, maxScore: 80))
+        let gradingResults = try await client.listGradingResults(workspaceId: "ws-1", homeworkId: "h-1")
         _ = try await client.listHomeworkReferences(workspaceId: "ws-1", homeworkId: "h-1")
         _ = try await client.addHomeworkReference(workspaceId: "ws-1", homeworkId: "h-1", documentId: "answer-1", referenceType: "answer_key")
         try await client.deleteHomeworkReference(workspaceId: "ws-1", homeworkId: "h-1", referenceId: "r-1")
@@ -2944,6 +3050,29 @@ struct NotePatchTests {
         #expect(bodies["PATCH /api/v1/workspaces/ws-1/homeworks/h-1/grading-config"]?["rubric_text"] is NSNull)
         #expect(bodies["POST /api/v1/workspaces/ws-1/homeworks/h-1/references"]?["reference_type"] as? String == "answer_key")
         #expect(bodies["POST /api/v1/workspaces/ws-1/homeworks/h-1/grade"]?["student_user_id"] is NSNull)
+        #expect(gradingResults.first?.feedback == "步骤完整")
+    }
+
+    @Test func gradingResultsRequest_escapesWorkspaceAndHomeworkPaths() async throws {
+        var capturedRequest: URLRequest?
+        let session = Self.mockSession { request in
+            capturedRequest = request
+            return Self.response(request, status: 200, body: "[]")
+        }
+        let client = LearningBackendClient(
+            baseURL: "https://api.test",
+            accessToken: "access",
+            refreshToken: "refresh",
+            session: session
+        )
+
+        _ = try await client.listGradingResults(workspaceId: "ws/1", homeworkId: "homework/1")
+
+        let encodedPath = capturedRequest?.url.flatMap {
+            URLComponents(url: $0, resolvingAgainstBaseURL: false)?.percentEncodedPath
+        }
+        #expect(capturedRequest?.httpMethod == "GET")
+        #expect(encodedPath == "/api/v1/workspaces/ws%2F1/homeworks/homework%2F1/grading-results")
     }
 
     @Test @MainActor func conversationMutations_waitForServerAndDeduplicateRequests() async throws {
@@ -3577,6 +3706,134 @@ struct NotePatchTests {
         #expect(model.homeworkReferences.first?.documentId == "answer-1")
         #expect(model.lastGradingTask == nil)
         #expect(model.statusMessage == localized("Reference added. Please re-grade."))
+    }
+
+    @Test @MainActor func gradingHistory_usesHomeworkLatestResultAndLoadsOnDemandOnce() async throws {
+        let suiteName = "NotePatchTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        var historyRequestCount = 0
+        let historyJSON = #"""
+        [
+          {"id":"g-old","workspace_id":"ws-1","homework_id":"h-1","score":70,"max_score":100,"grading_mode":"provisional","confidence":0.6,"feedback":null,"created_at":"2026-08-19T00:00:00Z"},
+          {"id":"g-new","workspace_id":"ws-1","homework_id":"h-1","score":92,"max_score":100,"grading_mode":"official","confidence":0.94,"feedback":"很好","created_at":"2026-08-21T00:00:00Z"}
+        ]
+        """#
+        let session = Self.mockSession { request in
+            guard request.url?.path == "/api/v1/workspaces/ws-1/homeworks/h-1/grading-results" else {
+                return Self.response(request, status: 500, body: #"{"detail":"unexpected request"}"#)
+            }
+            historyRequestCount += 1
+            Thread.sleep(forTimeInterval: 0.03)
+            return Self.response(request, status: 200, body: historyJSON)
+        }
+        let latest = GradingResult(
+            id: "g-new",
+            workspaceId: "ws-1",
+            homeworkId: "h-1",
+            questionId: nil,
+            studentUserId: nil,
+            score: 92,
+            maxScore: 100,
+            gradingMode: "official",
+            confidence: 0.94,
+            feedback: "很好",
+            createdAt: "2026-08-21T00:00:00Z"
+        )
+        let model = NotePatchViewModel(
+            settings: SettingsStore(defaults: defaults, keychain: KeychainStore(service: suiteName)),
+            backendSession: session,
+            tusSession: session
+        )
+        model.session = SavedSession(baseURL: "https://api.test", tusBaseURL: "https://tus.test/", accessToken: "a", refreshToken: "r", expiresAt: "x", userId: "u", email: "u@test", fullName: nil, selectedWorkspaceId: "ws-1", aiHistoryEnabled: true)
+        model.selectedWorkspaceId = "ws-1"
+        model.selectedHomeworkId = "h-1"
+        model.homeworks = [HomeworkItem(id: "h-1", workspaceId: "ws-1", title: "作业", latestGradingResult: latest)]
+        model.lastGradingTask = TaskItem(
+            id: "old-task",
+            workspaceId: "ws-1",
+            taskType: "grade_homework",
+            status: "succeeded",
+            result: .object(["grading_mode": .string("provisional"), "confidence": .number(0.1)]),
+            progress: 100
+        )
+
+        #expect(model.gradingModeLabel == localized("grading.mode.official"))
+        #expect(model.gradingConfidence == 0.94)
+        #expect(model.gradingResults.isEmpty)
+
+        model.loadGradingHistory()
+        model.loadGradingHistory()
+        try await Self.waitUntil { !model.isGradingHistoryLoading && model.gradingResults.count == 2 }
+        #expect(historyRequestCount == 1)
+        #expect(model.gradingResults.map(\.id) == ["g-new", "g-old"])
+
+        model.loadGradingHistory()
+        try await Task.sleep(nanoseconds: 20_000_000)
+        #expect(historyRequestCount == 1)
+
+        model.loadGradingHistory(force: true)
+        try await Self.waitUntil { !model.isGradingHistoryLoading && historyRequestCount == 2 }
+    }
+
+    @Test @MainActor func gradingCompletion_refreshesHomeworkLatestResultAndLoadedHistory() async throws {
+        let suiteName = "NotePatchTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        var historyRequestCount = 0
+        let oldResult = #"{"id":"g-old","workspace_id":"ws-1","homework_id":"h-1","score":70,"max_score":100,"grading_mode":"provisional","created_at":"2026-08-19T00:00:00Z"}"#
+        let newResult = #"{"id":"g-new","workspace_id":"ws-1","homework_id":"h-1","score":95,"max_score":100,"grading_mode":"official","confidence":0.96,"feedback":"优秀","created_at":"2026-08-21T00:00:00Z"}"#
+        let homeworkJSON = "{\"id\":\"h-1\",\"workspace_id\":\"ws-1\",\"title\":\"作业\",\"status\":\"graded\",\"max_score\":100,\"metadata\":{},\"created_by_user_id\":\"u\",\"created_at\":\"\",\"updated_at\":\"\",\"latest_grading_result\":\(newResult)}"
+        let session = Self.mockSession { request in
+            let key = "\(request.httpMethod ?? "") \(request.url?.path ?? "")"
+            switch key {
+            case "GET /api/v1/workspaces/ws-1/homeworks/h-1/grading-results":
+                historyRequestCount += 1
+                return Self.response(
+                    request,
+                    status: 200,
+                    body: historyRequestCount == 1 ? "[\(oldResult)]" : "[\(newResult),\(oldResult)]"
+                )
+            case "POST /api/v1/workspaces/ws-1/homeworks/h-1/grade":
+                return Self.response(
+                    request,
+                    status: 202,
+                    body: #"{"id":"grade-task","workspace_id":"ws-1","task_type":"grade_homework","status":"succeeded","payload":{},"result":{},"progress":100,"created_at":"","updated_at":""}"#
+                )
+            case "GET /api/v1/workspaces/ws-1/homeworks":
+                return Self.response(request, status: 200, body: "[\(homeworkJSON)]")
+            case "GET /api/v1/workspaces/ws-1/documents",
+                 "GET /api/v1/workspaces/ws-1/homeworks/h-1/references",
+                 "GET /api/v1/workspaces/ws-1/learning-units":
+                return Self.response(request, status: 200, body: "[]")
+            default:
+                return Self.response(request, status: 500, body: #"{"detail":"unexpected request"}"#)
+            }
+        }
+        let model = NotePatchViewModel(
+            settings: SettingsStore(defaults: defaults, keychain: KeychainStore(service: suiteName)),
+            backendSession: session,
+            tusSession: session,
+            taskEventStreamingEnabled: false
+        )
+        model.session = SavedSession(baseURL: "https://api.test", tusBaseURL: "https://tus.test/", accessToken: "a", refreshToken: "r", expiresAt: "x", userId: "u", email: "u@test", fullName: nil, selectedWorkspaceId: "ws-1", aiHistoryEnabled: true)
+        model.selectedWorkspaceId = "ws-1"
+        model.selectedHomeworkId = "h-1"
+        model.homeworks = [HomeworkItem(id: "h-1", workspaceId: "ws-1", title: "作业")]
+
+        model.loadGradingHistory()
+        try await Self.waitUntil { !model.isGradingHistoryLoading && model.gradingResults.first?.id == "g-old" }
+        model.gradeSelectedHomework()
+        try await Self.waitUntil {
+            !model.isHomeworkLoading
+                && !model.isGradingHistoryLoading
+                && model.latestGradingResult?.id == "g-new"
+                && model.gradingResults.first?.id == "g-new"
+        }
+
+        #expect(historyRequestCount == 2)
+        #expect(model.gradingModeLabel == localized("grading.mode.official"))
+        #expect(model.gradingConfidence == 0.96)
     }
 
     @Test @MainActor func serverURLs_persistAcrossModelInstances() throws {

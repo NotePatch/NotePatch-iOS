@@ -665,6 +665,15 @@ final class LearningBackendClient {
         )
     }
 
+    func listGradingResults(workspaceId: String, homeworkId: String) async throws -> [GradingResult] {
+        try await authedJSON(
+            "GET",
+            "/workspaces/\(workspaceId.pathSegment)/homeworks/\(homeworkId.pathSegment)/grading-results",
+            payload: nil,
+            as: [GradingResult].self
+        )
+    }
+
     func listHomeworkReferences(workspaceId: String, homeworkId: String) async throws -> [HomeworkReferenceItem] {
         try await authedJSON(
             "GET",
