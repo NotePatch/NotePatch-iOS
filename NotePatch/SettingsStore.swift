@@ -11,6 +11,7 @@ final class SettingsStore {
         "http://192.168.100.123:1080/files/",
         "https://5mbps.me:8443/notepatch/1/files/",
         "https://5mbps.me:8443/notepatch/2/files/",
+        "https://api.ls-jl.cn:8443/notepatch/1/files/",
         "https://api.ls-jl.cn:8443/notepatch/2/files/"
     ]
     private static let apiBaseURLContractVersion = 5

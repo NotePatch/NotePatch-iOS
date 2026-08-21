@@ -123,7 +123,7 @@ struct NotePatchTests {
 
         defaults.set("https://api.ls-jl.cn:8443/notepatch/1", forKey: "learning_base_url")
         defaults.set(4, forKey: "api_base_url_contract_version")
-        defaults.set("https://api.ls-jl.cn:8443/notepatch/2/files/", forKey: "tusd_base_url")
+        defaults.set("https://api.ls-jl.cn:8443/notepatch/1/files/", forKey: "tusd_base_url")
         #expect(store.loadBaseURL() == defaultLearningBackendBaseURL)
         #expect(store.loadTUSBaseURL() == defaultTUSDBaseURL)
         #expect(defaults.string(forKey: "learning_base_url") == defaultLearningBackendBaseURL)
@@ -1098,15 +1098,32 @@ struct NotePatchTests {
             endpoint: defaultTUSDBaseURL,
             location: "/files/abc"
         )
+        let insecureSameOrigin = try TusUploader.resolveUploadURL(
+            endpoint: defaultTUSDBaseURL,
+            location: "http://8.137.78.255/files/abc"
+        )
         let otherHost = try TusUploader.resolveUploadURL(endpoint: "http://192.168.100.123:1080/files/", location: "http://other.test/upload/xyz")
         #expect(relative == "http://192.168.100.123:1080/files/abc")
         #expect(absolutePath == "http://192.168.100.123:1080/files/abc")
         #expect(proxiedPath == "\(defaultTUSDBaseURL)abc")
+        #expect(insecureSameOrigin == "\(defaultTUSDBaseURL)abc")
         #expect(otherHost == "http://other.test/upload/xyz")
         #expect(
             TusUploader.preferredEndpoint(
                 configuredEndpoint: defaultTUSDBaseURL,
                 serverEndpoint: "http://192.168.100.123:1080/files/"
+            ) == "http://192.168.100.123:1080/files/"
+        )
+        #expect(
+            TusUploader.preferredEndpoint(
+                configuredEndpoint: "https://stale.example.test/files/",
+                serverEndpoint: defaultTUSDBaseURL
+            ) == defaultTUSDBaseURL
+        )
+        #expect(
+            TusUploader.preferredEndpoint(
+                configuredEndpoint: defaultTUSDBaseURL,
+                serverEndpoint: nil
             ) == defaultTUSDBaseURL
         )
         #expect(TusUploader.extractTusUploadId("http://192.168.100.123:1080/files/abc") == "abc")
@@ -1175,6 +1192,162 @@ struct NotePatchTests {
         #expect(tusCreateCount == 2)
         #expect(model.queuedUploadItems.isEmpty)
         #expect(model.statusMessage == localized("upload.selected_completed"))
+    }
+
+    @Test @MainActor func uploadUsesServerTusEndpointAndAcceptsWebhookCompletionAfterConflict() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("NotePatchUploadRecoveryTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let fileURL = root.appendingPathComponent("recovery.pdf")
+        try Data().write(to: fileURL)
+
+        var tusHosts: [String] = []
+        var completeCount = 0
+        var documentReadCount = 0
+        let session = Self.mockSession { request in
+            let path = request.url?.path ?? ""
+            switch (request.httpMethod, path) {
+            case ("POST", "/api/v1/workspaces/ws-1/documents/upload-session"):
+                return Self.response(request, status: 201, body: Self.uploadSessionJSON)
+            case ("POST", let path) where path.hasPrefix("/files"):
+                tusHosts.append(request.url?.host ?? "")
+                let response = HTTPURLResponse(
+                    url: try #require(request.url),
+                    statusCode: 201,
+                    httpVersion: nil,
+                    headerFields: ["Location": "upload-recovery", "Tus-Resumable": "1.0.0"]
+                )!
+                return (response, Data())
+            case ("POST", "/api/v1/workspaces/ws-1/documents/complete-upload"):
+                completeCount += 1
+                return Self.response(request, status: 409, body: #"{"detail":"Upload is still being synchronized"}"#)
+            case ("GET", "/api/v1/workspaces/ws-1/documents/doc-1"):
+                documentReadCount += 1
+                return Self.response(
+                    request,
+                    status: 200,
+                    body: Self.completedDocumentJSON.replacingOccurrences(of: "doc-completed", with: "doc-1")
+                )
+            case ("GET", "/api/v1/workspaces/ws-1/documents"):
+                return Self.response(request, status: 200, body: "[]")
+            default:
+                return Self.response(request, status: 500, body: #"{"detail":"unexpected request"}"#)
+            }
+        }
+        let suiteName = "NotePatchUploadRecoveryTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let model = NotePatchViewModel(
+            settings: SettingsStore(defaults: defaults, keychain: KeychainStore(service: suiteName)),
+            backendSession: session,
+            tusSession: session,
+            cacheDirectory: root
+        )
+        model.session = SavedSession(
+            baseURL: "https://api.test",
+            tusBaseURL: "https://stale.example.test/files/",
+            accessToken: "a",
+            refreshToken: "r",
+            expiresAt: "x",
+            userId: "u",
+            email: "u@test",
+            fullName: nil,
+            selectedWorkspaceId: "ws-1",
+            aiHistoryEnabled: true
+        )
+        model.selectedWorkspaceId = "ws-1"
+        model.stageUploadFileForPreview(
+            LocalUploadFile(url: fileURL, filename: "recovery.pdf", mimeType: "application/pdf")
+        )
+
+        model.uploadSelectedQueuedFiles()
+        try await Self.waitUntil(attempts: 500) {
+            model.statusMessage == localized("upload.selected_completed") || model.errorMessage != nil
+        }
+
+        #expect(tusHosts == ["192.168.100.123"])
+        #expect(completeCount == 1)
+        #expect(documentReadCount == 1)
+        #expect(model.queuedUploadItems.isEmpty)
+        #expect(model.errorMessage == nil)
+    }
+
+    @Test @MainActor func liveUploadSmokeTestWhenExplicitlyEnabled() async throws {
+        guard ProcessInfo.processInfo.environment["NOTEPATCH_LIVE_UPLOAD"] == "1" else { return }
+        let settings = SettingsStore()
+        let activeSession = try #require(settings.loadSession())
+        let workspaceId = try #require(activeSession.selectedWorkspaceId)
+        let client = LearningBackendClient(
+            baseURL: activeSession.baseURL,
+            accessToken: activeSession.accessToken,
+            refreshToken: activeSession.refreshToken
+        )
+        let staleSmokeDocuments = try await client.listDocuments(
+            workspaceId: workspaceId,
+            pageSize: 100,
+            documentKind: "other"
+        ).filter { $0.originalFilename.hasPrefix("notepatch-upload-smoke-") }
+        for document in staleSmokeDocuments {
+            _ = try? await client.deleteDocument(workspaceId: workspaceId, documentId: document.id)
+        }
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("NotePatchLiveUploadSmoke-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let filename = "notepatch-upload-smoke-\(UUID().uuidString).txt"
+        let fileURL = root.appendingPathComponent(filename)
+        let fileData = Data("NotePatch live upload smoke test".utf8)
+        try fileData.write(to: fileURL, options: .atomic)
+
+        let uploadSession = try await client.createUploadSession(
+            workspaceId: workspaceId,
+            filename: filename,
+            mimeType: "text/plain",
+            fileSize: Int64(fileData.count),
+            documentKind: "other"
+        )
+        var completedDocument: LearningDocumentItem?
+        do {
+            let endpoint = TusUploader.preferredEndpoint(
+                configuredEndpoint: activeSession.tusBaseURL,
+                serverEndpoint: uploadSession.tusEndpoint
+            )
+            let tusResult = try await TusUploader().upload(
+                fileURL: fileURL,
+                endpoint: endpoint,
+                metadataHeader: uploadSession.tusMetadataHeader
+            ) { _, _ in }
+            for attempt in 0..<20 {
+                do {
+                    completedDocument = try await client.completeUpload(
+                        workspaceId: workspaceId,
+                        uploadSessionId: uploadSession.uploadSession.id,
+                        tusUploadURL: tusResult.uploadURL,
+                        tusUploadId: tusResult.uploadId,
+                        fileSize: Int64(fileData.count),
+                        mimeType: "text/plain"
+                    )
+                    break
+                } catch let error as LearningBackendError where error.statusCode == 409 {
+                    if let document = try? await client.getDocument(
+                        workspaceId: workspaceId,
+                        documentId: uploadSession.document.id
+                    ), ["uploaded", "processing", "ready", "scanning"].contains(document.status) {
+                        completedDocument = document
+                        break
+                    }
+                    try await Task.sleep(nanoseconds: UInt64(min(3, 1 + attempt / 5)) * 1_000_000_000)
+                }
+            }
+            let document = try #require(completedDocument)
+            #expect(document.id == uploadSession.document.id)
+            #expect(["uploaded", "processing", "ready", "scanning"].contains(document.status))
+        } catch {
+            _ = try? await client.deleteDocument(workspaceId: workspaceId, documentId: uploadSession.document.id)
+            throw error
+        }
+        _ = try await client.deleteDocument(workspaceId: workspaceId, documentId: uploadSession.document.id)
     }
 
     @Test func decodeTokenWorkspaceUploadArtifactAndTaskJSON() throws {

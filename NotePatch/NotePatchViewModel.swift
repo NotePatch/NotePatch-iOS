@@ -4,7 +4,7 @@ import SwiftUI
 import UIKit
 
 private let taskPollIntervalNanoseconds: UInt64 = 1_500_000_000
-private let completeUploadMaxRetries = 5
+private let completeUploadMaxRetries = 20
 private let defaultPresenceHeartbeatIntervalSeconds = 30
 private let defaultPersonalWorkspaceName = "My Workspace"
 
@@ -4847,6 +4847,7 @@ final class NotePatchViewModel: ObservableObject {
     ) async throws -> LearningDocumentItem {
         var lastConflict: LearningBackendError?
         for attempt in 0..<completeUploadMaxRetries {
+            try Task.checkCancellation()
             do {
                 return try await client.completeUpload(
                     workspaceId: workspaceId,
@@ -4858,8 +4859,15 @@ final class NotePatchViewModel: ObservableObject {
                 )
             } catch let error as LearningBackendError where error.statusCode == 409 {
                 lastConflict = error
+                if let document = try? await client.getDocument(
+                    workspaceId: workspaceId,
+                    documentId: uploadSession.document.id
+                ), ["uploaded", "processing", "ready", "scanning"].contains(document.status) {
+                    return document
+                }
                 setStatus("upload.tusd_sync_retry", String(attempt + 1), String(completeUploadMaxRetries))
-                try await Task.sleep(nanoseconds: 1_000_000_000)
+                let delaySeconds = min(3, 1 + attempt / 5)
+                try await Task.sleep(nanoseconds: UInt64(delaySeconds) * 1_000_000_000)
             }
         }
         throw lastConflict ?? LearningBackendError(localizedKey: "error.upload.confirmation_failed")

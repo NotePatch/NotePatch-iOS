@@ -129,11 +129,18 @@ final class TusUploader {
     }
 
     static func preferredEndpoint(configuredEndpoint: String, serverEndpoint: String?) -> String {
+        let server = serverEndpoint?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if let components = URLComponents(string: server),
+           let scheme = components.scheme?.lowercased(),
+           ["http", "https"].contains(scheme),
+           components.host != nil {
+            return normalizeTUSBaseURL(server)
+        }
         let configured = configuredEndpoint.trimmingCharacters(in: .whitespacesAndNewlines)
         if !configured.isEmpty {
             return normalizeTUSBaseURL(configured)
         }
-        return normalizeTUSBaseURL(serverEndpoint ?? "")
+        return normalizeTUSBaseURL(server)
     }
 
     static func resolveUploadURL(endpoint: String, location: String) throws -> String {
@@ -141,38 +148,57 @@ final class TusUploader {
             throw LearningBackendError(localizedKey: "error.tus.location_invalid")
         }
         if location.hasPrefix("http://") || location.hasPrefix("https://") {
-            guard let absolute = URL(string: location) else {
+            guard let absolute = URL(string: location),
+                  let locationComponents = URLComponents(url: absolute, resolvingAgainstBaseURL: false) else {
                 throw LearningBackendError(localizedKey: "error.tus.location_invalid")
+            }
+            if absolute.host?.lowercased() == endpointURL.host?.lowercased() {
+                return try resolveSameOriginLocation(
+                    endpointURL: endpointURL,
+                    locationComponents: locationComponents
+                )
             }
             return absolute.absoluteString
         }
         if location.hasPrefix("/") {
-            guard var components = URLComponents(url: endpointURL, resolvingAgainstBaseURL: false),
-                  let locationComponents = URLComponents(string: location) else {
+            guard let locationComponents = URLComponents(string: location) else {
                 throw LearningBackendError(localizedKey: "error.tus.location_invalid")
             }
-            let endpointPath = components.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-            let locationPath = locationComponents.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-            let endpointSegments = endpointPath.split(separator: "/").map(String.init)
-            let locationSegments = locationPath.split(separator: "/").map(String.init)
-
-            if locationSegments.starts(with: endpointSegments) {
-                components.path = "/\(locationPath)"
-            } else if let filesIndex = endpointSegments.lastIndex(of: "files"),
-                      locationSegments.first == "files" {
-                let proxyPrefix = endpointSegments[..<filesIndex]
-                components.path = "/\((Array(proxyPrefix) + locationSegments).joined(separator: "/"))"
-            } else {
-                components.path = "/\(locationPath)"
-            }
-            components.query = locationComponents.query
-            components.fragment = locationComponents.fragment
-            guard let resolved = components.url else {
-                throw LearningBackendError(localizedKey: "error.tus.location_invalid")
-            }
-            return resolved.absoluteString
+            return try resolveSameOriginLocation(
+                endpointURL: endpointURL,
+                locationComponents: locationComponents
+            )
         }
         guard let resolved = URL(string: location, relativeTo: endpointURL)?.absoluteURL else {
+            throw LearningBackendError(localizedKey: "error.tus.location_invalid")
+        }
+        return resolved.absoluteString
+    }
+
+    private static func resolveSameOriginLocation(
+        endpointURL: URL,
+        locationComponents: URLComponents
+    ) throws -> String {
+        guard var components = URLComponents(url: endpointURL, resolvingAgainstBaseURL: false) else {
+            throw LearningBackendError(localizedKey: "error.tus.location_invalid")
+        }
+        let endpointPath = components.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let locationPath = locationComponents.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let endpointSegments = endpointPath.split(separator: "/").map(String.init)
+        let locationSegments = locationPath.split(separator: "/").map(String.init)
+
+        if locationSegments.starts(with: endpointSegments) {
+            components.path = "/\(locationPath)"
+        } else if let filesIndex = endpointSegments.lastIndex(of: "files"),
+                  locationSegments.first == "files" {
+            let proxyPrefix = endpointSegments[..<filesIndex]
+            components.path = "/\((Array(proxyPrefix) + locationSegments).joined(separator: "/"))"
+        } else {
+            components.path = "/\(locationPath)"
+        }
+        components.query = locationComponents.query
+        components.fragment = locationComponents.fragment
+        guard let resolved = components.url else {
             throw LearningBackendError(localizedKey: "error.tus.location_invalid")
         }
         return resolved.absoluteString
