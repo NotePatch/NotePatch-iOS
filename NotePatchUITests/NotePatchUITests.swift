@@ -557,6 +557,20 @@ final class NotePatchUITests: XCTestCase {
         XCTAssertTrue(app.descendants(matching: .any)["notesSubsectionPicker"].waitForExistence(timeout: 3))
         app.buttons["notesSubsection.flashcards"].tap()
 
+        let unitPicker = app.buttons["flashcardLearningUnitPicker"]
+        XCTAssertTrue(unitPicker.waitForExistence(timeout: 3))
+        XCTAssertTrue(unitPicker.isHittable)
+        unitPicker.tap()
+        XCTAssertTrue(app.buttons["Linear Equations"].waitForExistence(timeout: 2))
+        app.buttons["Fractions & Ratios"].tap()
+
+        let deckPicker = app.buttons["flashcardDeckPicker"]
+        XCTAssertTrue(deckPicker.waitForExistence(timeout: 2))
+        XCTAssertTrue(deckPicker.isHittable)
+        deckPicker.tap()
+        XCTAssertTrue(app.buttons["第 1 版牌组"].waitForExistence(timeout: 2))
+        app.buttons["第 1 版牌组"].tap()
+
         let card = app.buttons["flashcardCard"]
         XCTAssertTrue(card.waitForExistence(timeout: 3))
         XCTAssertTrue(app.staticTexts["What does a ratio compare?"].exists)
@@ -564,7 +578,11 @@ final class NotePatchUITests: XCTestCase {
         card.tap()
         XCTAssertTrue(app.staticTexts["The relationship between two quantities."].waitForExistence(timeout: 2))
         XCTAssertFalse(app.staticTexts["The relationship between **two quantities**."].exists)
-        app.buttons["下一张"].tap()
+        let learningScroll = app.scrollViews["learningContentScroll"]
+        let nextButton = app.buttons["flashcardNextButton"]
+        learningScroll.swipeUp()
+        XCTAssertTrue(nextButton.isHittable)
+        nextButton.tap()
         XCTAssertTrue(app.staticTexts["How do you solve a proportion?"].waitForExistence(timeout: 2))
     }
 
@@ -772,6 +790,64 @@ final class NotePatchUITests: XCTestCase {
                 thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: endY))
             )
         XCTAssertLessThanOrEqual(messages.frame.maxY, editor.frame.minY + 1)
+    }
+
+    @MainActor
+    func testOpenClawScrollToBottomButtonTracksBottomAnchor() throws {
+        let app = makeApp(["-NotePatchUITestWorkbench", "-NotePatchUITestLongChat"])
+        app.launch()
+        XCTAssertTrue(app.otherElements["workbenchTabs"].waitForExistence(timeout: 5))
+        app.buttons["tab.ai"].tap()
+
+        let messages = app.scrollViews["openClawMessages"]
+        let scrollToBottom = app.buttons["chatScrollToBottomButton"]
+        XCTAssertTrue(messages.waitForExistence(timeout: 3))
+        XCTAssertTrue(scrollToBottom.waitForExistence(timeout: 3))
+
+        scrollToBottom.tap()
+        let hiddenAtBottom = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == false"),
+            object: scrollToBottom
+        )
+        wait(for: [hiddenAtBottom], timeout: 3)
+
+        let dragStart = messages.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.35))
+        let dragEnd = messages.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.43))
+        dragStart.press(forDuration: 0.05, thenDragTo: dragEnd)
+        XCTAssertTrue(scrollToBottom.waitForExistence(timeout: 3))
+    }
+
+    @MainActor
+    func testOpenClawUsesFullMarkdownRenderer() throws {
+        let app = makeApp(["-NotePatchUITestWorkbench", "-NotePatchUITestFullMarkdown"])
+        app.launch()
+        XCTAssertTrue(app.otherElements["workbenchTabs"].waitForExistence(timeout: 5))
+        app.buttons["tab.ai"].tap()
+
+        let messages = app.scrollViews["openClawMessages"]
+        XCTAssertTrue(messages.waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["Full Markdown"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["Completed task"].exists)
+        XCTAssertTrue(app.staticTexts["Alice"].exists)
+        XCTAssertTrue(app.staticTexts["98"].exists)
+        XCTAssertTrue(app.staticTexts["let value = 42\nprint(value)"].exists)
+        let copyCode = app.buttons["markdownCodeCopyButton"]
+        for _ in 0..<4 where !copyCode.exists || !copyCode.isHittable {
+            messages.swipeUp()
+        }
+        XCTAssertTrue(copyCode.waitForExistence(timeout: 3))
+        XCTAssertTrue(copyCode.isHittable)
+        copyCode.tap()
+        XCTAssertTrue(app.buttons["markdownCodeCopyButton"].label.contains("已复制"))
+        let selectableText = app.staticTexts["Final heading"]
+        XCTAssertTrue(selectableText.exists)
+        selectableText.press(forDuration: 1.1)
+        let selectionCopy = app.descendants(matching: .any).matching(
+            NSPredicate(format: "label == 'Copy' OR label == '复制' OR label == '拷贝'")
+        ).firstMatch
+        XCTAssertTrue(selectionCopy.waitForExistence(timeout: 2))
+        app.tap()
+        keepScreenshot(app, name: "full-markdown-renderer")
     }
 
     @MainActor

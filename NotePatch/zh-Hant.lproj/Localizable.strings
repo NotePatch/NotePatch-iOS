@@ -581,9 +581,18 @@
 "chat.add_attachment" = "新增附件";
 "chat.send" = "傳送";
 "chat.stop_generation" = "停止生成";
+"chat.scroll_to_bottom" = "回到最新訊息";
 "chat.stopped" = "已停止生成";
 "chat.reasoning" = "思考過程";
 "chat.reasoning_unavailable" = "思考過程不可用";
+"chat.process_summary" = "處理步驟";
+"chat.process.preparing_context" = "準備問題和上下文";
+"chat.process.knowledge_retrieved" = "已檢索相關工作區資料";
+"chat.process.knowledge_skipped" = "本次無需檢索工作區資料";
+"chat.process.model_started" = "模型已開始生成";
+"chat.process.answer_streaming" = "正在組織並串流輸出回答";
+"chat.process.answer_completed" = "回答生成完成";
+"chat.reasoning_unavailable_detail" = "該模型本次沒有提供思考摘要。";
 "chat.stream_truncated" = "輸出被截斷，已保留目前內容";
 "chat.assistant_name" = "NotePatch AI";
 "chat.thinking" = "正在思考…";
@@ -818,6 +827,8 @@
 "chat.copy.message_complete" = "訊息已複製。";
 "chat.copy.conversation_complete" = "整段對話已複製。";
 "chat.copy.empty" = "目前沒有可複製的對話。";
+"chat.copy.code" = "複製程式碼";
+"chat.copy.code_complete" = "已複製";
 "chat.revision.action" = "修改訊息";
 "chat.revision.title" = "修改訊息";
 "chat.revision.help" = "提交後會從這則訊息建立新的對話分支，原有附件會繼續保留。";

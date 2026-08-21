@@ -333,6 +333,8 @@ final class NotePatchViewModel: ObservableObject {
     private var aiPreferenceGeneration = UUID()
     private var homeworkSelectionTask: Task<Void, Never>?
     private var homeworkSelectionGeneration = UUID()
+    private var flashcardLoadTask: Task<Void, Never>?
+    private var flashcardLoadGeneration = UUID()
     private var knowledgeSearchTask: Task<Void, Never>?
     private var knowledgeSearchGeneration = UUID()
     private var profileLoadTask: Task<Void, Never>?
@@ -2903,17 +2905,25 @@ final class NotePatchViewModel: ObservableObject {
     }
 
     func selectFlashcardDeck(_ deckId: String) {
+        guard selectedFlashcardDeckId != deckId || flashcardDeckDetail?.deck.id != deckId else { return }
         guard let activeSession = currentSessionOrError(),
               let workspaceId = selectedWorkspaceId,
-              let unitId = selectedFlashcardLearningUnitId.nilIfBlank,
-              !isFlashcardsLoading else { return }
+              let unitId = selectedFlashcardLearningUnitId.nilIfBlank else { return }
         selectedFlashcardDeckId = deckId
         flashcardIndex = 0
         isFlashcardShowingBack = false
         isFlashcardsLoading = true
         flashcardErrorText = nil
-        Task {
-            defer { isFlashcardsLoading = false }
+        flashcardLoadGeneration = UUID()
+        let generation = flashcardLoadGeneration
+        flashcardLoadTask?.cancel()
+        flashcardLoadTask = Task {
+            defer {
+                if flashcardLoadGeneration == generation {
+                    isFlashcardsLoading = false
+                    flashcardLoadTask = nil
+                }
+            }
             do {
                 let detail = try await clientFor(activeSession).getFlashcardDeck(
                     workspaceId: workspaceId,
@@ -2921,10 +2931,14 @@ final class NotePatchViewModel: ObservableObject {
                     deckId: deckId
                 )
                 guard selectedWorkspaceId == workspaceId,
+                      flashcardLoadGeneration == generation,
                       selectedFlashcardLearningUnitId == unitId,
                       selectedFlashcardDeckId == deckId else { return }
                 flashcardDeckDetail = sortedFlashcardDetail(detail)
+            } catch is CancellationError {
+                return
             } catch {
+                guard flashcardLoadGeneration == generation else { return }
                 flashcardErrorText = friendlyDisplayText(error)
                 if let backendError = error as? LearningBackendError,
                    backendError.shouldClearSession || backendError.statusCode == 403 {
@@ -2953,13 +2967,20 @@ final class NotePatchViewModel: ObservableObject {
 
     private func loadFlashcards(learningUnitId: String) {
         guard let activeSession = currentSessionOrError(),
-              let workspaceId = selectedWorkspaceId,
-              !isFlashcardsLoading else { return }
+              let workspaceId = selectedWorkspaceId else { return }
         selectedFlashcardLearningUnitId = learningUnitId
         isFlashcardsLoading = true
         flashcardErrorText = nil
-        Task {
-            defer { isFlashcardsLoading = false }
+        flashcardLoadGeneration = UUID()
+        let generation = flashcardLoadGeneration
+        flashcardLoadTask?.cancel()
+        flashcardLoadTask = Task {
+            defer {
+                if flashcardLoadGeneration == generation {
+                    isFlashcardsLoading = false
+                    flashcardLoadTask = nil
+                }
+            }
             do {
                 let client = clientFor(activeSession)
                 async let decksRequest = client.listFlashcardDecks(
@@ -2983,14 +3004,18 @@ final class NotePatchViewModel: ObservableObject {
                     return $0.createdAt > $1.createdAt
                 }
                 guard selectedWorkspaceId == workspaceId,
+                      flashcardLoadGeneration == generation,
                       selectedFlashcardLearningUnitId == learningUnitId else { return }
                 flashcardDecks = decks
                 flashcardDeckDetail = latest.map(sortedFlashcardDetail)
                 selectedFlashcardDeckId = latest?.deck.id
                 flashcardIndex = 0
                 isFlashcardShowingBack = false
+            } catch is CancellationError {
+                return
             } catch {
                 guard selectedWorkspaceId == workspaceId,
+                      flashcardLoadGeneration == generation,
                       selectedFlashcardLearningUnitId == learningUnitId else { return }
                 flashcardErrorText = friendlyDisplayText(error)
                 if let backendError = error as? LearningBackendError,
@@ -4095,7 +4120,43 @@ final class NotePatchViewModel: ObservableObject {
                 )
             ]
         }
-        if ProcessInfo.processInfo.arguments.contains("-NotePatchUITestLongChat") {
+        if ProcessInfo.processInfo.arguments.contains("-NotePatchUITestFullMarkdown") {
+            openClawMessages = [
+                OpenClawChatMessage(
+                    id: "ui-full-markdown",
+                    role: .assistant,
+                    content: """
+                    # Full Markdown
+
+                    Paragraph with **bold**, *italic*, ***bold italic***, ~~strikethrough~~, `inline code`, and [a link](https://example.com).
+
+                    - [x] Completed task
+                    - [ ] Pending task
+
+                    > A block quote with **formatting**.
+
+                    | Name | Score | Result |
+                    | :--- | ---: | :---: |
+                    | Alice | 98 | **Excellent** |
+                    | Bob | 87 | Good |
+
+                    ```swift
+                    let value = 42
+                    print(value)
+                    ```
+
+                    ---
+
+                    ###### Final heading
+                    """,
+                    status: .done,
+                    taskId: nil,
+                    progress: nil,
+                    events: [],
+                    modelId: "openai/gpt-4.1-mini"
+                )
+            ]
+        } else if ProcessInfo.processInfo.arguments.contains("-NotePatchUITestLongChat") {
             let messageCount = ProcessInfo.processInfo.arguments.contains("-NotePatchUITestKeyboardBoundary") ? 12 : 100
             openClawMessages = (0..<messageCount).map { index in
                 OpenClawChatMessage(
@@ -4150,6 +4211,9 @@ final class NotePatchViewModel: ObservableObject {
         homeworkContentGeneration = UUID()
         studyNoteReaderGeneration = UUID()
         studyNoteSaveGeneration = UUID()
+        flashcardLoadGeneration = UUID()
+        flashcardLoadTask?.cancel()
+        flashcardLoadTask = nil
         profileGeneration = UUID()
         profileLoadTask?.cancel()
         profileLoadTask = nil

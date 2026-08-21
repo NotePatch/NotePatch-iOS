@@ -1,12 +1,12 @@
 # Frontend Integration Guide
 
-本文档说明前端如何接入 NotePatch 文件管理 MVP。当前上传方案是 FastAPI + tusd + SeaweedFS：业务接口走 FastAPI，大文件内容走 tusd，文件最终由后端 webhook 搬到 SeaweedFS S3。
+本文档是 NotePatch Android、Web 用户端和管理后台的当前接入契约，覆盖认证、文件上传、异步任务、OCR、学习业务和 AI 对话。业务接口走 FastAPI，大文件内容走 tusd，文件最终由后端 webhook 搬到 SeaweedFS S3。
 
 ## Base URL
 
 ```bash
-VITE_API_BASE_URL=http://192.168.100.123:8001/api/v1
-VITE_TUSD_BASE_URL=http://192.168.100.123:1080/files/
+VITE_API_BASE_URL=http://LAN_OR_VPN_HOST:8001/api/v1
+VITE_TUSD_BASE_URL=http://LAN_OR_VPN_HOST:1080/files/
 ```
 
 本机开发可用：
@@ -107,9 +107,10 @@ register/login
   -> create upload-session
   -> tus upload
   -> complete-upload
-  -> POST /documents/{id}/process
+  -> auto pipeline for explicit learning kinds
+     or POST /documents/{id}/process for manual/other processing
   -> poll task
-  -> poll task events
+     or stream task events with SSE
   -> GET /documents/{id}/ocr
   -> GET artifact download-url
 ```
@@ -125,9 +126,19 @@ const tokenState = {
 };
 let refreshPromise: Promise<boolean> | null = null;
 
+function clearTokenState() {
+  tokenState.accessToken = null;
+  tokenState.refreshToken = null;
+  localStorage.removeItem("access_token");
+  localStorage.removeItem("refresh_token");
+}
+
 function refreshOnce(): Promise<boolean> {
   if (!refreshPromise) {
-    const attempted = tokenState.refreshToken;
+    // Read storage again so another tab can publish a newer rotated token.
+    const attempted = localStorage.getItem("refresh_token");
+    tokenState.refreshToken = attempted;
+    if (!attempted) return Promise.resolve(false);
     refreshPromise = fetch(`${API_BASE_URL}/auth/refresh`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -135,7 +146,7 @@ function refreshOnce(): Promise<boolean> {
     }).then(async (response) => {
       if (!response.ok) {
         // A stale concurrent response must not clear a newer token pair.
-        if (tokenState.refreshToken === attempted) tokenState.refreshToken = null;
+        if (localStorage.getItem("refresh_token") === attempted) clearTokenState();
         return false;
       }
       const data = await response.json();
@@ -144,14 +155,19 @@ function refreshOnce(): Promise<boolean> {
       localStorage.setItem("access_token", data.access_token);
       localStorage.setItem("refresh_token", data.refresh_token);
       return true;
-    }).finally(() => { refreshPromise = null; });
+    }).catch(() => false).finally(() => { refreshPromise = null; });
   }
   return refreshPromise;
 }
 
 export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
+  tokenState.accessToken = localStorage.getItem("access_token");
+  tokenState.refreshToken = localStorage.getItem("refresh_token");
   const headers = new Headers(init.headers);
-  if (!headers.has("Content-Type") && init.body) headers.set("Content-Type", "application/json");
+  const isFormData = typeof FormData !== "undefined" && init.body instanceof FormData;
+  if (!headers.has("Content-Type") && init.body && !isFormData) {
+    headers.set("Content-Type", "application/json");
+  }
   if (tokenState.accessToken) headers.set("Authorization", `Bearer ${tokenState.accessToken}`);
 
   let res = await fetch(`${API_BASE_URL}${path}`, { ...init, headers });
@@ -165,9 +181,11 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
 
   if (!res.ok) {
     const error = await res.json().catch(() => ({}));
-    throw new Error(error.detail ?? `Request failed: ${res.status}`);
+    throw new Error(error.message ?? error.detail ?? `Request failed: ${res.status}`);
   }
-  return res.json();
+  if (res.status === 204) return undefined as T;
+  const text = await res.text();
+  return (text ? JSON.parse(text) : undefined) as T;
 }
 ```
 
@@ -181,6 +199,14 @@ POST /auth/login
 POST /auth/refresh
 POST /auth/logout
 GET  /auth/me
+POST /auth/change-password
+PATCH /auth/preferences
+GET  /user/profile
+PUT  /user/profile
+POST /user/avatar/upload
+GET  /user/avatar/download-url
+GET  /user/avatar/content
+DELETE /user/avatar
 POST /presence/heartbeat
 POST /presence/offline
 ```
@@ -190,6 +216,77 @@ POST /presence/offline
 ```http
 Authorization: Bearer <access_token>
 ```
+
+资料更新前先请求 `GET /user/profile` 并保存响应 `ETag`。`PUT /user/profile`、头像上传和头像删除都必须发送：
+
+```http
+If-Match: "profile-3"
+Idempotency-Key: <本次操作稳定且唯一的 key>
+```
+
+新资料接口响应为 `{code,message,data}`。`412 profile_version_mismatch` 时重新读取资料后让用户确认；`409 idempotency_conflict` 表示同一 key 被用于不同内容。修改邮箱必须同时提交 `current_password`，成功响应的 `data.reauthentication_required=true`，此后旧 access/refresh token 都不可用，客户端必须回到登录页。头像使用 multipart 字段 `file`，只支持真实 JPEG/PNG；展示时先获取 `/user/avatar/download-url`，不要缓存已经过期的 SeaweedFS 签名 URL。
+
+资料读取响应示例：
+
+```http
+HTTP/1.1 200 OK
+ETag: "profile-3"
+
+{
+  "code": "ok",
+  "message": "Profile loaded",
+  "data": {
+    "id": "user-uuid",
+    "name": "Alice",
+    "email": "alice@example.com",
+    "avatar_url": "/api/v1/user/avatar/content?v=avatar-version",
+    "profile_version": 3,
+    "reauthentication_required": false
+  }
+}
+```
+
+更新姓名或邮箱：
+
+```http
+PUT /api/v1/user/profile
+Authorization: Bearer <access_token>
+If-Match: "profile-3"
+Idempotency-Key: profile-edit-550e8400-e29b-41d4-a716-446655440000
+Content-Type: application/json
+
+{"name":"Alice Chen"}
+```
+
+邮箱实际发生变化时，请求必须额外包含 `current_password`。成功响应会返回新的 `ETag`；客户端应以响应中的 `data` 原子替换本地用户资料。若 `reauthentication_required=true`，不要再尝试 refresh，应立即清除当前 token 并重新登录。
+
+头像上传使用 multipart，不能把图片编码成 JSON/base64：
+
+```http
+POST /api/v1/user/avatar/upload
+Authorization: Bearer <access_token>
+If-Match: "profile-3"
+Idempotency-Key: avatar-upload-550e8400-e29b-41d4-a716-446655440000
+Content-Type: multipart/form-data
+
+file=<JPEG or PNG>
+```
+
+后端会实际解码并重新编码图片，移除 EXIF、文件名和尾随数据。响应中的 `avatar_url` 是稳定的鉴权入口；`GET /user/avatar/download-url` 返回短期 SeaweedFS URL，本地存储模式则返回稳定内容入口。替换头像后只保存新 URL，不缓存旧签名 URL。
+
+资料接口稳定错误码：
+
+| HTTP | `code` | 客户端处理 |
+| --- | --- | --- |
+| 400 | `invalid_if_match` / `invalid_idempotency_key` | 修正请求头，不自动重试 |
+| 409 | `email_conflict` / `idempotency_conflict` / `last_admin` | 展示冲突；不同 payload 必须换 key |
+| 412 | `profile_version_mismatch` | 重新 GET profile，并由用户确认覆盖 |
+| 413 | `avatar_too_large` | 压缩或选择更小图片 |
+| 422 | `validation_error` / `avatar_invalid` / `avatar_dimensions_exceeded` | 展示字段或图片错误 |
+| 428 | `precondition_required` | 补充 `If-Match` |
+| 503 | `storage_unavailable` | 保留本地选择，稍后以相同 payload 和相同 key 重试 |
+
+同一个 `Idempotency-Key` 和完全相同的内容在 24 小时内会返回第一次结果，并设置 `Idempotent-Replayed: true`；不要为一次操作的网络重试生成新 key。
 
 登录或注册成功后立即发送在线心跳，并把返回的 `client_id` 存到 localStorage。后续每 `heartbeat_interval_seconds` 秒续一次；页面关闭、主动登出时尽力调用 `offline`。
 
@@ -262,7 +359,7 @@ type UploadSessionResponse = {
   document: {
     id: string;
     workspace_id: string;
-    status: "created" | "uploading" | "uploaded" | "processing" | "ready" | "failed" | "deleted";
+    status: "created" | "uploading" | "uploaded" | "scanning" | "processing" | "ready" | "failed" | "deleted";
     original_filename: string;
     mime_type: string | null;
     file_size: number | null;
@@ -354,7 +451,7 @@ async function uploadDocument(workspaceId: string, file: File) {
 
 tusd 也会通过 webhook 自动完成上传；前端主动调用 `complete-upload` 是兜底同步，接口是幂等的。
 
-上传成功后，建议重新读取 document 详情或列表。`complete-upload` 返回最新 `Document`，状态通常为 `uploaded`；随后才调用 `process` 进入异步处理。
+上传成功后，重新读取 document 详情或列表。`complete-upload` 返回最新 `Document`：显式学习类型在 `AUTO_LEARNING_PIPELINE=true` 时会自动排入处理队列；`chat_attachment` 和未自动处理的 `other` 通常直接为 `ready`。若客户端需要取得自动任务 ID，可在完成上传后立即调用一次 `process`，后端会复用同文档仍在 queued/running 的处理任务；已经 `ready` 的文档不要无条件再次调用，除非用户明确要求重处理。
 
 ## Documents
 
@@ -411,10 +508,15 @@ workspaces/{workspace_id}/documents/{document_id}/artifacts/
 ```ts
 type ArtifactType =
   | "original"
+  | "converted_pdf"
   | "deskewed_image"
+  | "binary_image"
   | "ocr_json"
   | "ocr_markdown"
   | "ocr_text"
+  | "layout_json"
+  | "formula_json"
+  | "tables_json"
   | "questions_json"
   | "grading_report"
   | "summary"
@@ -504,6 +606,9 @@ type Task = {
   result: Record<string, unknown> | null;
   error_message: string | null;
   progress: number;
+  attempt: number;
+  max_attempts: number;
+  next_attempt_at: string | null;
   cancel_requested_at: string | null;
   created_at: string;
   updated_at: string;
@@ -515,6 +620,7 @@ type TaskEvent = {
   id: string;
   workspace_id: string;
   task_id: string;
+  sequence_no: number;
   event_type: string;
   level: "info" | "warning" | "error" | string;
   message: string;
@@ -543,12 +649,13 @@ async function waitForTask(workspaceId: string, taskId: string) {
 
 ## AI Chat History
 
-`POST /workspaces/{workspace_id}/ai/chat` 会自动创建或继续一条持久化对话。请求不传 `conversation_id` 时后端创建新会话；响应 task 的 `payload.conversation_id`、`user_message_id` 和 `assistant_message_id` 用于刷新当前会话。assistant message 会先以 `queued` 出现，worker 处理期间变为 `running`，最终为 `succeeded` 或 `failed`。
+`POST /workspaces/{workspace_id}/ai/chat` 会自动创建或继续一条持久化对话。请求不传 `conversation_id` 时后端创建新会话；响应 task 的 `payload.conversation_id`、`user_message_id` 和 `assistant_message_id` 用于刷新当前会话。assistant message 会先以 `queued` 出现，worker 处理期间变为 `running`，最终为 `succeeded`、`failed` 或 `cancelled`。
 
 ```ts
 type ChatConversation = {
   id: string;
   workspace_id: string;
+  user_id: string;
   title: string;
   title_source: "prompt" | "ai" | "manual";
   title_generated_at: string | null;
@@ -572,16 +679,23 @@ type ChatAttachment = {
 
 type ChatMessage = {
   id: string;
+  workspace_id: string;
   conversation_id: string;
+  user_id: string;
   role: "user" | "assistant";
   content: string;
   task_id: string | null;
-  status: "queued" | "running" | "succeeded" | "failed";
+  status: "queued" | "running" | "succeeded" | "failed" | "cancelled";
   error_message: string | null;
   attachments: ChatAttachment[];
   citations: Array<{ chunk_id?: string; document_id?: string; score?: number; metadata?: object }>;
   source_status: "available" | "partially_unavailable" | "unavailable";
+  model_id: string | null;
+  revision_of_message_id: string | null;
+  superseded_by_message_id: string | null;
+  superseded_at: string | null;
   created_at: string;
+  updated_at: string;
 };
 
 async function sendChat(
@@ -635,22 +749,23 @@ POST   /workspaces/{workspace_id}/ai/chat
 GET    /workspaces/{workspace_id}/ai/conversations
 GET    /workspaces/{workspace_id}/ai/conversations/{conversation_id}
 GET    /workspaces/{workspace_id}/ai/conversations/{conversation_id}/messages
+POST   /workspaces/{workspace_id}/ai/conversations/{conversation_id}/messages/{message_id}/revisions
 PATCH  /workspaces/{workspace_id}/ai/conversations/{conversation_id}
 DELETE /workspaces/{workspace_id}/ai/conversations/{conversation_id}
 PATCH  /auth/preferences
 ```
 
-`GET /auth/me`、登录和 refresh 响应都会给出 `user.ai_history_enabled`。前端用 `PATCH /auth/preferences` 传 `{ "ai_history_enabled": false }` 关闭全局上下文注入；关闭后历史仍保留并可查看，但后续 OpenClaw 调用只发送当前 prompt。重新开启后，后端会自动传入该会话最近 `AI_CHAT_HISTORY_MESSAGE_LIMIT`（默认 20）条成功消息。删除会话是软删除，删除后不可继续发送或读取，关联的 queued/running OpenClaw task 会被协作取消。
+`GET /auth/me`、登录和 refresh 响应都会给出 `user.ai_history_enabled`。前端用 `PATCH /auth/preferences` 传 `{ "ai_history_enabled": false }` 关闭历史消息注入；历史仍保留并可查看，后续 OpenClaw 调用仍会包含当前 prompt、当前附件以及本次启用的知识库检索结果，但不会附加以前的聊天消息。重新开启后，后端会自动传入该会话最近 `AI_CHAT_HISTORY_MESSAGE_LIMIT`（默认 20）条成功消息。删除会话是软删除，删除后不可继续发送或读取，关联的 queued/running OpenClaw task 会被协作取消。
 
 ### 聊天流与停止
 
 `POST /api/v1/workspaces/{workspace_id}/ai/chat` 仍返回异步 task。每条消息可携带：
 
 ```json
-{"prompt":"解释这道题","options":{"thinking":{"enabled":true,"effort":"low"}}}
+{"prompt":"解释这道题","options":{"temperature":0.7,"thinking":{"enabled":true,"effort":"low"}}}
 ```
 
-未传时思考默认关闭。`effort` 可为 `minimal`、`low`、`medium`、`high` 或 `adaptive`。随后连接 `GET /api/v1/workspaces/{workspace_id}/tasks/{task_id}/events/stream`，逐条处理 `event: task_event`：`chat_answer_delta.data.delta` 追加回答草稿，`chat_reasoning_delta.data.delta` 追加可展示的推理摘要。两类事件都包含 `stream`、`chunk_index`、`attempt`、`characters`；用 SSE `id` 作为 `Last-Event-ID` 重连游标。收到 `chat_stream_started` 时清空当前 attempt 的草稿，收到 `done` 后刷新 task 与会话消息。
+`temperature` 可选且范围为 `0..2`，只影响当前消息；未传时由模型使用默认值。未传 thinking 时思考默认关闭，`effort` 可为 `minimal`、`low`、`medium`、`high` 或 `adaptive`。随后连接 `GET /api/v1/workspaces/{workspace_id}/tasks/{task_id}/events/stream`，逐条处理 `event: task_event`：`chat_answer_delta.data.delta` 追加回答草稿，`chat_reasoning_delta.data.delta` 追加可展示的推理摘要。两类事件都包含 `stream`、`chunk_index`、`attempt`、`characters`；用 SSE `id` 作为 `Last-Event-ID` 重连游标。收到 `chat_stream_started` 时清空当前 attempt 的草稿，收到 `done` 后刷新 task 与会话消息。
 
 流式增量的 `data` 固定为：
 
@@ -667,6 +782,38 @@ PATCH  /auth/preferences
 `stream` 可为 `answer` 或 `reasoning`。reasoning 是后端规范化后的安全进度摘要，不能当作模型原始思维链，也不写入下一轮聊天历史。客户端应接受 `chat_reasoning_unavailable`，此时继续展示回答即可；遇到 `chat_stream_truncated` 则保留已收到的片段，并在 task 完成后以 assistant message / `task.result.answer` 为最终正文。
 
 停止按钮调用 `POST /api/v1/workspaces/{workspace_id}/tasks/{task_id}/cancel`。响应为 `202 TaskRead`；queued 会立即取消，running 则等待 SSE 的 `cancelled`/`done`。保留当前已经显示的正文，不把 reasoning summary 写入聊天历史。
+
+编辑历史 user message 时调用：
+
+```http
+POST /api/v1/workspaces/{workspace_id}/ai/conversations/{conversation_id}/messages/{message_id}/revisions
+Content-Type: application/json
+
+{"prompt":"修改后的问题","input":null,"options":{"temperature":0.4}}
+```
+
+响应为 `{code,message,data}`，其中 `data` 是新的 `TaskRead`。后端会取消该会话活动任务并截断目标消息之后的旧分支；默认消息列表不再返回旧分支。需要审计视图时请求 `messages?include_superseded=true`。`input` 未提交或没有 `attachments` 时继承原消息附件；显式传 `attachments:[]` 才清空附件。
+
+修订成功响应示例：
+
+```json
+{
+  "code": "ok",
+  "message": "Chat message revised",
+  "data": {
+    "id": "new-task-uuid",
+    "task_type": "openclaw_agent_run",
+    "status": "queued",
+    "payload": {
+      "conversation_id": "conversation-uuid",
+      "revised_message_id": "old-user-message-uuid",
+      "options": {"temperature": 0.4}
+    }
+  }
+}
+```
+
+前端提交成功后应清除被修订消息之后的当前 UI 分支，使用 `data.id` 连接 task SSE；不要物理删除本地旧消息。审计页面可通过 `include_superseded=true` 展示 `revision_of_message_id`、`superseded_by_message_id` 和 `superseded_at`。
 
 新会话先以首条 prompt 作为临时标题（`title_source="prompt"`）。首轮回答成功后，后端让 OpenClaw 根据最早几条成功消息生成短标题并更新为 `title_source="ai"`；前端只需刷新会话列表，不应自行生成标题。用户通过 conversation PATCH 手动改名后会变为 `title_source="manual"`，后端不会再自动覆盖。标题生成失败不会影响聊天 task 或 assistant 回答，仍保留临时标题并在后续对话中重试。
 
@@ -689,7 +836,16 @@ async function getDocumentArtifacts(workspaceId: string, documentId: string) {
 资料类文档推荐设置：
 
 ```ts
-type DocumentKind = "courseware" | "note" | "exam" | "homework" | "corrected_homework" | "other";
+type DocumentKind =
+  | "courseware"
+  | "note"
+  | "exam"
+  | "homework"
+  | "corrected_homework"
+  | "answer_key"
+  | "rubric"
+  | "chat_attachment"
+  | "other";
 
 type LearningMetadata = {
   learning_unit_id?: string;
@@ -697,10 +853,11 @@ type LearningMetadata = {
   subject?: string;
   grade_level?: string;
   topic?: string;
+  auto_group_learning_unit?: boolean; // 默认 true
 };
 ```
 
-上传课件/笔记/试卷后，后端流程是：
+上传 `courseware` 或 `note` 后，后端流程是：
 
 ```text
 complete-upload
@@ -714,15 +871,19 @@ complete-upload
 
 `build_knowledge_base` 与笔记生成是两个独立生命周期。300 秒仅表示最后一次知识更新后的最早启动时间，不表示笔记会在 300 秒内完成。OpenClaw skill 执行、schema 校验、HTML 清洗、SeaweedFS 写入以及最多 3 次任务重试都会继续占用时间。
 
-上传作业后，如果 metadata 带 `learning_unit_id`，后端会把作业挂到已有学习单元；否则会自动创建/归类学习单元：
+`other` 不会在上传完成后自动处理；用户显式调用 `process` 后，它会走与课件/笔记相同的知识库和笔记分支。`exam` 只执行 OCR 和题目提取，不会自动创建普通 Homework、知识库或电子笔记。`answer_key/rubric` 只执行 OCR，随后由 Homework references 使用。
+
+上传作业后，如果请求顶层带 `learning_unit_id`，后端会先按 `workspace_id + learning_unit_id` 校验并显式归组。未指定时会先按 `learning_unit_title/subject/grade_level/topic` 精确匹配；仍未匹配的资料在 OCR 后进入语义归组，只有相似度至少 `0.90` 且领先第二候选至少 `0.05` 才加入已有单元，否则创建新单元。`auto_group_learning_unit=false` 会跳过精确与语义归组并在 OCR 后创建新单元。Embedding 不可用会记录 warning 并创建新单元，不会阻断 OCR 主流程：
 
 ```text
 complete-upload
   -> document_processing_pipeline
   -> OCR artifacts
+  -> extract_questions
   -> grade_homework
   -> mistakes + mistake knowledge chunks
-  -> highlight_study_notes
+  -> highlight latest study note when one exists
+  -> regenerate weighted flashcards when one exists
 ```
 
 前端查询学习结果：
@@ -742,7 +903,9 @@ type LearningUnit = {
 
 type StudyNoteVersion = {
   id: string;
+  workspace_id: string;
   learning_unit_id: string;
+  task_id: string | null;
   version_no: number;
   title: string;
   html_object_key: string;
@@ -750,10 +913,18 @@ type StudyNoteVersion = {
   highlighted_html_object_key: string | null;
   highlight_map_object_key: string | null;
   knowledge_point_ids: string[];
+  source_document_ids: string[];
+  source_mistake_ids: string[];
   source_version_id: string | null;
+  edited_by_user_id: string | null;
   edit_origin: "skill" | "user" | "admin" | null;
   edit_summary: string | null;
   download_urls?: Record<string, string>;
+  rendering: {
+    theme_id: string;
+    css_url: string;
+    wrapper_class: string;
+  };
 };
 
 async function listLearningUnits(workspaceId: string) {
@@ -799,9 +970,9 @@ UI 建议：
 - 文档处理 task 成功只代表 OCR 主流程结束；课件/笔记还要继续完成知识库和防抖笔记任务。
 - 当 `notes_generated_revision < knowledge_revision` 时显示“正在整理笔记”，每 5-10 秒刷新 learning unit 和 notes；不要在等待 5 分钟后直接判定失败。
 - 当 revisions 相等且 notes 列表非空时展示 `version_no` 最大的版本。若 `knowledge_revision === 0`，表示尚无可用于笔记的知识库内容。
-- notes API 返回 metadata 和短期签名 URL，不内联返回 HTML。使用 `download_urls.highlighted_html`，不存在时回退到 `download_urls.html`。
+- notes API 返回 metadata 和短期签名 URL，不内联返回 HTML。展示时优先使用 `download_urls.rendered_html`；只有编辑器需要读取 fragment 时，才使用 `highlighted_html` 或 `html`。
 - `grade_homework` 成功后，刷新 mistakes、knowledge chunks 和 latest note。
-- 如果 latest note 有 `highlighted_html` 下载 URL，优先展示高亮 HTML；否则展示普通 HTML。
+- `rendered_html` 会在服务端自动选择当前高亮或普通 fragment，并套用 `rendering.theme_id` 对应主题；签名过期后重新请求 notes/download-url。
 - 修订接口只接受当前最新版本 ID；并发编辑过期时返回 `409`，前端应刷新后让用户重新确认。
 - HTML 必须按不可信内容处理；推荐受控富文本组件或 sandboxed WebView，不执行 script、事件属性或外部资源。
 - 手动编辑创建新版本；错题高亮只更新最新版本的 highlighted HTML artifact。没有笔记时评分不会创建高亮任务。
@@ -906,7 +1077,7 @@ questions_json    application/json, OpenClaw question extractor 的结构化题�
 
 ## Knowledge Search And Grading References
 
-以下接口都需要 `Authorization: Bearer <access_token>`，并严格限制在当前 personal workspace。权威 OpenAPI 可从 `GET /openapi.json` 获取；局域网开发环境为 `http://192.168.100.123:8001/api/v1/openapi.json`。
+以下接口都需要 `Authorization: Bearer <access_token>`，并严格限制在当前 personal workspace。权威 OpenAPI 为 `GET /api/v1/openapi.json`；局域网或 VPN 环境使用 `http://LAN_OR_VPN_HOST:8001/api/v1/openapi.json`。
 
 ### Knowledge Search
 
@@ -1057,7 +1228,8 @@ DELETE /workspaces/{workspace_id}/homeworks/{homework_id}/references/{reference_
 
 推荐 UI 处理：
 
-- `uploaded`: 可以展示“开始处理”。
+- `uploaded`: 可以展示“开始处理”；自动流水线可能已经排队，避免重复提交。
+- `scanning`: 仅在后端显式启用安全扫描时展示扫描进度。
 - `processing`: 展示 task progress 和最近 events。
 - `ready`: 展示 OCR markdown/text/json 下载入口。
 - `failed`: 展示 `task.error_message` 和最近 error event，允许用户重新处理。
@@ -1070,9 +1242,13 @@ DELETE /workspaces/{workspace_id}/homeworks/{homework_id}/references/{reference_
 401 token 缺失、过期或无效
 403 不是该个人 workspace 的 owner，或无权访问该 workspace
 404 workspace 内资源不存在，常见于猜其他 workspace 的 document id
-409 个人 workspace 已存在，或上传尚未完成
+409 资源状态冲突，例如 workspace 已存在、上传未完成、处理任务已运行或笔记版本过期
 410 当前接口已禁用，常见于个人 workspace 下邀请成员
+412 资料版本与 If-Match 不一致
+413 上传或头像超过大小限制
 422 请求体校验失败
+429 触发登录、上传或 AI 限流
+503 队列、存储、模型目录或其他后端依赖暂不可用
 ```
 
 前端建议：
@@ -1080,15 +1256,50 @@ DELETE /workspaces/{workspace_id}/homeworks/{homework_id}/references/{reference_
 - `401`: refresh token，失败则跳登录
 - `403`: 回 workspace 列表并提示无权访问
 - `404`: 提示资源不存在或已删除
-- `409`: 继续等待 tusd 上传完成后重试
-- `500`: 展示后端错误摘要，并提示查看 task events；OpenClaw/PaddleOCR/DocTr 失败通常不是前端渲染问题
+- `409`: 根据 `detail/code` 区分上传未完成、活动任务冲突、版本冲突等场景，不要统一自动重试
+- `412`: 重新获取 profile 与 ETag，再让用户确认本次修改
+- `429`: 遵循 `Retry-After`，不要立即循环重试
+- `500/503`: 展示后端错误摘要；异步任务失败时同时读取 task events，OpenClaw/PaddleOCR/DocTr 失败通常不是前端渲染问题
 
+
+## Aggregated Workflow Tracking
+
+每次上传或手动重新处理都会产生一个 `WorkflowRun`。`upload-session` 返回顶层 `workflow_run_id`，Document 的 `latest_workflow_run_id` 指向最近一次运行。
+
+```ts
+type WorkflowRun = {
+  id: string;
+  workspace_id: string;
+  document_id: string | null;
+  learning_unit_id: string | null;
+  trigger_type: "upload" | "manual_reprocess" | string;
+  status: "waiting_upload" | "queued" | "running" | "waiting" | "succeeded" | "partially_succeeded" | "failed" | "cancelled";
+  core_status: "not_started" | "queued" | "running" | "waiting" | "succeeded" | "failed" | "cancelled";
+  enrichment_status: "not_started" | "queued" | "running" | "waiting" | "succeeded" | "failed" | "cancelled" | "not_applicable";
+  current_stage: string | null;
+  progress: number;
+  waiting_until: string | null;
+  error_message: string | null;
+};
+```
+
+```http
+GET /workspaces/{workspace_id}/workflows?page=1&page_size=50&status=waiting
+GET /workspaces/{workspace_id}/workflows/{workflow_run_id}
+GET /workspaces/{workspace_id}/workflows/{workflow_run_id}/events
+GET /workspaces/{workspace_id}/workflows/{workflow_run_id}/events/stream
+GET /workspaces/{workspace_id}/documents/{document_id}/workflow
+```
+
+详情响应为 `{ workflow, tasks }`，每个 task 项带 `stage/phase/required/task`。`core_status=succeeded` 表示 OCR、知识库或评分等核心结果已可用；增强流程失败时总状态是 `partially_succeeded`，不要把核心结果显示成整体失败。`waiting_until` 用于笔记 5 分钟防抖和 task 延迟重试。
+
+Workflow SSE 的事件名为 `workflow_event`，`data` 是完整 `WorkflowEvent`；使用 `sequence_no` 作为 `Last-Event-ID`。收到 `done` 后停止重连。鉴权、断线续传和 heartbeat 处理与 Task SSE 相同。
 
 ## Production Upload And Notes
 
 文件安全扫描默认关闭。tus 上传完成后，文档会返回 `scan_status=skipped`，并直接进入 `uploaded`、`processing` 或 `ready`；客户端不得把 `skipped` 显示为“正在安全检查”。只有后端显式启用 ClamAV 且文档 `status=scanning` 时才展示扫描进度，此时 `scan_status=clean` 表示扫描通过。
 
-未提供有效 `learning_unit_id` 时，每个上传文件会获得独立学习单元。合并学习单元使用：
+未提供 `learning_unit_id` 时，后端会按“唯一精确匹配 → OCR 后高置信语义匹配 → 新建单元”的顺序自动归组。显式但无效或跨 workspace 的 `learning_unit_id` 返回 `404`，不会静默新建。手工合并学习单元使用：
 
 ```http
 POST /workspaces/{workspace_id}/learning-units/{target_id}/merge

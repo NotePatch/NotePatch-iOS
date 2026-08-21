@@ -737,14 +737,14 @@ final class LearningBackendClient {
                         lastEventID: lastEventID,
                         allowRefresh: true
                     )
-                    var parser = TaskSSEParser()
-                    for try await line in bytes.lines {
+                    var decoder = TaskSSEByteDecoder()
+                    for try await byte in bytes {
                         try Task.checkCancellation()
-                        if let frame = try parser.consumeLine(line, workspaceId: workspaceId) {
+                        for frame in try decoder.append(byte, workspaceId: workspaceId) {
                             continuation.yield(frame)
                         }
                     }
-                    for frame in try parser.finish(workspaceId: workspaceId) {
+                    for frame in try decoder.finish(workspaceId: workspaceId) {
                         continuation.yield(frame)
                     }
                     continuation.finish()

@@ -1,6 +1,7 @@
 import PhotosUI
 import QuickLook
 import SwiftUI
+import MarkdownUI
 import UniformTypeIdentifiers
 import UIKit
 
@@ -2629,6 +2630,9 @@ private struct OpenClawChatTab: View {
     @State private var attachmentPickerUserId: String?
     @State private var attachmentPickerWorkspaceId: String?
     @State private var keyboardFrame: CGRect = .null
+    @State private var isChatAtBottom = true
+
+    private let chatBottomAnchorID = "openClawChatBottomAnchor"
 
     var body: some View {
         ZStack(alignment: .leading) {
@@ -2710,68 +2714,103 @@ private struct OpenClawChatTab: View {
                 .padding(.bottom, 4)
 
                 // ——— Brand Hero ———
-                ScrollView {
-                    VStack(spacing: 0) {
-                    ChatScrollPanObserver { value in
-                        dismissKeyboardIfNeeded(
-                            startLocation: value.startLocation,
-                            location: value.location,
-                            translation: value.translation,
-                            scrollBottomY: value.scrollBottomY
-                        )
-                    }
-                    .frame(height: 0)
+                ScrollViewReader { proxy in
+                    ZStack(alignment: .bottom) {
+                        ScrollView {
+                            VStack(spacing: 0) {
+                            ChatScrollPanObserver(
+                                onPan: { value in
+                                    dismissKeyboardIfNeeded(
+                                        startLocation: value.startLocation,
+                                        location: value.location,
+                                        translation: value.translation,
+                                        scrollBottomY: value.scrollBottomY
+                                    )
+                                },
+                                onBottomChange: { atBottom in
+                                    guard isChatAtBottom != atBottom else { return }
+                                    isChatAtBottom = atBottom
+                                }
+                            )
+                            .frame(height: 0)
 
-                    // ——— Welcome card ———
-                    if chatState.messages.isEmpty {
-                        NPSection {
-                            VStack(spacing: NPSpacing.small) {
-                                Image(systemName: "sparkles")
-                                    .font(.system(size: 28, weight: .light))
-                                    .foregroundStyle(NPColors.brand)
-                                    .padding(.bottom, NPSpacing.xs)
-                                Text(localized("chat.welcome.title"))
-                                    .font(.system(size: 16, weight: .semibold))
-                                    .foregroundStyle(NPColors.textPrimary)
-                                Text(localized("chat.welcome.message"))
-                                    .font(.system(size: 13, weight: .regular))
-                                    .foregroundStyle(NPColors.textSecondary)
-                                    .multilineTextAlignment(.center)
+                            // ——— Welcome card ———
+                            if chatState.messages.isEmpty {
+                                NPSection {
+                                    VStack(spacing: NPSpacing.small) {
+                                        Image(systemName: "sparkles")
+                                            .font(.system(size: 28, weight: .light))
+                                            .foregroundStyle(NPColors.brand)
+                                            .padding(.bottom, NPSpacing.xs)
+                                        Text(localized("chat.welcome.title"))
+                                            .font(.system(size: 16, weight: .semibold))
+                                            .foregroundStyle(NPColors.textPrimary)
+                                        Text(localized("chat.welcome.message"))
+                                            .font(.system(size: 13, weight: .regular))
+                                            .foregroundStyle(NPColors.textSecondary)
+                                            .multilineTextAlignment(.center)
+                                    }
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, NPSpacing.xs)
+                                }
+                                .padding(.horizontal, NPSpacing.outer)
                             }
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, NPSpacing.xs)
-                        }
-                        .padding(.horizontal, NPSpacing.outer)
-                    }
 
-                    // ——— Messages ———
-                    ScrollViewReader { proxy in
-                        LazyVStack(spacing: NPSpacing.medium) {
-                            ForEach(chatState.messages) { message in
-                                OpenClawMessageBubble(
-                                    message: message,
-                                    onCopy: { model.copyOpenClawMessage(message) },
-                                    onEdit: canEdit(message) ? {
-                                        messageRevisionDraft = message.content
-                                        editingMessage = message
-                                    } : nil
-                                )
+                            // ——— Messages ———
+                            LazyVStack(spacing: NPSpacing.medium) {
+                                ForEach(chatState.messages) { message in
+                                    OpenClawMessageBubble(
+                                        message: message,
+                                        onCopy: { model.copyOpenClawMessage(message) },
+                                        onEdit: canEdit(message) ? {
+                                            messageRevisionDraft = message.content
+                                            editingMessage = message
+                                        } : nil
+                                    )
                                     .id(message.id)
-                            }
-                        }
-                        .padding(.horizontal, NPSpacing.outer)
-                        .padding(.vertical, 14)
-                        .onChange(of: chatState.messages.count) { _ in
-                            if let last = chatState.messages.last {
-                                withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
-                                    proxy.scrollTo(last.id, anchor: .bottom)
                                 }
                             }
+                            .padding(.horizontal, NPSpacing.outer)
+                            .padding(.vertical, 14)
+
+                            Color.clear
+                                .frame(height: 1)
+                                .id(chatBottomAnchorID)
+                        }
+                        }
+                        .accessibilityIdentifier("openClawMessages")
+
+                        if !chatState.messages.isEmpty, !isChatAtBottom {
+                            Button {
+                                withAnimation(.easeOut(duration: 0.24)) {
+                                    proxy.scrollTo(chatBottomAnchorID, anchor: .bottom)
+                                }
+                            } label: {
+                                Image(systemName: "arrow.down")
+                                    .font(.system(size: 12, weight: .semibold))
+                                    .foregroundStyle(NPColors.brandDark)
+                                    .frame(width: 32, height: 32)
+                                    .background(.ultraThinMaterial)
+                                    .clipShape(Circle())
+                                    .overlay {
+                                        Circle().stroke(NPColors.border, lineWidth: 1)
+                                    }
+                                    .shadow(
+                                        color: NPShadow.small.color,
+                                        radius: NPShadow.small.radius,
+                                        y: NPShadow.small.y
+                                    )
+                                    .frame(width: 44, height: 44)
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .contentShape(Rectangle())
+                            .padding(.bottom, NPSpacing.small)
+                            .accessibilityLabel(localized("chat.scroll_to_bottom"))
+                            .accessibilityIdentifier("chatScrollToBottomButton")
                         }
                     }
-                    }
                 }
-                .accessibilityIdentifier("openClawMessages")
                 // ——— Composer bar ———
                 VStack(spacing: 0) {
                     composer
@@ -3716,49 +3755,56 @@ private struct FlashcardsSection: View {
                     columns: [GridItem(.adaptive(minimum: 150), spacing: NPSpacing.medium)],
                     spacing: NPSpacing.small
                 ) {
-                    flashcardPickerLabel(
-                        title: localized("flashcards.learning_unit"),
-                        value: model.learningUnits.first(where: { $0.id == model.selectedFlashcardLearningUnitId })?.title
-                            ?? localized("flashcards.learning_unit")
-                    )
-                    .overlay {
-                        Picker(
-                            localized("flashcards.learning_unit"),
-                            selection: Binding(
-                                get: { model.selectedFlashcardLearningUnitId },
-                                set: { model.selectFlashcardLearningUnit($0) }
-                            )
-                        ) {
-                            ForEach(model.learningUnits) { unit in
-                                Text(unit.title).tag(unit.id)
+                    Menu {
+                        ForEach(model.learningUnits) { unit in
+                            Button {
+                                model.selectFlashcardLearningUnit(unit.id)
+                            } label: {
+                                if unit.id == model.selectedFlashcardLearningUnitId {
+                                    Label(unit.title, systemImage: "checkmark")
+                                } else {
+                                    Text(unit.title)
+                                }
                             }
                         }
-                        .pickerStyle(.menu)
-                        .opacity(0.001)
-                        .accessibilityIdentifier("flashcardLearningUnitPicker")
+                    } label: {
+                        flashcardPickerLabel(
+                            title: localized("flashcards.learning_unit"),
+                            value: model.learningUnits.first(where: { $0.id == model.selectedFlashcardLearningUnitId })?.title
+                                ?? localized("flashcards.learning_unit")
+                        )
                     }
+                    .buttonStyle(.plain)
+                    .contentShape(Rectangle())
+                    .accessibilityIdentifier("flashcardLearningUnitPicker")
 
-                    flashcardPickerLabel(
-                        title: localized("flashcards.deck"),
-                        value: selectedFlashcardDeckLabel
-                    )
-                    .overlay {
-                        Picker(
-                            localized("flashcards.deck"),
-                            selection: Binding(
-                                get: { model.selectedFlashcardDeckId ?? "" },
-                                set: { model.selectFlashcardDeck($0) }
-                            )
-                        ) {
+                    Menu {
+                        if model.flashcardDecks.isEmpty {
+                            Text(localized("flashcards.empty.title"))
+                        } else {
                             ForEach(model.flashcardDecks) { deck in
-                                Text(localizedFormat("flashcards.deck_version", String(deck.versionNo)))
-                                    .tag(deck.id)
+                                Button {
+                                    model.selectFlashcardDeck(deck.id)
+                                } label: {
+                                    let title = localizedFormat("flashcards.deck_version", String(deck.versionNo))
+                                    if deck.id == model.selectedFlashcardDeckId {
+                                        Label(title, systemImage: "checkmark")
+                                    } else {
+                                        Text(title)
+                                    }
+                                }
                             }
                         }
-                        .pickerStyle(.menu)
-                        .opacity(0.001)
-                        .accessibilityIdentifier("flashcardDeckPicker")
+                    } label: {
+                        flashcardPickerLabel(
+                            title: localized("flashcards.deck"),
+                            value: selectedFlashcardDeckLabel
+                        )
                     }
+                    .buttonStyle(.plain)
+                    .contentShape(Rectangle())
+                    .disabled(model.flashcardDecks.isEmpty)
+                    .accessibilityIdentifier("flashcardDeckPicker")
                 }
 
                 if model.isFlashcardsLoading && model.flashcardDeckDetail == nil {
@@ -4326,8 +4372,30 @@ private struct OpenClawMessageBubble: View {
         message.id == "system" ? localized("chat.system_help") : message.content
     }
 
-    private var streamingDisplayContent: String {
-        message.streamingContent.isEmpty ? localized("chat.thinking") : message.streamingContent
+    private var processingSteps: [ChatProcessingStep] {
+        let eventTypes = Set(message.events.map(\.eventType))
+        var steps: [ChatProcessingStep] = []
+
+        if eventTypes.contains("openclaw_prepare") {
+            steps.append(ChatProcessingStep(id: "prepare", titleKey: "chat.process.preparing_context"))
+        }
+        if eventTypes.contains("knowledge_retrieved") {
+            steps.append(ChatProcessingStep(id: "knowledge", titleKey: "chat.process.knowledge_retrieved"))
+        } else if eventTypes.contains("knowledge_retrieval_skipped") {
+            steps.append(ChatProcessingStep(id: "knowledge", titleKey: "chat.process.knowledge_skipped"))
+        }
+        if eventTypes.contains("openclaw_run") || eventTypes.contains("chat_stream_started") {
+            steps.append(ChatProcessingStep(id: "model", titleKey: "chat.process.model_started"))
+        }
+        if eventTypes.contains("chat_answer_delta") {
+            steps.append(ChatProcessingStep(
+                id: "answer",
+                titleKey: message.status == .sending
+                    ? "chat.process.answer_streaming"
+                    : "chat.process.answer_completed"
+            ))
+        }
+        return steps
     }
 
     var body: some View {
@@ -4341,14 +4409,41 @@ private struct OpenClawMessageBubble: View {
                         .font(.caption.weight(.medium))
                         .foregroundStyle(NPColors.brand)
                 }
-                if message.role == .assistant, !message.reasoningContent.isEmpty, !message.reasoningUnavailable {
+                if message.role == .assistant,
+                   !processingSteps.isEmpty || !message.reasoningContent.isEmpty || message.reasoningUnavailable {
                     DisclosureGroup(isExpanded: $isReasoningExpanded) {
-                        Text(message.reasoningContent)
-                            .font(.subheadline)
-                            .foregroundStyle(NPColors.textSecondary)
-                            .accessibilityIdentifier("chatReasoningDisclosure")
+                        VStack(alignment: .leading, spacing: 7) {
+                            ForEach(processingSteps) { step in
+                                Label {
+                                    Text(localized(step.titleKey))
+                                        .font(.caption)
+                                } icon: {
+                                    Image(systemName: step.id == processingSteps.last?.id && message.status == .sending
+                                          ? "circle.dotted"
+                                          : "checkmark.circle.fill")
+                                        .foregroundStyle(step.id == processingSteps.last?.id && message.status == .sending
+                                                         ? NPColors.brand
+                                                         : NPColors.successText)
+                                }
+                            }
+
+                            if !message.reasoningContent.isEmpty {
+                                Divider()
+                                Text(message.reasoningContent)
+                                    .font(.subheadline)
+                                    .foregroundStyle(NPColors.textSecondary)
+                                    .textSelection(.enabled)
+                            }
+
+                            if message.reasoningUnavailable {
+                                Label(localized("chat.reasoning_unavailable_detail"), systemImage: "info.circle")
+                                    .font(.caption)
+                                    .foregroundStyle(NPColors.textSecondary)
+                            }
+                        }
+                        .accessibilityIdentifier("chatReasoningDisclosure")
                     } label: {
-                        Label(localized("chat.reasoning"), systemImage: "brain")
+                        Label(localized("chat.process_summary"), systemImage: "brain")
                             .font(.caption.weight(.medium))
                             .foregroundStyle(NPColors.textSecondary)
                     }
@@ -4356,10 +4451,7 @@ private struct OpenClawMessageBubble: View {
                 switch message.status {
                 case .sending:
                     VStack(alignment: .leading, spacing: NPSpacing.small) {
-                        Text(streamingDisplayContent)
-                            .font(.body.weight(.medium))
-                            .foregroundStyle(NPColors.textPrimary)
-                            .accessibilityIdentifier("chatStreamingContent")
+                        SmoothStreamingText(target: message.streamingContent)
                         if message.streamingContent.isEmpty {
                             ProgressView(value: Double(message.progress ?? 0), total: 100)
                         }
@@ -4367,13 +4459,17 @@ private struct OpenClawMessageBubble: View {
                 case .stopped:
                     VStack(alignment: .leading, spacing: NPSpacing.small) {
                         if !message.streamingContent.isEmpty {
-                            Text(message.streamingContent)
-                                .foregroundStyle(foregroundColor)
+                            LightweightMarkdownText(
+                                markdown: message.streamingContent,
+                                color: foregroundColor
+                            )
                         } else if !displayedContent.isEmpty,
                                   displayedContent != "Thinking...",
                                   displayedContent != localized("chat.thinking") {
-                            Text(displayedContent)
-                                .foregroundStyle(foregroundColor)
+                            LightweightMarkdownText(
+                                markdown: displayedContent,
+                                color: foregroundColor
+                            )
                         }
                         Label(localized("chat.stopped"), systemImage: "stop.circle")
                             .npCaption()
@@ -4428,6 +4524,33 @@ private struct OpenClawMessageBubble: View {
                         .foregroundStyle(NPColors.textSecondary)
                         .accessibilityIdentifier("chatModelLabel")
                 }
+                if message.role != .system {
+                    HStack(spacing: 2) {
+                        Spacer(minLength: 0)
+                        Button(action: onCopy) {
+                            Image(systemName: "doc.on.doc")
+                                .frame(width: 44, height: 44)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(NPColors.textSecondary)
+                        .accessibilityLabel(localized("chat.copy.message"))
+                        .accessibilityIdentifier("chatCopyMessageButton.\(message.id)")
+
+                        if let onEdit {
+                            Button(action: onEdit) {
+                                Image(systemName: "pencil")
+                                    .frame(width: 44, height: 44)
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(NPColors.textSecondary)
+                            .accessibilityLabel(localized("chat.revision.action"))
+                            .accessibilityIdentifier("chatEditMessageButton.\(message.id)")
+                        }
+                    }
+                    .frame(height: 32)
+                }
             }
             .textSelection(.enabled)
             .padding(NPSpacing.card)
@@ -4438,16 +4561,6 @@ private struct OpenClawMessageBubble: View {
                 if message.role != .user {
                     RoundedRectangle(cornerRadius: NPRadius.card, style: .continuous)
                         .stroke(NPColors.border, lineWidth: 1)
-                }
-            }
-            .contextMenu {
-                Button(action: onCopy) {
-                    Label(localized("chat.copy.message"), systemImage: "doc.on.doc")
-                }
-                if let onEdit {
-                    Button(action: onEdit) {
-                        Label(localized("chat.revision.action"), systemImage: "pencil")
-                    }
                 }
             }
             .accessibilityAction(named: Text(localized("chat.copy.message")), onCopy)
@@ -4474,6 +4587,32 @@ private struct OpenClawMessageBubble: View {
             return NPColors.textPrimary
         }
         return NPColors.textPrimary
+    }
+}
+
+private struct ChatProcessingStep: Identifiable {
+    let id: String
+    let titleKey: String
+}
+
+private struct SmoothStreamingText: View {
+    let target: String
+
+    var body: some View {
+        Group {
+            if target.isEmpty {
+                Text(localized("chat.thinking"))
+                    .font(.body)
+                    .foregroundStyle(NPColors.textPrimary)
+            } else {
+                LightweightMarkdownText(
+                    markdown: target,
+                    color: NPColors.textPrimary
+                )
+            }
+        }
+        .textSelection(.enabled)
+        .accessibilityIdentifier("chatStreamingContent")
     }
 }
 
@@ -5059,6 +5198,56 @@ private struct LightweightMarkdownText: View {
     var horizontalAlignment: HorizontalAlignment = .leading
     var textAlignment: TextAlignment = .leading
     var paragraphFont: Font = .body
+
+    @ViewBuilder
+    var body: some View {
+        if #available(iOS 16.0, *) {
+            MarkdownUI.Markdown(markdown)
+                .markdownBlockStyle(\.codeBlock) { configuration in
+                    SelectableMarkdownCodeBlock(
+                        code: configuration.content,
+                        language: configuration.language
+                    )
+                }
+                .markdownTheme(.basic)
+                .markdownTextStyle {
+                    ForegroundColor(color)
+                    BackgroundColor(nil)
+                }
+                .markdownTextStyle(\.link) {
+                    ForegroundColor(NPColors.brand)
+                }
+                .font(paragraphFont)
+                .tint(NPColors.brand)
+                .textSelection(.enabled)
+                .multilineTextAlignment(textAlignment)
+                .frame(maxWidth: .infinity, alignment: contentAlignment)
+        } else {
+            LegacyMarkdownText(
+                markdown: markdown,
+                color: color,
+                horizontalAlignment: horizontalAlignment,
+                textAlignment: textAlignment,
+                paragraphFont: paragraphFont
+            )
+        }
+    }
+
+    private var contentAlignment: Alignment {
+        switch textAlignment {
+        case .center: return .center
+        case .trailing: return .trailing
+        default: return .leading
+        }
+    }
+}
+
+private struct LegacyMarkdownText: View {
+    let markdown: String
+    let color: Color
+    let horizontalAlignment: HorizontalAlignment
+    let textAlignment: TextAlignment
+    let paragraphFont: Font
     @StateObject private var renderer = MarkdownRenderState()
 
     var body: some View {
@@ -5097,13 +5286,15 @@ private struct LightweightMarkdownText: View {
                     .background(NPColors.surface)
                     .clipShape(RoundedRectangle(cornerRadius: NPRadius.input, style: .continuous))
                 case .code:
-                    Text(block.text)
-                        .font(.system(.caption, design: .monospaced))
-                        .foregroundStyle(NPColors.textPrimary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(10)
-                        .background(NPColors.interactive)
-                        .clipShape(RoundedRectangle(cornerRadius: NPRadius.xs))
+                    SelectableMarkdownCodeBlock(code: block.text, language: nil)
+                case .table:
+                    if let table = block.table {
+                        MarkdownTableView(
+                            table: table,
+                            color: color,
+                            paragraphFont: paragraphFont
+                        )
+                    }
                 case .paragraph:
                     MarkdownInlineText(tokens: block.inlineTokens, color: color)
                         .font(paragraphFont)
@@ -5111,6 +5302,7 @@ private struct LightweightMarkdownText: View {
                 }
             }
         }
+        .textSelection(.enabled)
         .multilineTextAlignment(textAlignment)
         .task(id: markdown) {
             renderer.load(markdown)
@@ -5125,6 +5317,155 @@ private struct LightweightMarkdownText: View {
             return .trailing
         default:
             return .leading
+        }
+    }
+}
+
+private struct SelectableMarkdownCodeBlock: View {
+    let code: String
+    let language: String?
+    @State private var isCopied = false
+    @State private var copyResetTask: Task<Void, Never>?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: NPSpacing.small) {
+                if let language = normalizedLanguage {
+                    Text(language)
+                        .font(.caption.monospaced().weight(.medium))
+                        .foregroundStyle(NPColors.textSecondary)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 8)
+                Button(action: copyCode) {
+                    Label(
+                        localized(isCopied ? "chat.copy.code_complete" : "chat.copy.code"),
+                        systemImage: isCopied ? "checkmark" : "doc.on.doc"
+                    )
+                    .font(.caption.weight(.medium))
+                    .frame(minHeight: 44)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(isCopied ? NPColors.successText : NPColors.textSecondary)
+                .accessibilityIdentifier("markdownCodeCopyButton")
+            }
+            .padding(.leading, 12)
+            .padding(.trailing, 6)
+
+            Divider()
+
+            ScrollView(.horizontal, showsIndicators: true) {
+                Text(code)
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(NPColors.textPrimary)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: true, vertical: true)
+                    .padding(12)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .background(NPColors.interactive)
+        .clipShape(RoundedRectangle(cornerRadius: NPRadius.xs, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: NPRadius.xs, style: .continuous)
+                .stroke(NPColors.border.opacity(0.8), lineWidth: 1)
+        }
+        .onDisappear {
+            copyResetTask?.cancel()
+            copyResetTask = nil
+        }
+    }
+
+    private var normalizedLanguage: String? {
+        guard let language = language?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !language.isEmpty else {
+            return nil
+        }
+        return language
+    }
+
+    private func copyCode() {
+        UIPasteboard.general.string = code
+        isCopied = true
+        copyResetTask?.cancel()
+        copyResetTask = Task {
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            guard !Task.isCancelled else { return }
+            isCopied = false
+            copyResetTask = nil
+        }
+    }
+}
+
+private struct MarkdownTableView: View {
+    let table: MarkdownTable
+    let color: Color
+    let paragraphFont: Font
+
+    private let columnWidth: CGFloat = 132
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: table.headers.count > 2) {
+            VStack(alignment: .leading, spacing: 0) {
+                tableRow(table.headers, isHeader: true, rowIndex: 0)
+                Rectangle()
+                    .fill(NPColors.border)
+                    .frame(height: 1)
+                ForEach(Array(table.rows.enumerated()), id: \.offset) { index, row in
+                    tableRow(row, isHeader: false, rowIndex: index)
+                    if index < table.rows.count - 1 {
+                        Rectangle()
+                            .fill(NPColors.border.opacity(0.7))
+                            .frame(height: 1)
+                    }
+                }
+            }
+            .background(NPColors.surface)
+            .clipShape(RoundedRectangle(cornerRadius: NPRadius.xs, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: NPRadius.xs, style: .continuous)
+                    .stroke(NPColors.border, lineWidth: 1)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func tableRow(_ cells: [String], isHeader: Bool, rowIndex: Int) -> some View {
+        HStack(alignment: .top, spacing: 0) {
+            ForEach(table.headers.indices, id: \.self) { column in
+                MarkdownInlineText(
+                    tokens: cachedMarkdownInlineTokens(column < cells.count ? cells[column] : ""),
+                    color: color
+                )
+                .font(isHeader ? paragraphFont.weight(.semibold) : paragraphFont)
+                .frame(
+                    width: columnWidth,
+                    alignment: contentAlignment(for: table.alignments[column])
+                )
+                .padding(.horizontal, 8)
+                .padding(.vertical, 7)
+                .background(
+                    isHeader
+                        ? NPColors.interactive
+                        : (rowIndex.isMultiple(of: 2) ? NPColors.surface : NPColors.background.opacity(0.45))
+                )
+                .overlay(alignment: .trailing) {
+                    if column < table.headers.count - 1 {
+                        Rectangle()
+                            .fill(NPColors.border.opacity(0.7))
+                            .frame(width: 1)
+                    }
+                }
+            }
+        }
+    }
+
+    private func contentAlignment(for alignment: MarkdownTableAlignment) -> Alignment {
+        switch alignment {
+        case .leading: return .topLeading
+        case .center: return .top
+        case .trailing: return .topTrailing
         }
     }
 }
@@ -5490,23 +5831,29 @@ private struct ChatScrollPanValue {
 
 private struct ChatScrollPanObserver: UIViewRepresentable {
     let onPan: (ChatScrollPanValue) -> Void
+    let onBottomChange: (Bool) -> Void
 
     func makeUIView(context: Context) -> ObserverView {
         let view = ObserverView()
         view.onPan = onPan
+        view.onBottomChange = onBottomChange
         return view
     }
 
     func updateUIView(_ view: ObserverView, context: Context) {
         view.onPan = onPan
+        view.onBottomChange = onBottomChange
         view.attachIfNeeded()
     }
 
     final class ObserverView: UIView {
         var onPan: ((ChatScrollPanValue) -> Void)?
+        var onBottomChange: ((Bool) -> Void)?
         private weak var observedScrollView: UIScrollView?
         private weak var observedPanGesture: UIPanGestureRecognizer?
+        private var scrollObservations: [NSKeyValueObservation] = []
         private var startLocation: CGPoint?
+        private var lastReportedAtBottom: Bool?
 
         override func didMoveToWindow() {
             super.didMoveToWindow()
@@ -5517,6 +5864,7 @@ private struct ChatScrollPanObserver: UIViewRepresentable {
 
         deinit {
             observedPanGesture?.removeTarget(self, action: #selector(handlePan))
+            scrollObservations.forEach { $0.invalidate() }
         }
 
         func attachIfNeeded() {
@@ -5530,9 +5878,46 @@ private struct ChatScrollPanObserver: UIViewRepresentable {
             }
 
             observedPanGesture?.removeTarget(self, action: #selector(handlePan))
+            scrollObservations.forEach { $0.invalidate() }
+            scrollObservations.removeAll()
             observedScrollView = scrollView
             observedPanGesture = scrollView.panGestureRecognizer
             scrollView.panGestureRecognizer.addTarget(self, action: #selector(handlePan))
+            scrollObservations = [
+                scrollView.observe(\.contentOffset, options: [.initial, .new]) { [weak self] _, _ in
+                    self?.reportBottomPosition()
+                },
+                scrollView.observe(\.contentSize, options: [.initial, .new]) { [weak self] _, _ in
+                    self?.reportBottomPosition()
+                },
+                scrollView.observe(\.bounds, options: [.initial, .new]) { [weak self] _, _ in
+                    self?.reportBottomPosition()
+                }
+            ]
+            reportBottomPosition()
+        }
+
+        private func reportBottomPosition() {
+            guard let scrollView = observedScrollView else { return }
+            let visibleHeight = max(
+                0,
+                scrollView.bounds.height
+                    - scrollView.adjustedContentInset.top
+                    - scrollView.adjustedContentInset.bottom
+            )
+            let visibleBottom = scrollView.contentOffset.y
+                + scrollView.bounds.height
+                - scrollView.adjustedContentInset.bottom
+            let contentFits = scrollView.contentSize.height <= visibleHeight + 4
+            let distanceFromBottom = max(0, scrollView.contentSize.height - visibleBottom)
+            let tolerance: CGFloat = lastReportedAtBottom == false ? 10 : 4
+            let atBottom = contentFits || distanceFromBottom <= tolerance
+            guard lastReportedAtBottom != atBottom else { return }
+            lastReportedAtBottom = atBottom
+            let callback = onBottomChange
+            DispatchQueue.main.async {
+                callback?(atBottom)
+            }
         }
 
         @objc private func handlePan(_ recognizer: UIPanGestureRecognizer) {

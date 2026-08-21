@@ -1,12 +1,25 @@
 import Combine
 import Foundation
 
+struct MarkdownTable: Equatable, Sendable {
+    let headers: [String]
+    let alignments: [MarkdownTableAlignment]
+    let rows: [[String]]
+}
+
+enum MarkdownTableAlignment: Equatable, Sendable {
+    case leading
+    case center
+    case trailing
+}
+
 struct MarkdownBlock: Equatable, Identifiable, Sendable {
     let id: String
     let type: MarkdownBlockType
     let text: String
     let level: Int
     let inlineTokens: [MarkdownInlineToken]
+    let table: MarkdownTable?
 
     nonisolated init(id: String, type: MarkdownBlockType, text: String, level: Int = 0) {
         self.id = id
@@ -14,6 +27,12 @@ struct MarkdownBlock: Equatable, Identifiable, Sendable {
         self.text = text
         self.level = level
         self.inlineTokens = parseMarkdownInline(text)
+        switch type {
+        case .table:
+            self.table = parseMarkdownTable(text)
+        default:
+            self.table = nil
+        }
     }
 }
 
@@ -24,6 +43,75 @@ enum MarkdownBlockType: Equatable, Sendable {
     case ordered
     case quote
     case code
+    case table
+}
+
+nonisolated func parseMarkdownTable(_ markdown: String) -> MarkdownTable? {
+    let lines = markdown.components(separatedBy: "\n")
+        .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        .filter { !$0.isEmpty }
+    guard lines.count >= 2, lines[0].contains("|") else { return nil }
+
+    let headers = splitMarkdownTableRow(lines[0])
+    let delimiters = splitMarkdownTableRow(lines[1])
+    guard !headers.isEmpty, headers.count == delimiters.count else { return nil }
+
+    var alignments: [MarkdownTableAlignment] = []
+    for delimiter in delimiters {
+        let marker = delimiter.trimmingCharacters(in: .whitespaces)
+        guard marker.range(of: "^:?-{3,}:?$", options: .regularExpression) != nil else {
+            return nil
+        }
+        if marker.hasPrefix(":"), marker.hasSuffix(":") {
+            alignments.append(.center)
+        } else if marker.hasSuffix(":") {
+            alignments.append(.trailing)
+        } else {
+            alignments.append(.leading)
+        }
+    }
+
+    let rows = lines.dropFirst(2).map { line -> [String] in
+        var cells = splitMarkdownTableRow(line)
+        if cells.count < headers.count {
+            cells.append(contentsOf: repeatElement("", count: headers.count - cells.count))
+        } else if cells.count > headers.count {
+            cells = Array(cells.prefix(headers.count))
+        }
+        return cells
+    }
+    return MarkdownTable(headers: headers, alignments: alignments, rows: rows)
+}
+
+nonisolated private func splitMarkdownTableRow(_ row: String) -> [String] {
+    var source = row.trimmingCharacters(in: .whitespacesAndNewlines)
+    if source.first == "|" { source.removeFirst() }
+    if source.last == "|", !source.hasSuffix("\\|") { source.removeLast() }
+
+    var cells: [String] = []
+    var current = ""
+    var isEscaped = false
+    for character in source {
+        if isEscaped {
+            if character == "|" || character == "\\" {
+                current.append(character)
+            } else {
+                current.append("\\")
+                current.append(character)
+            }
+            isEscaped = false
+        } else if character == "\\" {
+            isEscaped = true
+        } else if character == "|" {
+            cells.append(current.trimmingCharacters(in: .whitespaces))
+            current = ""
+        } else {
+            current.append(character)
+        }
+    }
+    if isEscaped { current.append("\\") }
+    cells.append(current.trimmingCharacters(in: .whitespaces))
+    return cells
 }
 
 struct MarkdownInlineToken: Equatable, Identifiable, Sendable {
@@ -53,7 +141,12 @@ nonisolated func parseMarkdownBlocks(_ markdown: String) -> [MarkdownBlock] {
 
     func flushParagraph() {
         if !paragraph.isEmpty {
-            appendBlock(.paragraph, paragraph.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines))
+            let text = paragraph.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+            if let _ = parseMarkdownTable(text) {
+                appendBlock(.table, text)
+            } else {
+                appendBlock(.paragraph, text)
+            }
             paragraph.removeAll()
         }
     }
@@ -260,7 +353,6 @@ final class MarkdownRenderState: ObservableObject {
             return
         }
 
-        blocks = []
         let expectedMarkdown = markdown
         parseTask = Task { [weak self] in
             let trace = NPPerformanceTrace.begin("MarkdownParse")

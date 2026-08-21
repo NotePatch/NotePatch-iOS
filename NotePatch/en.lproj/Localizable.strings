@@ -581,9 +581,18 @@
 "chat.add_attachment" = "Add attachment";
 "chat.send" = "Send";
 "chat.stop_generation" = "Stop generating";
+"chat.scroll_to_bottom" = "Scroll to latest message";
 "chat.stopped" = "Generation stopped";
 "chat.reasoning" = "Reasoning";
 "chat.reasoning_unavailable" = "Reasoning unavailable";
+"chat.process_summary" = "Processing steps";
+"chat.process.preparing_context" = "Preparing the question and context";
+"chat.process.knowledge_retrieved" = "Relevant workspace sources retrieved";
+"chat.process.knowledge_skipped" = "No workspace source lookup needed";
+"chat.process.model_started" = "Model started generating";
+"chat.process.answer_streaming" = "Organizing and streaming the answer";
+"chat.process.answer_completed" = "Answer completed";
+"chat.reasoning_unavailable_detail" = "This model did not provide a reasoning summary for this response.";
 "chat.stream_truncated" = "Output truncated; current content kept";
 "chat.assistant_name" = "NotePatch AI";
 "chat.thinking" = "Thinking...";
@@ -818,6 +827,8 @@
 "chat.copy.message_complete" = "Message copied.";
 "chat.copy.conversation_complete" = "Conversation copied.";
 "chat.copy.empty" = "There is no conversation to copy.";
+"chat.copy.code" = "Copy code";
+"chat.copy.code_complete" = "Copied";
 "chat.revision.action" = "Edit message";
 "chat.revision.title" = "Edit message";
 "chat.revision.help" = "Submitting creates a new conversation branch from this message. Existing attachments are retained.";

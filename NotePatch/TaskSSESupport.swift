@@ -134,3 +134,33 @@ struct TaskSSEParser {
         dataLines = []
     }
 }
+
+/// Preserves SSE's blank separator lines while consuming URLSession.AsyncBytes.
+/// AsyncBytes.lines omits empty lines, which prevents an SSE parser from
+/// dispatching frames until the connection closes.
+struct TaskSSEByteDecoder {
+    private var parser = TaskSSEParser()
+    private var pendingLine = Data()
+
+    mutating func append(_ byte: UInt8, workspaceId: String) throws -> [TaskSSEFrame] {
+        pendingLine.append(byte)
+        guard byte == 0x0A else { return [] }
+
+        let chunk = String(decoding: pendingLine, as: UTF8.self)
+        pendingLine.removeAll(keepingCapacity: true)
+        return try parser.append(chunk, workspaceId: workspaceId)
+    }
+
+    mutating func finish(workspaceId: String) throws -> [TaskSSEFrame] {
+        var frames: [TaskSSEFrame] = []
+        if !pendingLine.isEmpty {
+            frames.append(contentsOf: try parser.append(
+                String(decoding: pendingLine, as: UTF8.self),
+                workspaceId: workspaceId
+            ))
+            pendingLine.removeAll(keepingCapacity: false)
+        }
+        frames.append(contentsOf: try parser.finish(workspaceId: workspaceId))
+        return frames
+    }
+}

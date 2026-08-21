@@ -763,6 +763,22 @@ struct NotePatchTests {
         #expect(flashcardBlocks[2].level == 2)
         #expect(flashcardBlocks[2].inlineTokens.contains { $0.type == .code && $0.text == "x" })
 
+        let tableBlocks = parseMarkdownBlocks(
+            """
+            | Name | Score | Note |
+            | :--- | ---: | :---: |
+            | Alice | 98 | **Great** |
+            | Bob | 87 | A \\| B |
+            """
+        )
+        let tableBlock = try #require(tableBlocks.first)
+        #expect(tableBlock.type == .table)
+        let table = try #require(tableBlock.table)
+        #expect(table.headers == ["Name", "Score", "Note"])
+        #expect(table.alignments == [.leading, .trailing, .center])
+        #expect(table.rows[0] == ["Alice", "98", "**Great**"])
+        #expect(table.rows[1] == ["Bob", "87", "A | B"])
+
         let longMarkdown = String(repeating: "段落内容\n\n", count: 1_000)
         renderer.load(longMarkdown)
         try await Self.waitUntil { !renderer.blocks.isEmpty }
@@ -3989,6 +4005,37 @@ struct NotePatchTests {
         }
         #expect(completion.status == "succeeded")
         #expect(completion.lastSequenceNo == 9)
+    }
+
+    @Test func taskSSEByteDecoderEmitsFramesBeforeConnectionFinishes() throws {
+        var decoder = TaskSSEByteDecoder()
+        let event = "id: 1\nevent: task_event\ndata: {\"id\":\"event-1\",\"task_id\":\"task-1\",\"sequence_no\":1,\"event_type\":\"chat_answer_delta\",\"level\":\"info\",\"message\":\"chunk\",\"progress\":null,\"data\":{\"delta\":\"Hello\"},\"created_at\":\"\"}\n\n"
+        var eventFrames: [TaskSSEFrame] = []
+        for byte in event.utf8 {
+            eventFrames.append(contentsOf: try decoder.append(byte, workspaceId: "ws-1"))
+        }
+
+        #expect(eventFrames.count == 1)
+        guard case .taskEvent(let taskEvent) = eventFrames[0] else {
+            Issue.record("Expected an event before the stream finishes")
+            return
+        }
+        #expect(taskEvent.eventType == "chat_answer_delta")
+        #expect(taskEvent.data?.objectStringValue(for: "delta") == "Hello")
+
+        let done = "event: done\ndata: {\"task_id\":\"task-1\",\"status\":\"succeeded\",\"last_sequence_no\":1}\n\n"
+        var doneFrames: [TaskSSEFrame] = []
+        for byte in done.utf8 {
+            doneFrames.append(contentsOf: try decoder.append(byte, workspaceId: "ws-1"))
+        }
+
+        #expect(doneFrames.count == 1)
+        guard case .done(let completion) = doneFrames[0] else {
+            Issue.record("Expected done before the stream finishes")
+            return
+        }
+        #expect(completion.status == "succeeded")
+        #expect(try decoder.finish(workspaceId: "ws-1").isEmpty)
     }
 
     @Test @MainActor func taskSSERequestUsesBearerAcceptAndLastEventID() throws {
