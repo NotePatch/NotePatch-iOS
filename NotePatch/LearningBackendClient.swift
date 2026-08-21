@@ -191,7 +191,8 @@ final class LearningBackendClient {
         mimeType: String?,
         fileSize: Int64?,
         documentKind: String,
-        learningMetadata: LearningMetadata? = nil
+        learningMetadata: LearningMetadata? = nil,
+        saveToDocuments: Bool? = nil
     ) async throws -> UploadSessionResponse {
         var payload: [String: Any] = [
             "filename": filename,
@@ -199,6 +200,9 @@ final class LearningBackendClient {
             "title": filename,
             "metadata": learningMetadata?.payload ?? [:]
         ]
+        if let saveToDocuments {
+            payload["save_to_documents"] = saveToDocuments
+        }
         if let mimeType {
             payload["mime_type"] = mimeType
         }

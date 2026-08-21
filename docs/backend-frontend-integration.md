@@ -35,7 +35,8 @@ Backend internal
   -> Redis: task queues and online presence
   -> worker(default): scan、purge、merge 等短编排任务
   -> ocr-worker(ocr profile): document_processing_pipeline、ocr_document 与真实 PaddleOCR
-  -> chat-worker(chat): chat、题目提取、知识库、笔记、批改、高亮与闪卡
+  -> chat-worker(chat): 仅处理交互式 OpenClaw chat
+  -> ai-worker(ai): 题目提取、知识库、笔记、批改、高亮与闪卡
   -> docserver: DocTr image rectification, internal only
   -> OpenClaw per-user gateway: internal only
 ```
@@ -266,7 +267,10 @@ type UploadSessionResponse = {
     mime_type: string | null;
     file_size: number | null;
     file_type: "image" | "pdf" | "docx" | "pptx" | "audio" | "video" | "other";
-    document_kind: "homework" | "corrected_homework" | "courseware" | "note" | "exam" | "other";
+    document_kind: "homework" | "corrected_homework" | "courseware" | "note" | "exam" | "answer_key" | "rubric" | "chat_attachment" | "other";
+    retention_scope: "workspace" | "conversation";
+    chat_conversation_id: string | null;
+    save_to_documents: boolean;
     bucket: string;
     object_key: string;
   };
@@ -281,7 +285,12 @@ type UploadSessionResponse = {
   object_key: string;
 };
 
-async function createUploadSession(workspaceId: string, file: File, documentKind = "other") {
+async function createUploadSession(
+  workspaceId: string,
+  file: File,
+  documentKind = "other",
+  saveToDocuments = true,
+) {
   return apiFetch<UploadSessionResponse>(`/workspaces/${workspaceId}/documents/upload-session`, {
     method: "POST",
     body: JSON.stringify({
@@ -289,6 +298,7 @@ async function createUploadSession(workspaceId: string, file: File, documentKind
       mime_type: file.type || "application/octet-stream",
       file_size: file.size,
       document_kind: documentKind,
+      save_to_documents: saveToDocuments,
       title: file.name,
       metadata: {},
     }),
@@ -540,9 +550,24 @@ type ChatConversation = {
   id: string;
   workspace_id: string;
   title: string;
+  title_source: "prompt" | "ai" | "manual";
+  title_generated_at: string | null;
   last_message_at: string | null;
   created_at: string;
   updated_at: string;
+};
+
+type ChatAttachment = {
+  document_id: string;
+  filename: string;
+  title: string | null;
+  mime_type: string | null;
+  file_type: string;
+  file_size: number | null;
+  status: string;
+  retention_scope: "workspace" | "conversation";
+  save_to_documents: boolean;
+  availability: "available" | "unavailable";
 };
 
 type ChatMessage = {
@@ -553,15 +578,26 @@ type ChatMessage = {
   task_id: string | null;
   status: "queued" | "running" | "succeeded" | "failed";
   error_message: string | null;
+  attachments: ChatAttachment[];
   citations: Array<{ chunk_id?: string; document_id?: string; score?: number; metadata?: object }>;
   source_status: "available" | "partially_unavailable" | "unavailable";
   created_at: string;
 };
 
-async function sendChat(workspaceId: string, prompt: string, conversationId?: string) {
+async function sendChat(
+  workspaceId: string,
+  prompt: string,
+  conversationId?: string,
+  attachmentDocumentIds: string[] = [],
+) {
   return apiFetch<Task>(`/workspaces/${workspaceId}/ai/chat`, {
     method: "POST",
-    body: JSON.stringify({ prompt, conversation_id: conversationId, input: {}, options: {} }),
+    body: JSON.stringify({
+      prompt,
+      conversation_id: conversationId,
+      input: { attachments: attachmentDocumentIds.map((document_id) => ({ document_id })) },
+      options: {},
+    }),
   });
 }
 
@@ -578,6 +614,18 @@ async function listChatMessages(workspaceId: string, conversationId: string) {
 }
 ```
 
+
+附件必须先通过 tusd 文档上传流程完成，聊天只提交 `document_id`。不要把 base64、对象键、客户端路径、文件名或 MIME 当作可信附件来源。消息列表返回的 `attachments` 用于重建聊天气泡；需要显示原图时，再通过该 document 的鉴权 download-url 获取短期 URL。启用历史后，后端会在每轮任务中把历史附件映射到新的 OpenClaw task snapshot，因此客户端无需重复上传同一张图。
+
+AI 助手中的图片或文件必须以 `document_kind: "chat_attachment"` 创建上传会话，并向用户提供“保存到资料”开关：
+
+- 开启：提交 `save_to_documents: true`（默认），文件保留在普通文档列表，删除对话不会删除它。
+- 关闭：提交 `save_to_documents: false`，文件标记为 `retention_scope: "conversation"`，不出现在 `GET /documents`，首次发送时绑定当前会话，只能在该会话上下文中继续引用；删除会话会异步 purge 文件及 SeaweedFS 对象。
+
+临时附件仍必须先上传到 SeaweedFS，不能只把 base64 留在请求或手机内存里；“只在上下文中储存”表示生命周期属于会话，而不是不落对象存储。`save_to_documents=false` 只允许用于 `chat_attachment`，对 homework/courseware/note 等类型会返回 `422`。聊天附件不触发 OCR、知识库、电子笔记、评分或闪卡。为兼容旧客户端，`other` 也不再自动进入学习流水线。真正的学习资料必须显式选择 `courseware`、`note`、`homework`、`corrected_homework` 或 `exam`。
+
+不要在聊天附件上传完成后调用 `/documents/{document_id}/process`。服务端会对 `chat_attachment` 返回 `409`，防止客户端误操作。
+
 可用接口：
 
 ```http
@@ -591,6 +639,8 @@ PATCH  /auth/preferences
 ```
 
 `GET /auth/me`、登录和 refresh 响应都会给出 `user.ai_history_enabled`。前端用 `PATCH /auth/preferences` 传 `{ "ai_history_enabled": false }` 关闭全局上下文注入；关闭后历史仍保留并可查看，但后续 OpenClaw 调用只发送当前 prompt。重新开启后，后端会自动传入该会话最近 `AI_CHAT_HISTORY_MESSAGE_LIMIT`（默认 20）条成功消息。删除会话是软删除，删除后不可继续发送或读取，关联的 queued/running OpenClaw task 会被协作取消。
+
+新会话先以首条 prompt 作为临时标题（`title_source="prompt"`）。首轮回答成功后，后端让 OpenClaw 根据最早几条成功消息生成短标题并更新为 `title_source="ai"`；前端只需刷新会话列表，不应自行生成标题。用户通过 conversation PATCH 手动改名后会变为 `title_source="manual"`，后端不会再自动覆盖。标题生成失败不会影响聊天 task 或 assistant 回答，仍保留临时标题并在后续对话中重试。
 
 删除被引用的资料不会删除已经完成的问答正文。后端会从 message 中移除失效 citation，并把 `source_status` 改为 `partially_unavailable` 或 `unavailable`；前端应保留正文并显示“部分/全部来源资料已删除”的非阻断提示。
 
@@ -732,7 +782,7 @@ UI 建议：
 
 若笔记长时间未生成，用户端保留“仍在生成/暂不可用”状态；运维端应查看 `generate_study_notes` 的 task events。常见可恢复情况是 gateway 已返回 HTTP 200，但 skill 没有写出必需的 `study_note.json`，worker 会自动重试，最终成功前不要缓存空 notes 列表为永久结果。
 
-后端内部区分 `default`、`ocr` 和 `chat` 三个 worker queue：文档处理进入 `ocr`，扫描、purge、merge 等编排任务进入 `default`，聊天及题目提取、知识库、笔记、批改、高亮、闪卡等 OpenClaw-backed 任务进入 `chat`。这个拆分不改变前端 API；学习 Skill 默认允许最多 300 秒执行，客户端应持续依据 task/events 展示进度。
+后端内部区分 `default`、`ocr`、`chat` 和 `ai` 四个 worker queue：文档处理进入 `ocr`，扫描、purge、merge 等编排任务进入 `default`，交互聊天进入低延迟 `chat`，题目提取、知识库、笔记、批改、高亮和闪卡进入后台 `ai`。这个拆分不改变前端 API；学习 Skill 默认允许最多 300 秒执行，客户端应持续依据 task/events 展示进度。
 
 `POST /workspaces/{workspace_id}/ai/chat` 是唯一的 AI 对话入口。它创建后端异步 OpenClaw 任务，前端不直接调用 OpenClaw Gateway，也不要启动/停止容器。请求体使用 `{ "prompt": string, "conversation_id"?: string, "input": object, "options": object }`，响应是 `TaskRead`；随后轮询 task 与 events 获取 `task.result.answer` 或失败原因。会话历史由后端保存，是否注入 OpenClaw 由用户全局 `ai_history_enabled` 控制。后端会为每个用户维护独立 OpenClaw gateway 配置和用户数据目录；用户在线时 supervisor 保持 gateway 运行，worker 在任务前把该用户 personal workspace 的文档镜像到 OpenClaw workspace，再把 OpenClaw 输出上传回 SeaweedFS。
 
@@ -1004,7 +1054,7 @@ DELETE /workspaces/{workspace_id}/homeworks/{homework_id}/references/{reference_
 
 ## Production Upload And Notes
 
-tus 上传完成后，文档可能暂时处于 `scanning`。只有 `scan_status=clean` 才表示可进入处理；`failed` 可能表示 MIME 不匹配、恶意文件、大小超限或扫描服务不可用。
+文件安全扫描默认关闭。tus 上传完成后，文档会返回 `scan_status=skipped`，并直接进入 `uploaded`、`processing` 或 `ready`；客户端不得把 `skipped` 显示为“正在安全检查”。只有后端显式启用 ClamAV 且文档 `status=scanning` 时才展示扫描进度，此时 `scan_status=clean` 表示扫描通过。
 
 未提供有效 `learning_unit_id` 时，每个上传文件会获得独立学习单元。合并学习单元使用：
 
@@ -1016,3 +1066,16 @@ POST /workspaces/{workspace_id}/learning-units/{target_id}/merge
 接口返回异步 `TaskRead`，客户端按 Task Polling 章节跟踪。
 
 展示学习笔记时，优先使用 `download_urls.rendered_html`，不要优先渲染原始 `html` 或 `highlighted_html`。该短期签名页面会选择可用的最新高亮 fragment，加载版本化 NotePatch paper CSS，并设置严格 CSP；过期后重新请求 URL。原始 HTML fragment 只供可信编辑器使用，客户端不要追加任意样式或执行其中内容。
+
+## Public Random-Prefix Gateway
+
+A public deployment may expose NotePatch below a deployment-only path such as `/np-<32-lowercase-hex>`. Clients must receive the exact prefix out of band; do not discover or hard-code the example value.
+
+```bash
+VITE_API_BASE_URL=https://PUBLIC_IP/np-<prefix>/api/v1
+VITE_TUSD_BASE_URL=https://PUBLIC_IP/np-<prefix>/files/
+```
+
+The admin entry is `https://PUBLIC_IP/np-<prefix>/`. Its assets and deep links retain the same prefix. Task SSE uses the normal prefixed API URL. Signed object URLs intentionally use `https://PUBLIC_IP/notepatch/...` without the random prefix because SeaweedFS S3 signs the original Host, path, and query.
+
+Requests to `/`, unprefixed `/api/v1`, or unprefixed `/files/` on the public TLS listener return `404`. Existing LAN/VPN clients may continue using the directly published ports. The random prefix is not authentication; clients must continue sending JWTs and must request short-lived download URLs from FastAPI.

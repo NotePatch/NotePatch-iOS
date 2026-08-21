@@ -57,6 +57,7 @@ struct QueuedUploadItem: Identifiable, Equatable {
     let file: LocalUploadFile
     let documentKind: String
     let learningMetadata: LearningMetadata
+    var saveToDocuments: Bool
     var isSelected: Bool
     var state: QueuedUploadState
 
@@ -64,6 +65,7 @@ struct QueuedUploadItem: Identifiable, Equatable {
         file: LocalUploadFile,
         documentKind: String,
         learningMetadata: LearningMetadata,
+        saveToDocuments: Bool = true,
         isSelected: Bool = true,
         state: QueuedUploadState = .pending
     ) {
@@ -71,6 +73,7 @@ struct QueuedUploadItem: Identifiable, Equatable {
         self.file = file
         self.documentKind = documentKind
         self.learningMetadata = learningMetadata
+        self.saveToDocuments = saveToDocuments
         self.isSelected = isSelected
         self.state = state
     }
@@ -337,6 +340,7 @@ func documentKindLabel(_ value: String) -> String {
     case "answer_key": return localized("document_kind.answer_key")
     case "rubric": return localized("document_kind.rubric")
     case "other": return localized("common.other")
+    case "chat_attachment": return localized("document_kind.chat_attachment")
     default: return localized("document_kind.unknown")
     }
 }

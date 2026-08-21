@@ -1110,7 +1110,8 @@ final class NotePatchViewModel: ObservableObject {
             mimeType: prepared.mimeType ?? "application/octet-stream",
             fileSize: prepared.fileSize,
             documentKind: item.documentKind,
-            learningMetadata: item.learningMetadata
+            learningMetadata: item.learningMetadata,
+            saveToDocuments: item.documentKind == "chat_attachment" ? item.saveToDocuments : nil
         )
         guard isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) else { throw CancellationError() }
         setStatus("upload.sending")
@@ -1276,8 +1277,9 @@ final class NotePatchViewModel: ObservableObject {
                     let uploadSession = session ?? activeSession
                     let uploadItem = QueuedUploadItem(
                         file: file,
-                        documentKind: "other",
-                        learningMetadata: LearningMetadata()
+                        documentKind: "chat_attachment",
+                        learningMetadata: LearningMetadata(),
+                        saveToDocuments: openClawComposerState.saveAttachmentsToWorkspace
                     )
                     setStatus("chat.uploading_attachment", String(index + 1), String(files.count), file.filename)
                     var document = try await performUpload(
@@ -1480,6 +1482,31 @@ final class NotePatchViewModel: ObservableObject {
     }
 
     func selectConversation(_ conversationId: String) {
+        if isOfflineTestMode {
+            conversationLoadTask?.cancel()
+            selectedConversationId = conversationId
+            openClawMessages = [
+                OpenClawChatMessage(
+                    id: "\(conversationId)-m1",
+                    role: .user,
+                    content: "你好，请帮我复习这个单元。",
+                    status: .done,
+                    taskId: nil,
+                    progress: nil,
+                    events: []
+                ),
+                OpenClawChatMessage(
+                    id: "\(conversationId)-m2",
+                    role: .assistant,
+                    content: "好的，我们先从最近的学习笔记开始。",
+                    status: .done,
+                    taskId: nil,
+                    progress: nil,
+                    events: []
+                )
+            ]
+            return
+        }
         guard let activeSession = currentSessionOrError(), let workspaceId = selectedWorkspaceId else { return }
         conversationLoadTask?.cancel()
         let generation = UUID()
@@ -1528,8 +1555,13 @@ final class NotePatchViewModel: ObservableObject {
     }
 
     func renameCurrentConversation(to title: String) {
+        guard let conversationId = selectedConversationId else { return }
+        renameConversation(conversationId, to: title)
+    }
+
+    func renameConversation(_ conversationId: String, to title: String) {
         guard let activeSession = currentSessionOrError(), let workspaceId = selectedWorkspaceId,
-              let conversationId = selectedConversationId, !isConversationMutating else { return }
+              !isConversationMutating else { return }
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             setError("chat.error.title_required")
@@ -1567,6 +1599,20 @@ final class NotePatchViewModel: ObservableObject {
     func deleteCurrentConversation() {
         guard let activeSession = currentSessionOrError(), let workspaceId = selectedWorkspaceId,
               let conversationId = selectedConversationId, !isConversationMutating else { return }
+        deleteConversation(conversationId, activeSession: activeSession, workspaceId: workspaceId)
+    }
+
+    func deleteConversation(_ conversationId: String) {
+        guard let activeSession = currentSessionOrError(), let workspaceId = selectedWorkspaceId else { return }
+        deleteConversation(conversationId, activeSession: activeSession, workspaceId: workspaceId)
+    }
+
+    private func deleteConversation(
+        _ conversationId: String,
+        activeSession: SavedSession,
+        workspaceId: String
+    ) {
+        guard !isConversationMutating else { return }
         isConversationMutating = true
         let generation = UUID()
         conversationMutationGeneration = generation
@@ -1583,33 +1629,36 @@ final class NotePatchViewModel: ObservableObject {
                 guard conversationMutationGeneration == generation,
                       isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) else { return }
                 conversations.removeAll { $0.id == conversationId }
-                selectedConversationId = conversations.first?.id
-                openClawMessages = [welcomeChatMessage]
                 setStatus("chat.conversation_deleted")
 
-                do {
-                    try await refreshConversations(
-                        activeSession: activeSession,
-                        workspaceId: workspaceId,
-                        shouldApply: { [weak self] in
-                            self?.conversationMutationGeneration == generation
-                                && self?.isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) == true
-                        }
-                    )
-                    if let nextConversationId = selectedConversationId {
-                        try await refreshConversationMessages(
+                if selectedConversationId == conversationId {
+                    selectedConversationId = conversations.first?.id
+                    openClawMessages = [welcomeChatMessage]
+
+                    do {
+                        try await refreshConversations(
                             activeSession: activeSession,
                             workspaceId: workspaceId,
-                            conversationId: nextConversationId,
                             shouldApply: { [weak self] in
                                 self?.conversationMutationGeneration == generation
                                     && self?.isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) == true
-                                    && self?.selectedConversationId == nextConversationId
                             }
                         )
+                        if let nextConversationId = selectedConversationId {
+                            try await refreshConversationMessages(
+                                activeSession: activeSession,
+                                workspaceId: workspaceId,
+                                conversationId: nextConversationId,
+                                shouldApply: { [weak self] in
+                                    self?.conversationMutationGeneration == generation
+                                        && self?.isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) == true
+                                        && self?.selectedConversationId == nextConversationId
+                                }
+                            )
+                        }
+                    } catch {
+                        handlePostCommitRefreshFailure(error, completionKey: "operation.conversation_deleted")
                     }
-                } catch {
-                    handlePostCommitRefreshFailure(error, completionKey: "operation.conversation_deleted")
                 }
             } catch {
                 guard conversationMutationGeneration == generation,
@@ -3434,6 +3483,26 @@ final class NotePatchViewModel: ObservableObject {
         selectedConversationId = nil
         isOpenClawSending = false
         openClawComposerState.clearDraft(removeAttachmentFiles: true)
+        if ProcessInfo.processInfo.arguments.contains("-NotePatchUITestConversations") {
+            conversations = [
+                ChatConversation(
+                    id: "ui-conv-1",
+                    workspaceId: "ui-workspace",
+                    title: "数学作业讲解",
+                    lastMessageAt: "2026-08-18T09:30:00Z",
+                    createdAt: "2026-08-18T09:00:00Z",
+                    updatedAt: "2026-08-18T09:30:00Z"
+                ),
+                ChatConversation(
+                    id: "ui-conv-2",
+                    workspaceId: "ui-workspace",
+                    title: "英语阅读笔记",
+                    lastMessageAt: nil,
+                    createdAt: "2026-08-17T14:00:00Z",
+                    updatedAt: "2026-08-17T14:00:00Z"
+                )
+            ]
+        }
         if ProcessInfo.processInfo.arguments.contains("-NotePatchUITestLongChat") {
             openClawMessages = (0..<100).map { index in
                 OpenClawChatMessage(

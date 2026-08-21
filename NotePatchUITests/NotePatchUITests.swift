@@ -292,6 +292,7 @@ final class NotePatchUITests: XCTestCase {
         attachmentButton.tap()
         XCTAssertTrue(app.buttons["选择照片"].waitForExistence(timeout: 2))
         XCTAssertTrue(app.buttons["选择文件"].exists)
+        XCTAssertTrue(app.descendants(matching: .any)["chatSaveToWorkspaceToggle"].waitForExistence(timeout: 2))
     }
 
     @MainActor

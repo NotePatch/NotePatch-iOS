@@ -361,6 +361,9 @@ struct LearningDocumentItem: Decodable, Equatable, Identifiable {
     let purgeStatus: String?
     let purgeTaskId: String?
     let purgedAt: String?
+    let retentionScope: String?
+    let chatConversationId: String?
+    let saveToDocuments: Bool?
     let createdAt: String
     let updatedAt: String
     let artifacts: [DocumentArtifactItem]
@@ -385,6 +388,9 @@ struct LearningDocumentItem: Decodable, Equatable, Identifiable {
         case purgeStatus = "purge_status"
         case purgeTaskId = "purge_task_id"
         case purgedAt = "purged_at"
+        case retentionScope = "retention_scope"
+        case chatConversationId = "chat_conversation_id"
+        case saveToDocuments = "save_to_documents"
         case createdAt = "created_at"
         case updatedAt = "updated_at"
         case artifacts
@@ -410,6 +416,9 @@ struct LearningDocumentItem: Decodable, Equatable, Identifiable {
         purgeStatus: String? = nil,
         purgeTaskId: String? = nil,
         purgedAt: String? = nil,
+        retentionScope: String? = nil,
+        chatConversationId: String? = nil,
+        saveToDocuments: Bool? = nil,
         createdAt: String = "",
         updatedAt: String = "",
         artifacts: [DocumentArtifactItem] = []
@@ -433,6 +442,9 @@ struct LearningDocumentItem: Decodable, Equatable, Identifiable {
         self.purgeStatus = purgeStatus
         self.purgeTaskId = purgeTaskId
         self.purgedAt = purgedAt
+        self.retentionScope = retentionScope
+        self.chatConversationId = chatConversationId
+        self.saveToDocuments = saveToDocuments
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.artifacts = artifacts
@@ -645,6 +657,8 @@ struct ChatConversation: Decodable, Equatable, Identifiable {
     let id: String
     let workspaceId: String
     let title: String
+    let titleSource: String?
+    let titleGeneratedAt: String?
     let lastMessageAt: String?
     let createdAt: String
     let updatedAt: String
@@ -653,9 +667,31 @@ struct ChatConversation: Decodable, Equatable, Identifiable {
         case id
         case workspaceId = "workspace_id"
         case title
+        case titleSource = "title_source"
+        case titleGeneratedAt = "title_generated_at"
         case lastMessageAt = "last_message_at"
         case createdAt = "created_at"
         case updatedAt = "updated_at"
+    }
+
+    init(
+        id: String,
+        workspaceId: String,
+        title: String,
+        titleSource: String? = nil,
+        titleGeneratedAt: String? = nil,
+        lastMessageAt: String?,
+        createdAt: String,
+        updatedAt: String
+    ) {
+        self.id = id
+        self.workspaceId = workspaceId
+        self.title = title
+        self.titleSource = titleSource
+        self.titleGeneratedAt = titleGeneratedAt
+        self.lastMessageAt = lastMessageAt
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
     }
 }
 
@@ -668,6 +704,8 @@ struct ChatMessageAttachment: Decodable, Equatable, Identifiable {
     let fileSize: Int64?
     let status: String?
     let availability: String?
+    let retentionScope: String?
+    let saveToDocuments: Bool?
 
     var id: String { documentId }
     var isImage: Bool {
@@ -685,6 +723,8 @@ struct ChatMessageAttachment: Decodable, Equatable, Identifiable {
         case fileSize = "file_size"
         case status
         case availability
+        case retentionScope = "retention_scope"
+        case saveToDocuments = "save_to_documents"
     }
 
     init(from decoder: Decoder) throws {
@@ -697,6 +737,8 @@ struct ChatMessageAttachment: Decodable, Equatable, Identifiable {
         fileSize = try container.decodeIfPresent(Int64.self, forKey: .fileSize)
         status = try container.decodeIfPresent(String.self, forKey: .status)
         availability = try container.decodeIfPresent(String.self, forKey: .availability)
+        retentionScope = try container.decodeIfPresent(String.self, forKey: .retentionScope)
+        saveToDocuments = try container.decodeIfPresent(Bool.self, forKey: .saveToDocuments)
     }
 }
 

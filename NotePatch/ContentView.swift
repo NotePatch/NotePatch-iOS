@@ -2423,8 +2423,9 @@ private struct OpenClawChatTab: View {
     @ObservedObject var chatState: OpenClawViewState
     @ObservedObject var composerState: OpenClawComposerState
     @Environment(\.workbenchBottomObstruction) private var bottomObstruction
-    @State private var isRenaming = false
+    @State private var renamingConversation: ChatConversation?
     @State private var titleDraft = ""
+    @State private var isConversationDrawerOpen = false
     @State private var isComposerFocused = false
     @State private var isShowingAIPhotoLibrary = false
     @State private var isShowingAIFileImporter = false
@@ -2433,14 +2434,60 @@ private struct OpenClawChatTab: View {
     @State private var keyboardFrame: CGRect = .null
 
     var body: some View {
-        GeometryReader { geometry in
-            let keyboardOffset = keyboardAvoidanceOffset(
-                contentFrame: geometry.frame(in: .global),
-                keyboardFrame: keyboardFrame
-            )
-            let isKeyboardPresented = keyboardOffset > 0
+        ZStack(alignment: .leading) {
+            GeometryReader { geometry in
+                let keyboardOffset = keyboardAvoidanceOffset(
+                    contentFrame: geometry.frame(in: .global),
+                    keyboardFrame: keyboardFrame
+                )
+                let isKeyboardPresented = keyboardOffset > 0
 
-            VStack(spacing: 0) {
+                VStack(spacing: 0) {
+                // ——— Conversation header (fixed) ———
+                HStack(spacing: 10) {
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(chatState.selectedConversation?.title ?? localized("chat.new_conversation"))
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(NPColors.textPrimary)
+                            .lineLimit(1)
+                            .accessibilityIdentifier("openClawTab")
+                        Text(chatState.selectedConversation == nil
+                             ? localized("chat.ai.auto_saved_after_first_message")
+                             : localized("chat.ai.saved_session"))
+                            .font(.system(size: 11, weight: .regular))
+                            .foregroundStyle(NPColors.textSecondary)
+                            .lineLimit(1)
+                    }
+                    Spacer()
+                    Button {
+                        dismissComposer()
+                        withAnimation(.npInteractive) {
+                            isConversationDrawerOpen = true
+                        }
+                    } label: {
+                        Image(systemName: "sidebar.left")
+                            .font(.system(size: 15, weight: .medium))
+                            .foregroundStyle(NPColors.textSecondary)
+                            .frame(width: 32, height: 32)
+                            .background(NPColors.interactive.opacity(0.4))
+                            .clipShape(Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(chatState.isHistoryLoading || chatState.isConversationMutating)
+                    .accessibilityLabel(localized("chat.drawer.open_accessibility"))
+                    .accessibilityIdentifier("chatHistoryButton")
+                    NotePatchLogoImage(height: 24)
+                        .frame(width: 58, height: 36, alignment: .trailing)
+                        .accessibilityHidden(true)
+                }
+                .padding(.horizontal, NPSpacing.outer)
+                .padding(.vertical, 6)
+                .padding(8)
+                .modifier(NPListItemModifier())
+                .padding(.horizontal, 16)
+                .padding(.top, 6)
+                .padding(.bottom, 4)
+
                 // ——— Brand Hero ———
                 ScrollView {
                     VStack(spacing: 0) {
@@ -2453,75 +2500,6 @@ private struct OpenClawChatTab: View {
                         )
                     }
                     .frame(height: 0)
-
-                    // ——— Conversation header ———
-                    HStack(spacing: 10) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(chatState.selectedConversation?.title ?? localized("chat.new_conversation"))
-                                .font(.system(size: 16, weight: .semibold))
-                                .foregroundStyle(NPColors.textPrimary)
-                                .lineLimit(1)
-                                .accessibilityIdentifier("openClawTab")
-                            Text(chatState.selectedConversation == nil
-                                 ? localized("chat.ai.auto_saved_after_first_message")
-                                 : localized("chat.ai.saved_session"))
-                                .font(.system(size: 12, weight: .regular))
-                                .foregroundStyle(NPColors.textSecondary)
-                                .lineLimit(1)
-                        }
-                        Spacer()
-                        Menu {
-                            Button {
-                                dismissComposer()
-                                model.startNewConversation()
-                            } label: {
-                                Label(localized("chat.new_conversation"), systemImage: "square.and.pencil")
-                            }
-                            if let conversation = chatState.selectedConversation {
-                                Button {
-                                    dismissComposer()
-                                    titleDraft = conversation.title
-                                    isRenaming = true
-                                } label: {
-                                    Label(localized("chat.rename"), systemImage: "pencil")
-                                }
-                                Button(role: .destructive) {
-                                    dismissComposer()
-                                    model.deleteCurrentConversation()
-                                } label: {
-                                    Label(localized("chat.delete_conversation"), systemImage: "trash")
-                                }
-                            }
-                            if !chatState.conversations.isEmpty {
-                                Divider()
-                                ForEach(chatState.conversations) { conversation in
-                                    Button {
-                                        dismissComposer()
-                                        model.selectConversation(conversation.id)
-                                    } label: {
-                                        Label(conversation.title, systemImage: conversation.id == chatState.selectedConversationId ? "checkmark" : "bubble.left")
-                                    }
-                                }
-                            }
-                        } label: {
-                            Image(systemName: "ellipsis.circle")
-                                .font(.system(size: 18, weight: .medium))
-                                .foregroundStyle(NPColors.textSecondary)
-                                .frame(width: 40, height: 40)
-                                .background(NPColors.interactive.opacity(0.4))
-                                .clipShape(Circle())
-                        }
-                        .disabled(chatState.isHistoryLoading || chatState.isConversationMutating || chatState.isSending)
-                        .accessibilityLabel(localized("chat.conversation_actions"))
-                        CompactPageLogo()
-                    }
-                    .padding(.horizontal, NPSpacing.outer)
-                    .padding(.vertical, 14)
-                    .padding(12)
-                    .modifier(NPListItemModifier())
-                    .padding(.horizontal, 16)
-                    .padding(.top, 12)
-                    .padding(.bottom, 12)
 
                     // ——— Welcome card ———
                     if chatState.messages.isEmpty {
@@ -2568,21 +2546,34 @@ private struct OpenClawChatTab: View {
                 }
                 // ——— Composer bar ———
                 VStack(spacing: 0) {
-                    Divider()
-                        .background(NPColors.interactive.opacity(0.4))
-                        .opacity(isKeyboardPresented ? 0 : 1)
                     composer
                         .padding(.horizontal, NPSpacing.outer)
                         .padding(.vertical, 10)
                 }
                 .background {
-                    Rectangle()
-                        .fill(.thinMaterial)
-                        .opacity(isKeyboardPresented ? 0 : 1)
+                    LinearGradient(
+                        stops: [
+                            .init(color: NPColors.background.opacity(0), location: 0),
+                            .init(color: NPColors.background, location: 0.25),
+                            .init(color: NPColors.background, location: 1)
+                        ],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                    .opacity(isKeyboardPresented ? 0 : 1)
                 }
                 .padding(.bottom, isKeyboardPresented ? NPSpacing.small : bottomObstruction)
                 .offset(y: -keyboardOffset)
                 .animation(.easeOut(duration: 0.22), value: keyboardOffset)
+            }
+            }
+
+            if !isConversationDrawerOpen {
+                drawerEdgeHotZone
+            }
+            if isConversationDrawerOpen {
+                conversationDrawer
+                    .transition(.move(edge: .leading))
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) {
@@ -2633,15 +2624,25 @@ private struct OpenClawChatTab: View {
             }
             .ignoresSafeArea()
         }
-        .alert(localized("chat.rename_title"), isPresented: $isRenaming) {
+        .alert(
+            localized("chat.rename_title"),
+            isPresented: Binding(
+                get: { renamingConversation != nil },
+                set: { if !$0 { renamingConversation = nil } }
+            )
+        ) {
             TextField(localized("chat.title_placeholder"), text: $titleDraft)
             Button(localized("common.cancel"), role: .cancel) {}
-            Button(localized("common.save")) { model.renameCurrentConversation(to: titleDraft) }
-                .disabled(
-                    chatState.isConversationMutating ||
-                    titleDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
-                    titleDraft.trimmingCharacters(in: .whitespacesAndNewlines).count > 160
-                )
+            Button(localized("common.save")) {
+                if let conversation = renamingConversation {
+                    model.renameConversation(conversation.id, to: titleDraft)
+                }
+            }
+            .disabled(
+                chatState.isConversationMutating ||
+                titleDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+                titleDraft.trimmingCharacters(in: .whitespacesAndNewlines).count > 160
+            )
         }
         .background(NPColors.background)
     }
@@ -2657,6 +2658,186 @@ private struct OpenClawChatTab: View {
     private func dismissComposer() {
         isComposerFocused = false
         dismissActiveKeyboard()
+    }
+
+    // MARK: - Conversation Drawer
+
+    private func closeConversationDrawer() {
+        withAnimation(.npInteractive) {
+            isConversationDrawerOpen = false
+        }
+    }
+
+    private var drawerEdgeHotZone: some View {
+        HStack(spacing: 0) {
+            Color.clear
+                .frame(width: 20)
+                .frame(maxHeight: .infinity)
+                .contentShape(Rectangle())
+                .simultaneousGesture(
+                    DragGesture(minimumDistance: 12)
+                        .onEnded { value in
+                            guard value.translation.width > 40,
+                                  value.translation.width > abs(value.translation.height) * 1.5 else { return }
+                            dismissComposer()
+                            withAnimation(.npInteractive) {
+                                isConversationDrawerOpen = true
+                            }
+                        }
+                )
+            Spacer(minLength: 0)
+        }
+        .allowsHitTesting(true)
+        .accessibilityHidden(true)
+    }
+
+    private var conversationDrawer: some View {
+        GeometryReader { proxy in
+            let drawerWidth = min(320, proxy.size.width * 0.82)
+            ZStack(alignment: .leading) {
+                Color.black.opacity(0.32)
+                    .ignoresSafeArea()
+                    .accessibilityIdentifier("chatConversationBackdrop")
+                    .onTapGesture {
+                        closeConversationDrawer()
+                    }
+                conversationDrawerPanel
+                    .frame(width: drawerWidth)
+                    .frame(maxHeight: .infinity)
+                    .simultaneousGesture(
+                        DragGesture(minimumDistance: 16)
+                            .onEnded { value in
+                                guard value.translation.width < -48,
+                                      abs(value.translation.width) > abs(value.translation.height) else { return }
+                                closeConversationDrawer()
+                            }
+                    )
+            }
+        }
+        .ignoresSafeArea()
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("chatConversationDrawer")
+    }
+
+    private var conversationDrawerPanel: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 10) {
+                Text(localized("chat.drawer.title"))
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(NPColors.textPrimary)
+                Spacer()
+                Button {
+                    closeConversationDrawer()
+                    model.startNewConversation()
+                } label: {
+                    Image(systemName: "square.and.pencil")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(NPColors.brandDark)
+                        .frame(width: 40, height: 40)
+                        .background(NPColors.interactive.opacity(0.4))
+                        .clipShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(localized("chat.new_conversation"))
+                .accessibilityIdentifier("chatNewConversationButton")
+            }
+            .padding(.horizontal, NPSpacing.outer)
+            .padding(.top, 18)
+            .padding(.bottom, 10)
+
+            if chatState.conversations.isEmpty {
+                Text(localized("chat.drawer.empty"))
+                    .font(.system(size: 13, weight: .regular))
+                    .foregroundStyle(NPColors.textSecondary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .padding(NPSpacing.outer)
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 4) {
+                        ForEach(chatState.conversations) { conversation in
+                            conversationDrawerRow(conversation)
+                        }
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.bottom, 16)
+                }
+            }
+        }
+        .background { conversationDrawerBackground }
+        .shadow(color: .black.opacity(0.12), radius: 24, x: 8, y: 0)
+    }
+
+    @ViewBuilder
+    private var conversationDrawerBackground: some View {
+        if #available(iOS 26.0, *) {
+            Color.clear.glassEffect(.regular, in: Rectangle())
+        } else {
+            Rectangle().fill(.regularMaterial)
+        }
+    }
+
+    private func conversationDrawerRow(_ conversation: ChatConversation) -> some View {
+        let isSelected = conversation.id == chatState.selectedConversationId
+        return Button {
+            closeConversationDrawer()
+            model.selectConversation(conversation.id)
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: "bubble.left")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(isSelected ? NPColors.brandDark : NPColors.textSecondary)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(conversation.title)
+                        .font(.system(size: 14, weight: isSelected ? .semibold : .regular))
+                        .foregroundStyle(NPColors.textPrimary)
+                        .lineLimit(1)
+                    let timestamp = conversationTimestamp(conversation)
+                    if !timestamp.isEmpty {
+                        Text(timestamp)
+                            .font(.system(size: 11, weight: .regular))
+                            .foregroundStyle(NPColors.textTertiary)
+                            .lineLimit(1)
+                    }
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 9)
+            .background {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(isSelected ? NPColors.brand.opacity(0.14) : Color.clear)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .contextMenu {
+            Button {
+                titleDraft = conversation.title
+                renamingConversation = conversation
+            } label: {
+                Label(localized("chat.rename"), systemImage: "pencil")
+            }
+            Button(role: .destructive) {
+                model.deleteConversation(conversation.id)
+            } label: {
+                Label(localized("chat.delete_conversation"), systemImage: "trash")
+            }
+        }
+        .accessibilityIdentifier("chatConversationRow.\(conversation.id)")
+    }
+
+    private func conversationTimestamp(_ conversation: ChatConversation) -> String {
+        let raw = conversation.lastMessageAt ?? conversation.createdAt
+        guard !raw.isEmpty else { return "" }
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let plain = ISO8601DateFormatter()
+        plain.formatOptions = [.withInternetDateTime]
+        guard let date = fractional.date(from: raw) ?? plain.date(from: raw) else { return "" }
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .short
+        return formatter.localizedString(for: date, relativeTo: Date())
     }
 
     private func dismissKeyboardIfNeeded(
@@ -2794,6 +2975,11 @@ private struct OpenClawChatTab: View {
             } label: {
                 Label(localized("chat.choose_file"), systemImage: "folder")
             }
+            Divider()
+            Toggle(isOn: $composerState.saveAttachmentsToWorkspace) {
+                Label(localized("chat.save_to_workspace"), systemImage: "folder.badge.plus")
+            }
+            .accessibilityIdentifier("chatSaveToWorkspaceToggle")
         } label: {
             Image(systemName: "plus")
                 .font(.system(size: 17, weight: .semibold))

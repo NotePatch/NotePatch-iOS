@@ -311,6 +311,7 @@
 "document_kind.exam" = "试卷";
 "document_kind.answer_key" = "答案参考";
 "document_kind.rubric" = "评分标准";
+"document_kind.chat_attachment" = "聊天附件";
 "file_type.image" = "图片";
 "file_type.audio" = "音频";
 "file_type.video" = "视频";
@@ -566,6 +567,10 @@
 "chat.rename" = "重命名";
 "chat.delete_conversation" = "删除对话";
 "chat.conversation_actions" = "对话操作";
+"chat.drawer.title" = "对话";
+"chat.drawer.empty" = "暂无历史对话";
+"chat.drawer.open_accessibility" = "打开对话列表";
+"chat.save_to_workspace" = "添加到工作区";
 "chat.welcome.title" = "今天想让 NotePatch AI 帮你做什么？";
 "chat.welcome.message" = "整理想法、总结笔记并分析你的文档。";
 "chat.rename_title" = "重命名对话";

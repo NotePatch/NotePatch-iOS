@@ -311,6 +311,7 @@
 "document_kind.exam" = "Exam";
 "document_kind.answer_key" = "Answer Key";
 "document_kind.rubric" = "Rubric";
+"document_kind.chat_attachment" = "Chat attachment";
 "file_type.image" = "Image";
 "file_type.audio" = "Audio";
 "file_type.video" = "Video";
@@ -566,6 +567,10 @@
 "chat.rename" = "Rename";
 "chat.delete_conversation" = "Delete conversation";
 "chat.conversation_actions" = "Conversation actions";
+"chat.drawer.title" = "Chats";
+"chat.drawer.empty" = "No conversations yet";
+"chat.drawer.open_accessibility" = "Open conversation list";
+"chat.save_to_workspace" = "Save to workspace";
 "chat.welcome.title" = "How can NotePatch AI help today?";
 "chat.welcome.message" = "Organize ideas, summarize notes, and analyze your documents.";
 "chat.rename_title" = "Rename conversation";

@@ -1694,6 +1694,51 @@ struct NotePatchTests {
         #expect(model.errorMessage?.contains("storage unavailable") == true)
     }
 
+
+    @Test func createUploadSession_includesSaveToDocumentsForChatAttachment() async throws {
+        var capturedBodies: [[String: Any]] = []
+        let session = Self.mockSession { request in
+            #expect(request.httpMethod == "POST")
+            #expect(request.url?.path == "/api/v1/workspaces/ws-1/documents/upload-session")
+            if let body = Self.requestBodyData(request) {
+                let object = try? JSONSerialization.jsonObject(with: body) as? [String: Any]
+                if let object { capturedBodies.append(object) }
+            }
+            return Self.response(request, status: 200, body: Self.uploadSessionJSON)
+        }
+        let client = LearningBackendClient(
+            baseURL: "https://api.test",
+            accessToken: "access",
+            refreshToken: "refresh",
+            session: session
+        )
+
+        _ = try await client.createUploadSession(
+            workspaceId: "ws-1",
+            filename: "question.png",
+            mimeType: "image/png",
+            fileSize: 1024,
+            documentKind: "chat_attachment",
+            learningMetadata: nil,
+            saveToDocuments: false
+        )
+        _ = try await client.createUploadSession(
+            workspaceId: "ws-1",
+            filename: "note.pdf",
+            mimeType: "application/pdf",
+            fileSize: 2048,
+            documentKind: "note",
+            learningMetadata: nil,
+            saveToDocuments: nil
+        )
+
+        #expect(capturedBodies.count == 2)
+        #expect(capturedBodies.first?["document_kind"] as? String == "chat_attachment")
+        #expect(capturedBodies.first?["save_to_documents"] as? Bool == false)
+        #expect(capturedBodies.last?["document_kind"] as? String == "note")
+        #expect(capturedBodies.last?["save_to_documents"] == nil)
+    }
+
     @Test func artifactAndOcrRequests_useDocumentScopedEndpoints() async throws {
         var paths: [String] = []
         let session = Self.mockSession { request in
@@ -3603,6 +3648,68 @@ private extension NotePatchTests {
             }
         }
     }
+    @Test @MainActor func openClawChatAttachment_saveToWorkspaceToggleIsSent() async throws {
+        for expectedSaveToWorkspace in [true, false] {
+            let suiteName = "NotePatchChatAttachmentSaveTests.\(UUID().uuidString)"
+            let defaults = try #require(UserDefaults(suiteName: suiteName))
+            defer { defaults.removePersistentDomain(forName: suiteName) }
+            var capturedBody: [String: Any]?
+            let session = Self.mockSession { request in
+                let key = "\(request.httpMethod ?? "") \(request.url?.path ?? "")"
+                switch key {
+                case "POST /api/v1/workspaces/ws-1/documents/upload-session":
+                    if let body = Self.requestBodyData(request) {
+                        capturedBody = try? JSONSerialization.jsonObject(with: body) as? [String: Any]
+                    }
+                    return Self.response(request, status: 500, body: #"{"detail":"storage unavailable"}"#)
+                default:
+                    return Self.response(request, status: 500, body: #"{"detail":"unexpected request"}"#)
+                }
+            }
+            let cacheDirectory = FileManager.default.temporaryDirectory
+                .appendingPathComponent("NotePatchChatAttachmentSaveTests-\(UUID().uuidString)", isDirectory: true)
+            try FileManager.default.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: cacheDirectory) }
+            let imageURL = cacheDirectory.appendingPathComponent("question.png")
+            let image = UIGraphicsImageRenderer(size: CGSize(width: 8, height: 8)).image { context in
+                UIColor.systemBlue.setFill()
+                context.fill(CGRect(x: 0, y: 0, width: 8, height: 8))
+            }
+            try #require(image.pngData()).write(to: imageURL)
+            let file = LocalUploadFile(url: imageURL, filename: "question.png", mimeType: "image/png")
+
+            let model = NotePatchViewModel(
+                settings: SettingsStore(defaults: defaults, keychain: KeychainStore(service: suiteName)),
+                backendSession: session,
+                tusSession: session,
+                cacheDirectory: cacheDirectory,
+                taskEventStreamingEnabled: false
+            )
+            model.session = SavedSession(
+                baseURL: "https://api.test",
+                tusBaseURL: "https://tus.test/files/",
+                accessToken: "access",
+                refreshToken: "refresh",
+                expiresAt: "x",
+                userId: "user-1",
+                email: "user@example.test",
+                fullName: nil,
+                selectedWorkspaceId: "ws-1",
+                aiHistoryEnabled: true
+            )
+            model.selectedWorkspaceId = "ws-1"
+            model.openClawComposerState.text = "分析图片"
+            model.openClawComposerState.attachments = [file]
+            model.openClawComposerState.saveAttachmentsToWorkspace = expectedSaveToWorkspace
+
+            #expect(model.startOpenClawChat(prompt: model.openClawComposerState.text, attachments: [file]))
+            try await Self.waitUntil { !model.isOpenClawSending }
+
+            #expect(capturedBody?["document_kind"] as? String == "chat_attachment")
+            #expect(capturedBody?["save_to_documents"] as? Bool == expectedSaveToWorkspace)
+        }
+    }
+
 }
 
 @MainActor

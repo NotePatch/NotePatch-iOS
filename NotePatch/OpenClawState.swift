@@ -44,6 +44,7 @@ final class OpenClawComposerState: ObservableObject {
     @Published var text = ""
     @Published var measuredTextHeight: CGFloat = 44
     @Published var attachments: [LocalUploadFile] = []
+    @Published var saveAttachmentsToWorkspace = true
 
     func removeAttachment(_ file: LocalUploadFile) {
         attachments.removeAll { $0.id == file.id }
