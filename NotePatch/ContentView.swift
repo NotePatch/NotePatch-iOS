@@ -925,8 +925,8 @@ private struct CompactPageHeader: View {
 
 private struct CompactPageLogo: View {
     var body: some View {
-        NotePatchLogoImage(height: 24)
-            .frame(width: 58, height: 36, alignment: .trailing)
+        NotePatchLogoImage(height: 48)
+            .frame(width: 116, height: 72, alignment: .trailing)
             .accessibilityHidden(true)
     }
 }
