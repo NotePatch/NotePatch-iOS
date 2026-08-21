@@ -132,9 +132,9 @@ final class DocumentThumbnailPipeline {
             }
             finishConsumer(consumer, forKey: key, result: result)
             return result
-        } onCancel: { [weak self] in
+        } onCancel: {
             Task { @MainActor in
-                self?.cancelConsumer(consumer, forKey: key)
+                DocumentThumbnailPipeline.shared.cancelConsumer(consumer, forKey: key)
             }
         }
     }

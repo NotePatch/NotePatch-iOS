@@ -17,6 +17,7 @@ private actor ThumbnailTestCounter {
 }
 
 @Suite(.serialized)
+@MainActor
 struct NotePatchTests {
     // Hosted tests share the app container, so force the shared localization to
     // simplified Chinese instead of depending on the simulator's ambient defaults.

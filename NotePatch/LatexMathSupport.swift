@@ -1,7 +1,7 @@
 import WebKit
 
 enum LatexMathSupport {
-    nonisolated static func install(into configuration: WKWebViewConfiguration) {
+    static func install(into configuration: WKWebViewConfiguration) {
         configuration.userContentController.addUserScript(
             WKUserScript(
                 source: renderingScript,
