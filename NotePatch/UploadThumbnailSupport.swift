@@ -25,7 +25,7 @@ func uploadThumbnailCacheKey(for file: LocalUploadFile) -> String {
     return "\(file.url.standardizedFileURL.path)|\(size)|\(modified)"
 }
 
-func downsampleUploadImage(at url: URL, maxPixelSize: Int) -> UIImage? {
+nonisolated func downsampleUploadImage(at url: URL, maxPixelSize: Int) -> UIImage? {
     guard maxPixelSize > 0,
           let source = CGImageSourceCreateWithURL(url as CFURL, nil),
           let image = CGImageSourceCreateThumbnailAtIndex(

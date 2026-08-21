@@ -1,0 +1,4 @@
+"CFBundleDisplayName" = "NotePatch";
+"NSCameraUsageDescription" = "NotePatch needs camera access to photograph documents for upload.";
+"NSPhotoLibraryAddUsageDescription" = "NotePatch may save temporary document previews while processing uploads.";
+"NSPhotoLibraryUsageDescription" = "NotePatch needs photo library access to upload selected images.";

@@ -6,11 +6,36 @@ final class NotePatchUITests: XCTestCase {
         XCUIDevice.shared.orientation = .portrait
     }
 
-    private func makeApp(_ arguments: [String] = []) -> XCUIApplication {
+    private func makeApp(
+        _ arguments: [String] = [],
+        language: String = "simplifiedChinese"
+    ) -> XCUIApplication {
         let app = XCUIApplication()
-        app.launchArguments.append(contentsOf: ["-NotePatchUITestLanguage", "simplifiedChinese"])
+        app.launchArguments.append(contentsOf: ["-NotePatchUITestLanguage", language])
         app.launchArguments.append(contentsOf: arguments)
         return app
+    }
+
+    @MainActor
+    func testSupportedLanguagesRenderConsistentTabLabels() throws {
+        let expectations = [
+            ("simplifiedChinese", ["主页", "笔记", "AI", "我的"]),
+            ("traditionalChinese", ["首頁", "筆記", "AI", "我的"]),
+            ("english", ["Home", "Notes", "AI", "Me"])
+        ]
+        let identifiers = ["tab.home", "tab.notes", "tab.ai", "tab.me"]
+
+        for (language, labels) in expectations {
+            let app = makeApp(["-NotePatchUITestWorkbench"], language: language)
+            app.launch()
+            XCTAssertTrue(app.otherElements["workbenchTabs"].waitForExistence(timeout: 5))
+            for (identifier, label) in zip(identifiers, labels) {
+                let button = app.buttons[identifier]
+                XCTAssertTrue(button.exists)
+                XCTAssertEqual(button.label, label)
+            }
+            app.terminate()
+        }
     }
 
     @MainActor
@@ -37,11 +62,11 @@ final class NotePatchUITests: XCTestCase {
         app.buttons["loginButton"].tap()
 
         XCTAssertTrue(app.otherElements["workbenchTabs"].waitForExistence(timeout: 8))
-        XCTAssertTrue(app.buttons["tab.documents"].exists)
+        XCTAssertTrue(app.buttons["tab.home"].exists)
         XCTAssertTrue(app.buttons["tab.notes"].exists)
         XCTAssertTrue(app.buttons["tab.ai"].exists)
         XCTAssertTrue(app.buttons["tab.me"].exists)
-        XCTAssertTrue(app.descendants(matching: .any)["globalStatusBanner"].exists)
+        XCTAssertTrue(app.descendants(matching: .any)["homeDashboard"].exists)
         app.buttons["tab.me"].tap()
         XCTAssertTrue(app.staticTexts["My Workspace"].exists)
     }
@@ -52,24 +77,34 @@ final class NotePatchUITests: XCTestCase {
         app.launch()
 
         XCTAssertTrue(app.otherElements["workbenchTabs"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.buttons["tab.documents"].exists)
+        XCTAssertTrue(app.buttons["tab.home"].exists)
         XCTAssertTrue(app.buttons["tab.notes"].exists)
         XCTAssertTrue(app.buttons["tab.ai"].exists)
         XCTAssertTrue(app.buttons["tab.me"].exists)
-        app.buttons["tab.documents"].tap()
-        let documentSections = app.segmentedControls["documentsSectionPicker"]
-        XCTAssertTrue(documentSections.waitForExistence(timeout: 3))
-        XCTAssertTrue(documentSections.buttons["文档"].exists)
-        XCTAssertTrue(documentSections.buttons["任务"].exists)
-        documentSections.buttons["任务"].tap()
-        XCTAssertTrue(app.staticTexts["当前任务"].waitForExistence(timeout: 3))
-        app.buttons["tab.notes"].tap()
+        XCTAssertTrue(app.descendants(matching: .any)["homeSummary"].exists)
+        XCTAssertTrue(app.descendants(matching: .any)["homeRecentDocuments"].exists)
+        XCTAssertTrue(app.descendants(matching: .any)["homeRecentNotes"].exists)
+        XCTAssertTrue(app.descendants(matching: .any)["homeReviewShortcuts"].exists)
+        XCTAssertTrue(app.buttons["homeMetricDocuments"].exists)
+        XCTAssertTrue(app.buttons["homeMetricLearningUnits"].exists)
+        XCTAssertTrue(app.buttons["homeMetricHomeworks"].exists)
+
+        app.buttons["homeMetricDocuments"].tap()
+        XCTAssertTrue(app.descendants(matching: .any)["documentsList"].waitForExistence(timeout: 3))
+        app.navigationBars.buttons.firstMatch.tap()
+
+        app.buttons["homeMetricLearningUnits"].tap()
+        XCTAssertTrue(app.descendants(matching: .any)["learningUnitsSection"].waitForExistence(timeout: 3))
         let notesSections = app.segmentedControls["notesSectionPicker"]
         XCTAssertTrue(notesSections.waitForExistence(timeout: 3))
-        notesSections.buttons["复习"].tap()
-        let reviewSections = app.segmentedControls["reviewSectionPicker"]
-        XCTAssertTrue(reviewSections.waitForExistence(timeout: 3))
-        XCTAssertTrue(reviewSections.buttons["闪卡"].exists)
+        XCTAssertTrue(app.descendants(matching: .any)["reviewSectionPicker"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.buttons["闪卡"].exists)
+
+        app.buttons["tab.home"].tap()
+        XCTAssertTrue(app.descendants(matching: .any)["homeDashboard"].waitForExistence(timeout: 3))
+        app.buttons["homeMetricHomeworks"].tap()
+        XCTAssertTrue(app.descendants(matching: .any)["homeworkGradingSection"].waitForExistence(timeout: 3))
+
         app.buttons["tab.me"].tap()
         XCTAssertTrue(app.staticTexts["My Workspace"].waitForExistence(timeout: 3))
         XCTAssertFalse(app.staticTexts["family"].exists)
@@ -119,9 +154,8 @@ final class NotePatchUITests: XCTestCase {
         XCTAssertTrue(app.otherElements["workbenchTabs"].waitForExistence(timeout: 5))
         app.buttons["tab.notes"].tap()
         app.segmentedControls["notesSectionPicker"].buttons["复习"].tap()
-        let reviewSections = app.segmentedControls["reviewSectionPicker"]
-        XCTAssertTrue(reviewSections.waitForExistence(timeout: 3))
-        reviewSections.buttons["闪卡"].tap()
+        XCTAssertTrue(app.descendants(matching: .any)["reviewSectionPicker"].waitForExistence(timeout: 3))
+        app.buttons["闪卡"].tap()
 
         let card = app.buttons["flashcardCard"]
         XCTAssertTrue(card.waitForExistence(timeout: 3))
@@ -135,13 +169,11 @@ final class NotePatchUITests: XCTestCase {
     }
 
     @MainActor
-    func testOfflineScanningStatusAndLearningUnitMergeConfirmation() throws {
+    func testOfflineLearningUnitMergeConfirmation() throws {
         let app = makeApp(["-NotePatchUITestWorkbench"])
         app.launch()
 
         XCTAssertTrue(app.otherElements["workbenchTabs"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.descendants(matching: .any)["documentScanStatus-scan-doc"].waitForExistence(timeout: 3))
-
         app.buttons["tab.notes"].tap()
         app.segmentedControls["notesSectionPicker"].buttons["复习"].tap()
         let mergeButton = app.buttons["mergeLearningUnitsButton"]
@@ -164,8 +196,9 @@ final class NotePatchUITests: XCTestCase {
         app.launch()
 
         XCTAssertTrue(app.otherElements["workbenchTabs"].waitForExistence(timeout: 5))
-        app.buttons["tab.documents"].tap()
-        app.segmentedControls.firstMatch.buttons["任务"].tap()
+        XCTAssertTrue(app.buttons["homeActiveTask"].waitForExistence(timeout: 3))
+        app.buttons["homeActiveTask"].tap()
+        XCTAssertTrue(app.descendants(matching: .any)["taskScreen"].waitForExistence(timeout: 3))
 
         XCTAssertTrue(app.staticTexts["文档清理"].waitForExistence(timeout: 3))
         XCTAssertTrue(app.staticTexts["失败"].exists)
@@ -178,8 +211,9 @@ final class NotePatchUITests: XCTestCase {
         app.launch()
 
         XCTAssertTrue(app.otherElements["workbenchTabs"].waitForExistence(timeout: 5))
-        app.buttons["tab.documents"].tap()
+        app.buttons["tab.home"].tap()
         app.buttons["uploadFAB"].tap()
+        XCTAssertTrue(app.descendants(matching: .any)["uploadScreen"].waitForExistence(timeout: 3))
         XCTAssertTrue(app.staticTexts["待上传"].waitForExistence(timeout: 3))
         XCTAssertTrue(app.buttons["uploadQueueThumbnail"].waitForExistence(timeout: 3))
         XCTAssertTrue(app.buttons["uploadSelectedQueueButton"].exists)
@@ -191,6 +225,27 @@ final class NotePatchUITests: XCTestCase {
             evaluatedWith: app.buttons["uploadQueueThumbnail"]
         )
         wait(for: [thumbnailRemoved], timeout: 3)
+    }
+
+    @MainActor
+    func testUploadFABOpensFromEveryWorkbenchTab() throws {
+        let app = makeApp(["-NotePatchUITestWorkbench"])
+        app.launch()
+
+        XCTAssertTrue(app.otherElements["workbenchTabs"].waitForExistence(timeout: 5))
+        for tabIdentifier in ["tab.home", "tab.notes", "tab.ai", "tab.me"] {
+            app.buttons[tabIdentifier].tap()
+
+            let uploadButton = app.buttons["uploadFAB"]
+            XCTAssertTrue(uploadButton.waitForExistence(timeout: 2), "Missing upload button on \(tabIdentifier)")
+            XCTAssertTrue(uploadButton.isHittable, "Upload button is not hittable on \(tabIdentifier)")
+            uploadButton.tap()
+
+            let closeButton = app.buttons["uploadScreen"]
+            XCTAssertTrue(closeButton.waitForExistence(timeout: 3), "Upload screen did not open from \(tabIdentifier)")
+            closeButton.tap()
+            XCTAssertFalse(closeButton.exists, "Upload screen did not close on \(tabIdentifier)")
+        }
     }
 
     @MainActor
@@ -294,6 +349,23 @@ final class NotePatchUITests: XCTestCase {
     }
 
     @MainActor
+    func testLastProfileActionScrollsAboveFloatingNavigation() throws {
+        let app = makeApp(["-NotePatchUITestWorkbench"])
+        app.launch()
+
+        XCTAssertTrue(app.otherElements["workbenchTabs"].waitForExistence(timeout: 5))
+        app.buttons["tab.me"].tap()
+        let signOut = app.buttons["profileSignOut"]
+        XCTAssertTrue(signOut.waitForExistence(timeout: 3))
+        let navigation = app.otherElements["workbenchTabs"]
+        for _ in 0..<6 where signOut.frame.maxY > navigation.frame.minY - 20 {
+            app.swipeUp()
+        }
+        XCTAssertTrue(signOut.isHittable)
+        XCTAssertLessThanOrEqual(signOut.frame.maxY, navigation.frame.minY - 20)
+    }
+
+    @MainActor
     func testLearningSearchAndGradingWorkflowIsAvailable() throws {
         let app = makeApp(["-NotePatchUITestWorkbench"])
         app.launch()
@@ -304,16 +376,15 @@ final class NotePatchUITests: XCTestCase {
         XCTAssertTrue(notesSections.waitForExistence(timeout: 3))
         notesSections.buttons["复习"].tap()
 
-        let segments = app.segmentedControls["reviewSectionPicker"]
-        XCTAssertTrue(segments.waitForExistence(timeout: 3))
-        segments.buttons["检索"].tap()
+        XCTAssertTrue(app.descendants(matching: .any)["reviewSectionPicker"].waitForExistence(timeout: 3))
+        app.buttons["检索"].tap()
         let query = app.textFields.firstMatch
         XCTAssertTrue(query.waitForExistence(timeout: 3))
         query.tap()
         query.typeText("一次函数")
         XCTAssertTrue(app.buttons["knowledgeSearchButton"].isEnabled)
 
-        segments.buttons["评分"].tap()
+        app.buttons["评分"].tap()
         XCTAssertTrue(app.staticTexts["作业评分"].waitForExistence(timeout: 3))
         XCTAssertTrue(app.buttons["gradeHomeworkButton"].exists)
         app.buttons["创建作业"].tap()

@@ -1,14 +1,19 @@
 import Foundation
 
 final class SettingsStore {
-    private static let legacyLearningBaseURL = "http://192.168.100.123:8001/api/v1"
-    private static let legacyTUSBaseURL = "http://192.168.100.123:1080/files/"
-    private static let previousDefaultLearningBaseURL = "https://5mbps.me:8443/notepatch/1"
-    private static let previousDefaultTUSBaseURLs = [
-        "https://5mbps.me:8443/notepatch/1/files/",
-        "https://5mbps.me:8443/notepatch/2/files/"
+    private static let previousDefaultLearningBaseURLs = [
+        "http://192.168.100.123:8001",
+        "http://192.168.100.123:8001/api/v1",
+        "https://5mbps.me:8443/notepatch/1",
+        "https://api.ls-jl.cn:8443/notepatch/1"
     ]
-    private static let apiBaseURLContractVersion = 3
+    private static let previousDefaultTUSBaseURLs = [
+        "http://192.168.100.123:1080/files/",
+        "https://5mbps.me:8443/notepatch/1/files/",
+        "https://5mbps.me:8443/notepatch/2/files/",
+        "https://api.ls-jl.cn:8443/notepatch/2/files/"
+    ]
+    private static let apiBaseURLContractVersion = 4
 
     private enum Keys {
         static let learningBaseURL = "learning_base_url"
@@ -36,10 +41,16 @@ final class SettingsStore {
 
     func loadBaseURL() -> String {
         let stored = defaults.string(forKey: Keys.learningBaseURL)
-        if defaults.integer(forKey: Keys.apiBaseURLContractVersion) < Self.apiBaseURLContractVersion {
-            let migrated = stored == Self.legacyLearningBaseURL || stored == Self.previousDefaultLearningBaseURL
-                ? defaultLearningBackendBaseURL
-                : migrateLegacyLearningBackendBaseURL(stored ?? defaultLearningBackendBaseURL)
+        let contractVersion = defaults.integer(forKey: Keys.apiBaseURLContractVersion)
+        if contractVersion < Self.apiBaseURLContractVersion {
+            let normalized = normalizeLearningBackendBaseURL(stored ?? defaultLearningBackendBaseURL)
+            let officialDefaults = Set(Self.previousDefaultLearningBaseURLs.map(normalizeLearningBackendBaseURL))
+            let migrated: String
+            if stored == nil || officialDefaults.contains(normalized) {
+                migrated = defaultLearningBackendBaseURL
+            } else {
+                migrated = normalized
+            }
             saveBaseURL(migrated)
             return migrated
         }
@@ -48,12 +59,13 @@ final class SettingsStore {
 
     func loadTUSBaseURL() -> String {
         let stored = defaults.string(forKey: Keys.tusBaseURL)
-        if stored == Self.legacyTUSBaseURL
-            || stored.map({ Self.previousDefaultTUSBaseURLs.contains($0) }) == true {
+        let normalized = normalizeTUSBaseURL(stored ?? defaultTUSDBaseURL)
+        let officialDefaults = Set(Self.previousDefaultTUSBaseURLs.map(normalizeTUSBaseURL))
+        if stored == nil || officialDefaults.contains(normalized) {
             saveTUSBaseURL(defaultTUSDBaseURL)
             return defaultTUSDBaseURL
         }
-        return normalizeTUSBaseURL(stored ?? defaultTUSDBaseURL)
+        return normalized
     }
 
     func saveBaseURL(_ baseURL: String) {

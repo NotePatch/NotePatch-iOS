@@ -4,18 +4,54 @@ import SwiftUI
 import UniformTypeIdentifiers
 import UIKit
 
+private let workbenchContentBottomPadding: CGFloat = 24
+
+private struct WorkbenchBottomObstructionKey: EnvironmentKey {
+    static let defaultValue: CGFloat = 0
+}
+
+private extension EnvironmentValues {
+    var workbenchBottomObstruction: CGFloat {
+        get { self[WorkbenchBottomObstructionKey.self] }
+        set { self[WorkbenchBottomObstructionKey.self] = newValue }
+    }
+}
+
+private struct WorkbenchBottomBarFramePreferenceKey: PreferenceKey {
+    static var defaultValue: CGRect = .null
+
+    static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
+        let next = nextValue()
+        if !next.isNull {
+            value = next
+        }
+    }
+}
+
+private struct WorkbenchContentBottomPaddingModifier: ViewModifier {
+    @Environment(\.workbenchBottomObstruction) private var obstruction
+
+    func body(content: Content) -> some View {
+        content.padding(.bottom, workbenchContentBottomPadding + obstruction)
+    }
+}
+
+private extension View {
+    func workbenchContentBottomPadding() -> some View {
+        modifier(WorkbenchContentBottomPaddingModifier())
+    }
+}
+
 struct ContentView: View {
     @StateObject private var model = NotePatchViewModel()
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
-        Group {
-            if model.session == nil {
-                AuthScreen(model: model)
-            } else {
-                WorkbenchScreen(model: model)
-            }
-        }
+        AuthenticationGate(
+            model: model,
+            session: model.session
+        )
+        .equatable()
         .task {
             await model.restoreIfNeeded()
         }
@@ -26,14 +62,40 @@ struct ContentView: View {
             model.handleScenePhase(newPhase)
         }
         .sheet(item: $model.downloadedPreview) { preview in
-            if preview.isImage {
+            switch preview.previewKind(
+                canQuickLookPreview: QLPreviewController.canPreview(preview.url as NSURL)
+            ) {
+            case .image:
                 ImagePreview(url: preview.url)
-            } else {
+            case .quickLook:
                 QuickLookPreview(url: preview.url)
+            case .unsupported:
+                UnsupportedFilePreview(preview: preview)
             }
         }
     }
 
+}
+
+private struct AuthenticationGate: View, Equatable {
+    let model: NotePatchViewModel
+    let session: SavedSession?
+
+    @ViewBuilder
+    var body: some View {
+        if session == nil {
+            AuthScreen(model: model)
+        } else {
+            WorkbenchScreen(
+                model: model,
+                navigationState: model.workbenchNavigationState
+            )
+        }
+    }
+
+    static func == (lhs: AuthenticationGate, rhs: AuthenticationGate) -> Bool {
+        lhs.model === rhs.model && lhs.session == rhs.session
+    }
 }
 
 // MARK: - Auth Screen
@@ -57,7 +119,7 @@ private struct AuthScreen: View {
                         VStack(spacing: NPSpacing.small) {
                             Text("NotePatch")
                                 .npTitle()
-                            Text("Scan, organize, and process your study documents")
+                            Text(localized("auth.tagline"))
                                 .npCaption()
                                 .lineSpacing(2)
                         }
@@ -69,8 +131,8 @@ private struct AuthScreen: View {
                     // Form card
                     VStack(spacing: NPSpacing.item) {
                         VStack(spacing: 10) {
-                            AuthField(title: "API Address", systemImage: "network") {
-                                TextField("https://api.ls-jl.cn:8443/notepatch/1", text: $model.apiBaseURLText)
+                            AuthField(title: "auth.api_address", systemImage: "network") {
+                                TextField(localized("auth.api_placeholder"), text: $model.apiBaseURLText)
                                     .textInputAutocapitalization(.never)
                                     .keyboardType(.URL)
                                     .accessibilityIdentifier("apiAddressField")
@@ -78,8 +140,8 @@ private struct AuthScreen: View {
 
                             Divider().background(NPColors.interactive.opacity(0.4))
 
-                            AuthField(title: "Email", systemImage: "envelope") {
-                                TextField("name@example.com", text: $model.emailText)
+                            AuthField(title: "auth.email", systemImage: "envelope") {
+                                TextField(localized("auth.email_placeholder"), text: $model.emailText)
                                     .textInputAutocapitalization(.never)
                                     .keyboardType(.emailAddress)
                                     .textContentType(.username)
@@ -88,16 +150,16 @@ private struct AuthScreen: View {
 
                             Divider().background(NPColors.interactive.opacity(0.4))
 
-                            AuthField(title: "Password", systemImage: "lock") {
-                                SecureField("Enter password", text: $model.passwordText)
+                            AuthField(title: "auth.password", systemImage: "lock") {
+                                SecureField(localized("auth.password_placeholder"), text: $model.passwordText)
                                     .textContentType(.password)
                                     .accessibilityIdentifier("passwordField")
                             }
 
                             Divider().background(NPColors.interactive.opacity(0.4))
 
-                            AuthField(title: "Full Name", systemImage: "person") {
-                                TextField("Enter when registering", text: $model.fullNameText)
+                            AuthField(title: "auth.full_name", systemImage: "person") {
+                                TextField(localized("auth.full_name_placeholder"), text: $model.fullNameText)
                                     .textContentType(.name)
                             }
                         }
@@ -114,7 +176,7 @@ private struct AuthScreen: View {
                                 ProgressView()
                                     .tint(NPColors.surface)
                             } else {
-                                Label("Sign In", systemImage: "arrow.right")
+                                Label(localized("auth.sign_in"), systemImage: "arrow.right")
                                     .font(.body.weight(.semibold))
                             }
                             Spacer()
@@ -129,7 +191,7 @@ private struct AuthScreen: View {
                         Button {
                             model.authenticate(register: true)
                         } label: {
-                            Label("Create Account", systemImage: "person.badge.plus")
+                            Label(localized("auth.create_account"), systemImage: "person.badge.plus")
                                 .frame(maxWidth: .infinity)
                         }
                         .buttonStyle(NPSecondaryButtonStyle())
@@ -138,7 +200,7 @@ private struct AuthScreen: View {
                         Button {
                             model.checkAPIConnection()
                         } label: {
-                            Label("Test Connection", systemImage: "wave.3.right")
+                            Label(localized("auth.test_connection"), systemImage: "wave.3.right")
                                 .frame(maxWidth: .infinity)
                         }
                         .buttonStyle(NPSecondaryButtonStyle())
@@ -187,30 +249,49 @@ private struct AuthField<Field: View>: View {
 // MARK: - Workbench Screen
 
 private struct WorkbenchScreen: View {
-    @ObservedObject var model: NotePatchViewModel
-    @State private var isUploadPresented = false
+    let model: NotePatchViewModel
+    @ObservedObject var navigationState: WorkbenchNavigationState
 
     var body: some View {
         GeometryReader { geometry in
-            workbenchLayout(bottomSafeAreaInset: geometry.safeAreaInsets.bottom)
+            workbenchLayout(
+                containerHeight: geometry.size.height,
+                topSafeAreaInset: geometry.safeAreaInsets.top,
+                bottomSafeAreaInset: geometry.safeAreaInsets.bottom
+            )
         }
     }
 
-    private func workbenchLayout(bottomSafeAreaInset: CGFloat) -> some View {
-        VStack(spacing: 0) {
-            StatusBanner(
-                isBusy: model.isBusy || model.isConversationMutating || model.isAIPreferenceUpdating || model.isHomeworkLoading || model.isStudyNoteSaving,
-                statusMessage: model.statusMessage,
-                errorMessage: model.errorMessage,
-                onDismiss: model.dismissStatusBanner
-            )
+    private func workbenchLayout(
+        containerHeight: CGFloat,
+        topSafeAreaInset: CGFloat,
+        bottomSafeAreaInset: CGFloat
+    ) -> some View {
+        let bottomObstruction = workbenchBottomObstruction(
+            containerHeight: containerHeight,
+            bottomBarFrame: navigationState.bottomBarFrame,
+            isVisible: !navigationState.isBottomBarHiddenForKeyboard
+        )
 
+        return ZStack(alignment: .bottom) {
             selectedContent
-        }
-        .background(NPColors.background, ignoresSafeAreaEdges: .all)
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            KeyboardAwareWorkbenchBottomBar(selection: $model.selectedTab) {
-                isUploadPresented = true
+                .environment(\.workbenchBottomObstruction, bottomObstruction)
+                .background(NPColors.background, ignoresSafeAreaEdges: .all)
+                .modifier(WorkbenchKeyboardSafeAreaModifier(keepsBottomBarFixed: navigationState.selectedTab == .openClaw))
+                .allowsHitTesting(!navigationState.isUploadPresented)
+
+            WorkbenchStatusOverlayHost(
+                model: model,
+                topSafeAreaInset: topSafeAreaInset,
+                bottomOffset: bottomObstruction + 12
+            )
+            .zIndex(12)
+
+            KeyboardAwareWorkbenchBottomBar(
+                selection: $navigationState.selectedTab,
+                isKeyboardVisible: $navigationState.isBottomBarHiddenForKeyboard
+            ) {
+                navigationState.isUploadPresented = true
             }
             .padding(.horizontal, 16)
             .padding(.top, 8)
@@ -218,12 +299,30 @@ private struct WorkbenchScreen: View {
                 .bottom,
                 workbenchBottomBarAdditionalPadding(safeAreaBottom: bottomSafeAreaInset)
             )
+            .background {
+                GeometryReader { proxy in
+                    Color.clear.preference(
+                        key: WorkbenchBottomBarFramePreferenceKey.self,
+                        value: proxy.frame(in: .named("workbench"))
+                    )
+                }
+            }
+            .allowsHitTesting(!navigationState.isUploadPresented)
+            .zIndex(10)
+
+            if navigationState.isUploadPresented {
+                UploadScreen(model: model, isPresented: $navigationState.isUploadPresented)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(NPColors.background.ignoresSafeArea())
+                    .zIndex(20)
+            }
         }
-        .modifier(WorkbenchKeyboardSafeAreaModifier(keepsBottomBarFixed: model.selectedTab == .openClaw))
-        .fullScreenCover(isPresented: $isUploadPresented) {
-            UploadScreen(model: model, isPresented: $isUploadPresented)
+        .coordinateSpace(name: "workbench")
+        .onPreferenceChange(WorkbenchBottomBarFramePreferenceKey.self) { frame in
+            guard !frame.isNull, frame != navigationState.bottomBarFrame else { return }
+            navigationState.bottomBarFrame = frame
         }
-        .onChange(of: model.selectedTab) { newTab in
+        .onChange(of: navigationState.selectedTab) { newTab in
             if newTab != .openClaw {
                 dismissActiveKeyboard()
             }
@@ -236,9 +335,9 @@ private struct WorkbenchScreen: View {
 
     @ViewBuilder
     private var selectedContent: some View {
-        switch model.selectedTab {
-        case .documents:
-            DocumentsTab(model: model)
+        switch navigationState.selectedTab {
+        case .home:
+            HomeTab(model: model, state: model.homeDashboardState)
         case .notes:
             NotesTab(model: model)
         case .openClaw:
@@ -251,12 +350,30 @@ private struct WorkbenchScreen: View {
             ProfileTab(model: model)
         }
     }
+
+}
+
+private struct WorkbenchStatusOverlayHost: View {
+    @ObservedObject var model: NotePatchViewModel
+    let topSafeAreaInset: CGFloat
+    let bottomOffset: CGFloat
+
+    var body: some View {
+        WorkbenchStatusOverlay(
+            isBusy: model.isBusy || model.isConversationMutating || model.isAIPreferenceUpdating || model.isHomeworkLoading || model.isStudyNoteSaving,
+            statusMessage: model.statusMessage,
+            errorMessage: model.errorMessage,
+            topSafeAreaInset: topSafeAreaInset,
+            bottomOffset: bottomOffset,
+            onDismiss: model.dismissStatusBanner
+        )
+    }
 }
 
 private struct KeyboardAwareWorkbenchBottomBar: View {
     @Binding var selection: WorkbenchTab
+    @Binding var isKeyboardVisible: Bool
     let uploadAction: () -> Void
-    @State private var isKeyboardVisible = false
 
     var body: some View {
         WorkbenchBottomGlassGroup(spacing: 10) {
@@ -350,7 +467,7 @@ private struct WorkbenchBottomNavigation: View {
                     Capsule(style: .continuous)
                         .fill(.ultraThinMaterial)
                     Capsule(style: .continuous)
-                        .fill(.white.opacity(0.01))
+                        .fill(NPColors.surfaceHighlight.opacity(0.04))
                 }
                 .navigationCapsuleChrome()
         }
@@ -392,7 +509,7 @@ private struct WorkbenchBottomNavigation: View {
 private extension WorkbenchTab {
     var accessibilityIdentifier: String {
         switch self {
-        case .documents: return "tab.documents"
+        case .home: return "tab.home"
         case .notes: return "tab.notes"
         case .openClaw: return "tab.ai"
         case .profile: return "tab.me"
@@ -404,21 +521,17 @@ private extension WorkbenchTab {
 
 private struct UploadActionButton: View {
     let action: () -> Void
-    @State private var isPressed = false
 
     var body: some View {
         Button(action: action) {
             uploadLabel
-                .scaleEffect(isPressed ? 0.96 : 1.0)
         }
-        .buttonStyle(.plain)
-        .accessibilityLabel(localized("Upload"))
+        .buttonStyle(UploadActionButtonStyle())
+        .contentShape(Circle())
+        .frame(width: 58, height: 58)
+        .zIndex(1)
+        .accessibilityLabel(localized("upload.title"))
         .accessibilityIdentifier("uploadFAB")
-        .onLongPressGesture(minimumDuration: .infinity, pressing: { pressing in
-            withAnimation(.spring(response: 0.28, dampingFraction: 0.78)) {
-                isPressed = pressing
-            }
-        }, perform: {})
     }
 
     @ViewBuilder
@@ -433,7 +546,7 @@ private struct UploadActionButton: View {
                     Circle()
                         .fill(.ultraThinMaterial)
                     Circle()
-                        .fill(.white.opacity(0.01))
+                        .fill(NPColors.surfaceHighlight.opacity(0.04))
                 }
                 .navigationCircleChrome()
         }
@@ -447,11 +560,19 @@ private struct UploadActionButton: View {
     }
 }
 
+private struct UploadActionButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.96 : 1)
+            .animation(.spring(response: 0.28, dampingFraction: 0.78), value: configuration.isPressed)
+    }
+}
+
 private extension View {
     func nativeNavigationCapsuleChrome() -> some View {
         overlay {
             Capsule(style: .continuous)
-                .stroke(.white.opacity(0.34), lineWidth: 0.75)
+                .stroke(NPColors.surfaceHighlight, lineWidth: 0.75)
                 .allowsHitTesting(false)
         }
         .shadow(color: .black.opacity(0.05), radius: 16, x: 0, y: 4)
@@ -461,7 +582,7 @@ private extension View {
     func nativeNavigationCircleChrome() -> some View {
         overlay {
             Circle()
-                .stroke(.white.opacity(0.34), lineWidth: 0.75)
+                .stroke(NPColors.surfaceHighlight, lineWidth: 0.75)
                 .allowsHitTesting(false)
         }
         .shadow(color: .black.opacity(0.05), radius: 16, x: 0, y: 4)
@@ -476,7 +597,7 @@ private extension View {
         }
         .overlay {
             Capsule(style: .continuous)
-                .stroke(.white.opacity(0.30), lineWidth: 1)
+                .stroke(NPColors.surfaceHighlight, lineWidth: 1)
                 .allowsHitTesting(false)
         }
         .shadow(color: .black.opacity(0.04), radius: 16, x: 0, y: 4)
@@ -491,7 +612,7 @@ private extension View {
         }
         .overlay {
             Circle()
-                .stroke(.white.opacity(0.30), lineWidth: 1)
+                .stroke(NPColors.surfaceHighlight, lineWidth: 1)
                 .allowsHitTesting(false)
         }
         .shadow(color: .black.opacity(0.04), radius: 16, x: 0, y: 4)
@@ -501,13 +622,475 @@ private extension View {
     private var navigationTopHighlight: LinearGradient {
         LinearGradient(
             stops: [
-                .init(color: .white.opacity(0.45), location: 0),
-                .init(color: .white.opacity(0.05), location: 0.35),
+                .init(color: NPColors.surfaceHighlight.opacity(0.65), location: 0),
+                .init(color: NPColors.surfaceHighlight.opacity(0.08), location: 0.35),
                 .init(color: .clear, location: 0.5),
             ],
             startPoint: .top,
             endPoint: .bottom
         )
+    }
+}
+
+// MARK: - Home Tab
+
+private struct HomeTab: View {
+    let model: NotePatchViewModel
+    @ObservedObject var state: HomeDashboardState
+    @State private var readerItem: StudyNoteListItem?
+
+    var body: some View {
+        NavigationView {
+            ZStack {
+                homeContent
+                destinationLinks
+            }
+            .navigationBarHidden(true)
+        }
+        .navigationViewStyle(.stack)
+        .sheet(item: $readerItem) { _ in
+            NavigationView {
+                StudyNoteReader(model: model)
+                    .onDisappear { model.closeStudyNoteReader() }
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button(localized("common.done")) { readerItem = nil }
+                        }
+                    }
+            }
+            .navigationViewStyle(.stack)
+        }
+        .accessibilityIdentifier("homeDashboard")
+    }
+
+    private var homeContent: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 24) {
+                CompactPageHeader(
+                    title: localized("home.title"),
+                    subtitle: currentWorkspaceName,
+                    actionSystemImage: "arrow.clockwise",
+                    actionAccessibilityLabel: localized("home.refresh"),
+                    action: model.refreshHomeDashboard
+                )
+
+                summary
+
+                if let task = state.activeTask {
+                    activeTask(task)
+                }
+
+                recentDocuments
+                recentNotes
+                reviewShortcuts
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 12)
+            .workbenchContentBottomPadding()
+        }
+        .background(NPColors.background)
+    }
+
+    private var summary: some View {
+        HStack(spacing: 0) {
+            HomeMetric(
+                value: String(state.documentCount),
+                label: localized("home.metric.documents"),
+                accessibilityIdentifier: "homeMetricDocuments"
+            ) {
+                model.selectedHomeDestination = .documents
+            }
+            Divider().frame(height: 34)
+            HomeMetric(
+                value: String(state.learningUnitCount),
+                label: localized("home.metric.units"),
+                accessibilityIdentifier: "homeMetricLearningUnits"
+            ) {
+                openReview(.units)
+            }
+            Divider().frame(height: 34)
+            HomeMetric(
+                value: String(state.homeworkCount),
+                label: localized("home.metric.homeworks"),
+                accessibilityIdentifier: "homeMetricHomeworks"
+            ) {
+                openReview(.grading)
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("homeSummary")
+    }
+
+    private func activeTask(_ task: TaskItem) -> some View {
+        Button {
+            model.selectedHomeDestination = .tasks
+        } label: {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Label(localized("home.active_task"), systemImage: "clock.arrow.circlepath")
+                        .font(.subheadline.weight(.semibold))
+                    Spacer()
+                    Text("\(task.progress.clamped(to: 0...100))%")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(NPColors.textSecondary)
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(NPColors.textTertiary)
+                }
+                ProgressView(value: Double(task.progress.clamped(to: 0...100)), total: 100)
+                    .tint(NPColors.brand)
+            }
+            .foregroundStyle(NPColors.textPrimary)
+            .padding(12)
+            .modifier(NPListItemModifier())
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("homeActiveTask")
+    }
+
+    private var recentDocuments: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HomeSectionHeader(
+                title: localized("home.recent_documents"),
+                actionTitle: localized("common.view_all"),
+                sectionAccessibilityIdentifier: "homeRecentDocuments",
+                accessibilityIdentifier: "homeViewAllDocuments"
+            ) {
+                model.selectedHomeDestination = .documents
+            }
+            if state.recentDocuments.isEmpty {
+                HomeInlineEmptyState(systemImage: "doc", text: localized("home.no_documents"))
+            } else {
+                ForEach(state.recentDocuments) { document in
+                    Button {
+                        if model.canDownloadDocument(document) {
+                            model.downloadAndPreview(document)
+                        } else {
+                            model.selectedHomeDestination = .documents
+                        }
+                    } label: {
+                        HomeDocumentRow(
+                            document: document,
+                            thumbnailCacheKey: model.documentThumbnailIdentifier(for: document),
+                            loadThumbnail: {
+                                await model.generateDocumentThumbnail(for: document, maxPixelSize: 144)
+                            }
+                        )
+                        .equatable()
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("homeDocument-\(document.id)")
+                }
+            }
+        }
+    }
+
+    private var recentNotes: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HomeSectionHeader(
+                title: localized("home.recent_notes"),
+                actionTitle: localized("common.view_all"),
+                sectionAccessibilityIdentifier: "homeRecentNotes",
+                accessibilityIdentifier: "homeViewAllNotes"
+            ) {
+                model.selectedTab = .notes
+                model.selectedNotesSection = .notes
+            }
+            if state.isLoadingSupplementaryContent && state.recentNotes.isEmpty {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text(localized("home.loading_learning"))
+                        .npCaption()
+                }
+                .frame(minHeight: 44)
+            } else if let error = state.supplementaryError, state.recentNotes.isEmpty {
+                Button(action: model.refreshHomeDashboard) {
+                    Label(localizedFormat("home.learning_failed", error), systemImage: "arrow.clockwise")
+                        .npCaption()
+                        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(NPColors.destructive)
+            } else if state.recentNotes.isEmpty {
+                HomeInlineEmptyState(systemImage: "note.text", text: localized("home.no_notes"))
+            } else {
+                ForEach(state.recentNotes) { item in
+                    Button {
+                        model.openStudyNote(item)
+                        readerItem = item
+                    } label: {
+                        HomeNoteRow(item: item)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("homeNote-\(item.id)")
+                }
+            }
+        }
+    }
+
+    private var reviewShortcuts: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(localized("home.review"))
+                .font(.headline)
+                .accessibilityIdentifier("homeReviewShortcuts")
+            HStack(spacing: 12) {
+                HomeShortcut(
+                    title: localized("review.section.units"),
+                    systemImage: "square.stack.3d.up",
+                    accessibilityIdentifier: "homeReviewUnits"
+                ) {
+                    openReview(.units)
+                }
+                HomeShortcut(
+                    title: localized("review.section.flashcards"),
+                    systemImage: "rectangle.on.rectangle.angled",
+                    accessibilityIdentifier: "homeReviewFlashcards"
+                ) {
+                    openReview(.flashcards)
+                }
+            }
+        }
+    }
+
+    private var destinationLinks: some View {
+        Group {
+            NavigationLink(
+                destination: DocumentsTab(model: model),
+                isActive: destinationBinding(.documents)
+            ) { EmptyView() }
+            NavigationLink(
+                destination: TaskTab(model: model),
+                isActive: destinationBinding(.tasks)
+            ) { EmptyView() }
+        }
+        .hidden()
+    }
+
+    private var currentWorkspaceName: String {
+        model.workspaces.first(where: { $0.id == model.selectedWorkspaceId })?.name
+            ?? localized("workspace.personal")
+    }
+
+    private func destinationBinding(_ destination: HomeDestination) -> Binding<Bool> {
+        Binding(
+            get: { state.destination == destination },
+            set: { isActive in
+                if !isActive, state.destination == destination {
+                    state.destination = nil
+                }
+            }
+        )
+    }
+
+    private func openReview(_ section: LearningSection) {
+        model.selectedLearningSection = section
+        model.selectedNotesSection = .review
+        model.selectedTab = .notes
+        model.ensureContentForSelectedTabLoaded()
+    }
+}
+
+private struct CompactPageHeader: View {
+    let title: String
+    let subtitle: String?
+    let actionSystemImage: String?
+    let actionAccessibilityLabel: String?
+    let action: (() -> Void)?
+
+    var body: some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.title2.weight(.bold))
+                    .foregroundStyle(NPColors.textPrimary)
+                if let subtitle, !subtitle.isEmpty {
+                    Text(subtitle)
+                        .font(.caption)
+                        .foregroundStyle(NPColors.textSecondary)
+                        .lineLimit(1)
+                }
+            }
+            Spacer(minLength: 8)
+            if let actionSystemImage, let action {
+                Button(action: action) {
+                    Image(systemName: actionSystemImage)
+                        .frame(width: 44, height: 44)
+                }
+                .buttonStyle(NPToolbarIconButtonStyle())
+                .accessibilityLabel(actionAccessibilityLabel ?? title)
+            }
+        }
+        .frame(minHeight: 56)
+    }
+}
+
+private struct HomeMetric: View {
+    let value: String
+    let label: String
+    let accessibilityIdentifier: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 2) {
+                Text(value)
+                    .font(.title3.weight(.semibold).monospacedDigit())
+                    .foregroundStyle(NPColors.textPrimary)
+                HStack(spacing: 3) {
+                    Text(label)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 8, weight: .semibold))
+                }
+                .font(.caption)
+                .foregroundStyle(NPColors.textSecondary)
+            }
+            .frame(maxWidth: .infinity, minHeight: 52)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(NPMetricButtonStyle())
+        .accessibilityLabel("\(label), \(value)")
+        .accessibilityIdentifier(accessibilityIdentifier)
+    }
+}
+
+private struct NPMetricButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .background(NPColors.brandLight.opacity(configuration.isPressed ? 0.65 : 0))
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .scaleEffect(configuration.isPressed ? 0.97 : 1)
+            .animation(.npInteractive, value: configuration.isPressed)
+    }
+}
+
+private struct HomeSectionHeader: View {
+    let title: String
+    let actionTitle: String
+    let sectionAccessibilityIdentifier: String
+    let accessibilityIdentifier: String
+    let action: () -> Void
+
+    var body: some View {
+        HStack {
+            Text(title)
+                .font(.headline)
+                .accessibilityIdentifier(sectionAccessibilityIdentifier)
+            Spacer()
+            Button(actionTitle, action: action)
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(NPColors.brandDark)
+                .frame(minHeight: 44)
+                .accessibilityIdentifier(accessibilityIdentifier)
+        }
+    }
+}
+
+private struct HomeDocumentRow: View, Equatable {
+    let document: LearningDocumentItem
+    let thumbnailCacheKey: String
+    let loadThumbnail: () async -> UIImage?
+
+    var body: some View {
+        HStack(spacing: 12) {
+            DocumentThumbnailView(
+                document: document,
+                cacheKey: thumbnailCacheKey,
+                size: CGSize(width: 48, height: 48),
+                load: loadThumbnail
+            )
+            VStack(alignment: .leading, spacing: 4) {
+                Text(document.title ?? document.originalFilename)
+                    .font(.body.weight(.medium))
+                    .foregroundStyle(NPColors.textPrimary)
+                    .lineLimit(2)
+                Text(documentMetadataSummary(document))
+                    .font(.caption)
+                    .foregroundStyle(NPColors.textSecondary)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 8)
+            NPStatusChip(text: primaryDocumentStatus(document), variant: primaryDocumentStatusVariant(document))
+        }
+        .padding(12)
+        .modifier(NPListItemModifier())
+    }
+
+    static func == (lhs: HomeDocumentRow, rhs: HomeDocumentRow) -> Bool {
+        lhs.document == rhs.document && lhs.thumbnailCacheKey == rhs.thumbnailCacheKey
+    }
+}
+
+private struct HomeNoteRow: View {
+    let item: StudyNoteListItem
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "note.text")
+                .foregroundStyle(NPColors.brandDark)
+                .frame(width: 40, height: 44)
+                .background(NPColors.brandLight)
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            VStack(alignment: .leading, spacing: 4) {
+                Text(item.note.title.isEmpty ? localized("notes.default_title") : item.note.title)
+                    .font(.body.weight(.medium))
+                    .foregroundStyle(NPColors.textPrimary)
+                    .lineLimit(2)
+                Text(localizedFormat("home.note_metadata", item.learningUnit.title, String(item.note.versionNo)))
+                    .font(.caption)
+                    .foregroundStyle(NPColors.textSecondary)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 8)
+            Image(systemName: "chevron.right")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(NPColors.textTertiary)
+        }
+        .padding(12)
+        .modifier(NPListItemModifier())
+    }
+}
+
+private struct HomeShortcut: View {
+    let title: String
+    let systemImage: String
+    let accessibilityIdentifier: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 10) {
+                Image(systemName: systemImage)
+                    .foregroundStyle(NPColors.brandDark)
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(NPColors.textPrimary)
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(NPColors.textTertiary)
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity, minHeight: 52)
+            .modifier(NPListItemModifier())
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier(accessibilityIdentifier)
+    }
+}
+
+private struct HomeInlineEmptyState: View {
+    let systemImage: String
+    let text: String
+
+    var body: some View {
+        Label(text, systemImage: systemImage)
+            .font(.subheadline)
+            .foregroundStyle(NPColors.textSecondary)
+            .frame(maxWidth: .infinity, minHeight: 52, alignment: .leading)
+            .padding(.horizontal, 12)
+            .modifier(NPListItemModifier())
     }
 }
 
@@ -519,42 +1102,31 @@ private struct NotesTab: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            NotePatchLogoImage(height: 90)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, NPSpacing.outer)
-                .padding(.top, NPSpacing.medium)
-                .padding(.bottom, NPSpacing.small)
-
-            Text("Patch your knowledge together.")
-                .font(.system(size: 13, weight: .regular, design: .default))
-                .foregroundStyle(NPColors.textTertiary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, NPSpacing.outer)
-                .padding(.bottom, NPSpacing.large)
-
-            // ── 2. Controls ──
-            HStack {
-                Picker(localized("notes.section.picker"), selection: $model.selectedNotesSection) {
-                    ForEach(NotesSection.allCases) { section in
-                        Text(section.title).tag(section)
+            CompactPageHeader(
+                title: localized("notes.title"),
+                subtitle: nil,
+                actionSystemImage: "arrow.clockwise",
+                actionAccessibilityLabel: localized("notes.refresh"),
+                action: {
+                    if model.selectedNotesSection == .notes {
+                        model.loadNotesOverview(allowOfflineNetwork: true)
+                    } else {
+                        model.loadLearningDashboard(allowOfflineNetwork: true)
                     }
                 }
-                .pickerStyle(.segmented)
-                .accessibilityIdentifier("notesSectionPicker")
+            )
+            .padding(.horizontal, 16)
+            .padding(.top, 12)
 
-                if model.selectedNotesSection == .notes {
-                    Button {
-                        model.loadNotesOverview(allowOfflineNetwork: true)
-                    } label: {
-                        Image(systemName: "arrow.clockwise")
-                    }
-                    .buttonStyle(NPToolbarIconButtonStyle())
-                    .disabled(model.isNotesLoading)
-                    .accessibilityLabel(localizedFormat("accessibility.refresh_named", localized("notes.section.notes")))
+            Picker(localized("notes.section.picker"), selection: $model.selectedNotesSection) {
+                ForEach(NotesSection.allCases) { section in
+                    Text(section.title).tag(section)
                 }
             }
-            .padding(.horizontal, NPSpacing.outer)
-            .padding(.bottom, NPSpacing.item)
+            .pickerStyle(.segmented)
+            .accessibilityIdentifier("notesSectionPicker")
+            .padding(.horizontal, 16)
+            .padding(.bottom, 12)
 
             Group {
                 if model.selectedNotesSection == .notes {
@@ -582,6 +1154,9 @@ private struct NotesTab: View {
             .navigationViewStyle(.stack)
         }
         .background(NPColors.background)
+        .task {
+            await NoteWebViewRuntime.shared.prewarmAfterInterfaceSettles()
+        }
         .onChange(of: model.selectedNotesSection) { _ in
             model.ensureContentForSelectedTabLoaded()
         }
@@ -589,7 +1164,7 @@ private struct NotesTab: View {
 
     private var notesOverview: some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: NPSpacing.item) {
+            LazyVStack(alignment: .leading, spacing: 12) {
                 if model.isNotesLoading && model.studyNoteGroups.isEmpty {
                     ProgressView(localized("notes.loading"))
                         .frame(maxWidth: .infinity)
@@ -634,7 +1209,7 @@ private struct NotesTab: View {
                                             .foregroundStyle(NPColors.brand)
                                             .frame(width: 28)
                                         VStack(alignment: .leading, spacing: 3) {
-                                            Text(item.note.title.isEmpty ? localized("Digital Notes") : item.note.title)
+                                            Text(item.note.title.isEmpty ? localized("notes.default_title") : item.note.title)
                                                 .font(.body.weight(.medium))
                                                 .foregroundStyle(NPColors.textPrimary)
                                                 .lineLimit(2)
@@ -653,8 +1228,8 @@ private struct NotesTab: View {
                                             .font(.caption.weight(.semibold))
                                             .foregroundStyle(NPColors.textSecondary.opacity(0.5))
                                     }
-                                    .padding(NPSpacing.card)
-                                    .modifier(NPCardModifier())
+                                    .padding(12)
+                                    .modifier(NPListItemModifier())
                                 }
                                 .buttonStyle(.plain)
                                 .accessibilityIdentifier("studyNoteRow-\(item.note.id)")
@@ -663,8 +1238,9 @@ private struct NotesTab: View {
                     }
                 }
             }
-            .padding(.horizontal, NPSpacing.outer)
-            .padding(.vertical, NPSpacing.item)
+            .padding(.horizontal, 16)
+            .padding(.top, 12)
+            .workbenchContentBottomPadding()
         }
     }
 
@@ -696,7 +1272,7 @@ private struct StudyNoteReader: View {
             if let item = model.selectedStudyNoteItem {
                 VStack(alignment: .leading, spacing: 0) {
                     VStack(alignment: .leading, spacing: 5) {
-                        Text(item.note.title.isEmpty ? localized("Digital Notes") : item.note.title)
+                        Text(item.note.title.isEmpty ? localized("notes.default_title") : item.note.title)
                             .font(.title2.weight(.bold))
                             .foregroundStyle(NPColors.textPrimary)
                         Text("\(item.learningUnit.title) · \(localizedFormat("note.version", String(item.note.versionNo)))")
@@ -917,60 +1493,17 @@ private struct DocumentsTab: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // ── 1. Brand ──
-            NotePatchLogoImage(height: 90)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, NPSpacing.outer)
-                .padding(.top, NPSpacing.medium)
-                .padding(.bottom, NPSpacing.small)
-
-            Text("Patch your knowledge together.")
-                .font(.system(size: 13, weight: .regular, design: .default))
-                .foregroundStyle(NPColors.textTertiary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, NPSpacing.outer)
-                .padding(.bottom, NPSpacing.large)
-
-            // ── 2. Page Header ──
-            HStack {
-                Text("Home")
-                    .npSubheading()
-                Spacer()
-                Text("\(model.documents.count)")
-                    .npCaption()
-                    .foregroundStyle(NPColors.textSecondary)
-                    .padding(.horizontal, NPSpacing.small)
-                    .padding(.vertical, 2)
-                    .background(NPColors.interactive)
-                    .clipShape(Capsule())
-            }
-            .padding(.horizontal, NPSpacing.outer)
-            .padding(.bottom, NPSpacing.large)
-
-            // ── 3. Controls ──
-            Picker("Document view", selection: $model.selectedDocumentsSection) {
-                ForEach(DocumentsSection.allCases) { section in
-                    Text(section.title).tag(section)
-                }
-            }
-            .pickerStyle(.segmented)
-            .accessibilityIdentifier("documentsSectionPicker")
-            .padding(.horizontal, NPSpacing.outer)
-            .padding(.bottom, NPSpacing.small)
-
-            // ── 4. Content ──
-            if model.selectedDocumentsSection == .documents {
-                documentList
-            } else {
-                TaskTab(model: model)
-            }
+            documentList
         }
         .background(NPColors.background)
+        .navigationTitle(localized("documents.title"))
+        .navigationBarTitleDisplayMode(.inline)
+        .navigationBarHidden(false)
     }
 
     private var documentList: some View {
         ScrollView {
-            VStack(spacing: NPSpacing.section) {
+            LazyVStack(spacing: 12) {
                 // Filter
                 HStack {
                     Button {
@@ -993,6 +1526,7 @@ private struct DocumentsTab: View {
                         .shadow(color: NPShadow.small.color, radius: NPShadow.small.radius, x: 0, y: NPShadow.small.y)
                     }
                     .buttonStyle(.plain)
+                    .accessibilityIdentifier("documentsList")
                     Spacer()
                 }
 
@@ -1003,32 +1537,40 @@ private struct DocumentsTab: View {
                 }
 
                 if model.documents.isEmpty {
-                    NPEmptyState(systemImage: "doc", title: "No documents", message: "No documents yet. Upload an image, PDF, or file to get started.")
+                    NPEmptyState(
+                        systemImage: "doc",
+                        title: localized("documents.empty.title"),
+                        message: localized("documents.empty.message")
+                    )
                 } else {
-                    LazyVStack(spacing: NPSpacing.medium) {
-                        ForEach(model.documents) { document in
-                            DocumentRow(
-                                document: document,
-                                artifacts: model.selectedArtifactDocumentId == document.id ? model.selectedArtifacts : [],
-                                ocrArtifacts: model.selectedOcrDocumentId == document.id ? model.selectedOcrArtifacts : [],
-                                isBusy: model.isBusy,
-                                canProcess: model.canProcessDocument(document),
-                                canDownload: model.canDownloadDocument(document),
-                                onDownload: { model.downloadAndPreview(document) },
-                                onProcess: { model.startProcessing(document) },
-                                onDelete: { model.deleteDocument(document) },
-                                onArtifacts: { model.loadArtifacts(for: document) },
-                                onOCR: { model.loadOcrArtifacts(for: document) },
-                                onArtifactDownload: { model.downloadAndPreview($0) },
-                                onOcrDownload: { model.downloadAndPreview($0) }
-                            )
-                        }
+                    ForEach(model.documents) { document in
+                        DocumentRow(
+                            document: document,
+                            artifacts: model.selectedArtifactDocumentId == document.id ? model.selectedArtifacts : [],
+                            ocrArtifacts: model.selectedOcrDocumentId == document.id ? model.selectedOcrArtifacts : [],
+                            isBusy: model.isBusy,
+                            isPreviewLoading: model.isDocumentPreviewLoading(document.id),
+                            canProcess: model.canProcessDocument(document),
+                            canDownload: model.canDownloadDocument(document),
+                            thumbnailCacheKey: model.documentThumbnailIdentifier(for: document),
+                            loadThumbnail: {
+                                await model.generateDocumentThumbnail(for: document, maxPixelSize: 176)
+                            },
+                            onDownload: { model.downloadAndPreview(document) },
+                            onProcess: { model.startProcessing(document) },
+                            onDelete: { model.deleteDocument(document) },
+                            onArtifacts: { model.loadArtifacts(for: document) },
+                            onOCR: { model.loadOcrArtifacts(for: document) },
+                            onArtifactDownload: { model.downloadAndPreview($0) },
+                            onOcrDownload: { model.downloadAndPreview($0) }
+                        )
+                        .equatable()
                     }
                 }
             }
-            .padding(.horizontal, NPSpacing.outer)
-            .padding(.top, NPSpacing.small)
-            .padding(.bottom, NPSpacing.section)
+            .padding(.horizontal, 16)
+            .padding(.top, 12)
+            .workbenchContentBottomPadding()
         }
     }
 
@@ -1041,19 +1583,31 @@ private struct UploadScreen: View {
     @Binding var isPresented: Bool
 
     var body: some View {
-        NavigationView {
-            UploadDocumentScreen(model: model)
-                .navigationTitle(localized("Upload"))
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .cancellationAction) {
-                        Button("Close") {
-                            isPresented = false
-                        }
+        VStack(spacing: 0) {
+            ZStack {
+                Text(localized("upload.title"))
+                    .font(.headline)
+
+                HStack {
+                    Button(localized("common.close")) {
+                        isPresented = false
                     }
+                    .accessibilityIdentifier("closeUploadScreenButton")
+
+                    Spacer()
                 }
+            }
+            .frame(height: 44)
+            .padding(.horizontal, NPSpacing.outer)
+            .background(.ultraThinMaterial)
+
+            Divider()
+
+            UploadDocumentScreen(model: model)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .navigationViewStyle(.stack)
+        .background(NPColors.background)
+        .accessibilityIdentifier("uploadScreen")
     }
 }
 
@@ -1095,7 +1649,7 @@ private struct UploadOptionCard: View {
             .clipShape(RoundedRectangle(cornerRadius: NPRadius.card, style: .continuous))
             .overlay {
                 RoundedRectangle(cornerRadius: NPRadius.card, style: .continuous)
-                    .stroke(Color.white.opacity(0.70), lineWidth: 0.5)
+                    .stroke(NPColors.surfaceHighlight, lineWidth: 0.5)
             }
             .shadow(
                 color: NPShadow.medium.color,
@@ -1144,7 +1698,7 @@ private struct UploadDocumentScreen: View {
                 NPSection {
                     VStack(alignment: .leading, spacing: 12) {
                         HStack {
-                            Label("Pending", systemImage: "tray.and.arrow.up")
+                            Label(localized("upload.queue.pending"), systemImage: "tray.and.arrow.up")
                                 .npSubheading()
                             Spacer()
                             Text(localizedFormat("upload.items_count", String(model.queuedUploadItems.count)))
@@ -1154,8 +1708,8 @@ private struct UploadDocumentScreen: View {
                         if model.queuedUploadItems.isEmpty {
                             NPEmptyState(
                                 systemImage: "tray",
-                                title: "No pending files",
-                                message: "Selected files, photos, or camera captures will appear here."
+                                title: localized("upload.queue.empty.title"),
+                                message: localized("upload.queue.empty.message")
                             )
                         } else {
                             LazyVStack(spacing: 10) {
@@ -1164,7 +1718,14 @@ private struct UploadDocumentScreen: View {
                                         item: item,
                                         isBusy: model.isBusy,
                                         onToggle: { model.toggleQueuedUpload(item.id) },
-                                        onPreview: { queuedPreview = DownloadedPreview(url: item.file.url, mimeType: item.file.mimeType) },
+                                        onPreview: {
+                                            queuedPreview = DownloadedPreview(
+                                                url: item.file.url,
+                                                mimeType: item.file.mimeType,
+                                                filename: item.file.filename,
+                                                fileSize: item.file.fileSize
+                                            )
+                                        },
                                         onRemove: { model.removeQueuedUpload(item.id) }
                                     )
                                 }
@@ -1216,17 +1777,22 @@ private struct UploadDocumentScreen: View {
                     )
                 case .failure(let error):
                     if model.isCurrentImportContext(userId: pickerUserId, workspaceId: pickerWorkspaceId) {
-                        model.errorMessage = friendlyError(error)
+                        model.presentError(error)
                     }
                 }
             }
             .ignoresSafeArea()
         }
         .sheet(item: $queuedPreview) { preview in
-            if preview.isImage {
+            switch preview.previewKind(
+                canQuickLookPreview: QLPreviewController.canPreview(preview.url as NSURL)
+            ) {
+            case .image:
                 ImagePreview(url: preview.url)
-            } else {
+            case .quickLook:
                 QuickLookPreview(url: preview.url)
+            case .unsupported:
+                UnsupportedFilePreview(preview: preview)
             }
         }
     }
@@ -1304,11 +1870,11 @@ private struct QueuedUploadRow: View {
         case .pending:
             EmptyView()
         case .uploading:
-            Label("Uploading", systemImage: "arrow.up.circle")
+            Label(localized("upload.queue.uploading"), systemImage: "arrow.up.circle")
                 .npCaption()
                 .foregroundStyle(NPColors.brand)
         case .failed(let message):
-            Text(message)
+            Text(message.resolved())
                 .npCaption()
                 .foregroundStyle(NPColors.destructive)
                 .lineLimit(2)
@@ -1325,7 +1891,7 @@ private struct UploadPanel: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            SectionLabel("Document type")
+            SectionLabel(localized("upload.document_type"))
 
             ChoiceGrid(minimum: 76) {
                 ForEach(["homework", "corrected_homework", "courseware", "note", "exam", "answer_key", "rubric", "other"], id: \.self) { kind in
@@ -1336,9 +1902,9 @@ private struct UploadPanel: View {
             }
 
             HStack(spacing: NPSpacing.small) {
-                UploadSourceButton(title: "Camera", systemImage: "camera.fill", emphasized: true, enabled: !model.isBusy && UIImagePickerController.isSourceTypeAvailable(.camera), action: onCameraUpload)
-                UploadSourceButton(title: "Photos", systemImage: "photo.on.rectangle", emphasized: false, enabled: !model.isBusy, action: onGalleryUpload)
-                UploadSourceButton(title: "File", systemImage: "folder", emphasized: false, enabled: !model.isBusy, action: onFileUpload)
+                UploadSourceButton(title: "upload.source.camera", systemImage: "camera.fill", emphasized: true, enabled: !model.isBusy && UIImagePickerController.isSourceTypeAvailable(.camera), action: onCameraUpload)
+                UploadSourceButton(title: "upload.source.photos", systemImage: "photo.on.rectangle", emphasized: false, enabled: !model.isBusy, action: onGalleryUpload)
+                UploadSourceButton(title: "upload.source.file", systemImage: "folder", emphasized: false, enabled: !model.isBusy, action: onFileUpload)
             }
 
             if let progress = model.uploadProgressPercent {
@@ -1355,29 +1921,29 @@ private struct UploadPanel: View {
                 .padding(.top, 2)
             }
 
-            DisclosureGroup("Learning info", isExpanded: $isLearningInfoExpanded) {
+            DisclosureGroup(localized("upload.learning_info"), isExpanded: $isLearningInfoExpanded) {
                 VStack(alignment: .leading, spacing: 10) {
-                    Picker("Learning unit", selection: $model.uploadLearningUnitId) {
-                        Text("Auto-create or categorize").tag("")
+                    Picker(localized("upload.learning_unit"), selection: $model.uploadLearningUnitId) {
+                        Text(localized("upload.learning_unit_auto")).tag("")
                         ForEach(model.learningUnits) { unit in
                             Text(unit.title).tag(unit.id)
                         }
                     }
                     .pickerStyle(.menu)
                     if model.uploadLearningUnitId.isEmpty {
-                        LabeledField(title: "Unit title") {
-                            TextField("e.g. Scores & Ratios", text: $model.uploadLearningUnitTitle)
+                        LabeledField(title: "upload.unit_title") {
+                            TextField(localized("upload.unit_title_placeholder"), text: $model.uploadLearningUnitTitle)
                         }
                     }
-                    LabeledField(title: "Subject") {
-                        TextField("e.g. Math", text: $model.uploadSubject)
+                    LabeledField(title: "upload.subject") {
+                        TextField(localized("upload.subject_placeholder"), text: $model.uploadSubject)
                     }
                     HStack(spacing: 10) {
-                        LabeledField(title: "Grade") {
-                            TextField("Grade 7", text: $model.uploadGradeLevel)
+                        LabeledField(title: "upload.grade") {
+                            TextField(localized("upload.grade_placeholder"), text: $model.uploadGradeLevel)
                         }
-                        LabeledField(title: "Topic") {
-                            TextField("Ratios", text: $model.uploadTopic)
+                        LabeledField(title: "upload.topic") {
+                            TextField(localized("upload.topic_placeholder"), text: $model.uploadTopic)
                         }
                     }
                 }
@@ -1442,21 +2008,21 @@ private struct FilterPanel: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             FilterChoices(
-                label: "Status",
+                label: "filter.status",
                 values: ["", "created", "uploading", "scanning", "uploaded", "processing", "ready", "failed"],
                 selected: model.statusFilter,
                 enabled: !model.isBusy,
                 onChange: model.setStatusFilter
             )
             FilterChoices(
-                label: "Type",
+                label: "filter.type",
                 values: ["", "homework", "corrected_homework", "courseware", "note", "exam", "answer_key", "rubric", "other"],
                 selected: model.documentKindFilter,
                 enabled: !model.isBusy,
                 onChange: model.setDocumentKindFilter
             )
             FilterChoices(
-                label: "File",
+                label: "filter.file",
                 values: ["", "image", "pdf", "docx", "pptx", "audio", "video", "other"],
                 selected: model.fileTypeFilter,
                 enabled: !model.isBusy,
@@ -1487,13 +2053,16 @@ private struct FilterChoices: View {
     }
 }
 
-private struct DocumentRow: View {
+private struct DocumentRow: View, Equatable {
     let document: LearningDocumentItem
     let artifacts: [DocumentArtifactItem]
     let ocrArtifacts: [OcrArtifactItem]
     let isBusy: Bool
+    let isPreviewLoading: Bool
     let canProcess: Bool
     let canDownload: Bool
+    let thumbnailCacheKey: String
+    let loadThumbnail: () async -> UIImage?
     let onDownload: () -> Void
     let onProcess: () -> Void
     let onDelete: () -> Void
@@ -1504,144 +2073,154 @@ private struct DocumentRow: View {
     @State private var detailsExpanded = false
 
     var body: some View {
-        NPSection {
-            VStack(alignment: .leading, spacing: 12) {
-                HStack(alignment: .top, spacing: 10) {
-                    VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 10) {
+            Button(action: onDownload) {
+                HStack(alignment: .top, spacing: 8) {
+                    DocumentThumbnailView(
+                        document: document,
+                        cacheKey: thumbnailCacheKey,
+                        size: CGSize(width: 52, height: 58),
+                        load: loadThumbnail
+                    )
+                    VStack(alignment: .leading, spacing: 2) {
                         Text(document.title ?? document.originalFilename)
-                            .npSubheading()
+                            .font(.body.weight(.semibold))
+                            .foregroundStyle(NPColors.textPrimary)
                             .lineLimit(2)
-                        Text("\(documentKindLabel(document.documentKind)) · \(fileTypeLabel(document.fileType))")
-                            .npCaption()
+                        Text("\(documentKindLabel(document.documentKind)) · \(fileTypeLabel(document.fileType)) · \(formatBytes(document.fileSize))")
+                            .font(.caption)
+                            .foregroundStyle(NPColors.textSecondary)
                             .lineLimit(1)
-                        Text("\(formatBytes(document.fileSize)) · \(compactDateTime(document.createdAt))")
-                            .npCaption()
+                        Text(compactDateTime(document.createdAt))
+                            .font(.caption)
+                            .foregroundStyle(NPColors.textTertiary)
                             .lineLimit(1)
                     }
-                    Spacer(minLength: 0)
-                    NPStatusChip(text: statusLabel(document.status), variant: statusChipVariant(document.status))
+                    Spacer(minLength: 8)
+                    if isPreviewLoading {
+                        ProgressView()
+                            .controlSize(.small)
+                            .frame(minWidth: 24, minHeight: 24)
+                    } else {
+                        NPStatusChip(text: primaryDocumentStatus(document), variant: primaryDocumentStatusVariant(document))
+                    }
                 }
+            }
+            .buttonStyle(.plain)
+            .disabled(!canDownload || isPreviewLoading)
+            .accessibilityLabel(localizedFormat("accessibility.preview_file", document.originalFilename))
+            .accessibilityIdentifier("documentPreviewArea-\(document.id)")
 
-                if let scanStatus = document.scanStatus, !scanStatus.isEmpty {
-                    HStack(alignment: .top, spacing: NPSpacing.small) {
-                        Image(systemName: scanStatus == "clean" ? "checkmark.shield" : "shield.lefthalf.filled")
-                            .foregroundStyle(scanStatus == "clean" ? NPColors.brand : colorForStatus(scanStatus))
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(localizedFormat("document.scan_status", scanStatusLabel(scanStatus)))
-                                .font(.system(size: 13, weight: .semibold))
-                            if let message = document.scanMessage?.trimmingCharacters(in: .whitespacesAndNewlines), !message.isEmpty {
-                                Text(message).npCaption()
-                            }
-                            if let detected = document.detectedMimeType, !detected.isEmpty {
-                                Text(localizedFormat("document.detected_mime", detected)).npCaption()
-                            }
-                        }
-                    }
-                    .accessibilityIdentifier("documentScanStatus-\(document.id)")
+            HStack(spacing: 8) {
+                Button(action: onProcess) {
+                    Label(processTitle, systemImage: "wand.and.stars")
+                        .frame(maxWidth: .infinity)
                 }
+                .buttonStyle(NPDocumentPrimaryButtonStyle())
+                .disabled(isBusy || isPreviewLoading || !canProcess)
 
-                HStack(spacing: NPSpacing.small) {
-                    Button(action: onProcess) {
-                        Label(processTitle, systemImage: "wand.and.stars")
-                            .frame(maxWidth: .infinity)
+                Button(action: onDownload) {
+                    if isPreviewLoading {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Image(systemName: "eye")
                     }
-                    .buttonStyle(NPDocumentPrimaryButtonStyle())
-                    .disabled(isBusy || !canProcess)
+                }
+                .buttonStyle(NPDocumentIconButtonStyle())
+                .disabled(!canDownload || isPreviewLoading)
+                .accessibilityLabel(localized("common.preview"))
 
-                    Button(action: onDownload) {
-                        Image(systemName: "arrow.down.to.line")
+                Menu {
+                    Button(action: onOCR) {
+                        Label(localized("document.ocr_results"), systemImage: "text.viewfinder")
                     }
-                    .buttonStyle(NPDocumentIconButtonStyle())
+                    .disabled(isBusy || document.status != "ready" || !canDownload)
+                    Button(action: onArtifacts) {
+                        Label(localized("document.artifacts"), systemImage: "tray.full")
+                    }
                     .disabled(isBusy || !canDownload)
-                    .accessibilityLabel("Download")
-
-                    Menu {
-                        Button(action: onOCR) {
-                            Label("OCR Results", systemImage: "text.viewfinder")
-                        }
-                        .disabled(isBusy || document.status != "ready" || !canDownload)
-                        Button(action: onArtifacts) {
-                            Label("Artifacts", systemImage: "tray.full")
-                        }
-                        .disabled(isBusy || !canDownload)
-                        Button {
-                            detailsExpanded.toggle()
-                        } label: {
-                            Label(detailsExpanded ? "Hide details" : "View details", systemImage: "info.circle")
-                        }
-                        Divider()
-                        Button(role: .destructive, action: onDelete) {
-                            Label("Delete document", systemImage: "trash")
-                        }
+                    Button {
+                        detailsExpanded.toggle()
                     } label: {
-                        Image(systemName: "ellipsis")
+                        Label(
+                            localized(detailsExpanded ? "common.hide_details" : "common.view_details"),
+                            systemImage: "info.circle"
+                        )
                     }
-                    .buttonStyle(NPDocumentIconButtonStyle())
-                    .disabled(isBusy)
-                    .accessibilityLabel("More actions")
-                }
-
-                if detailsExpanded {
-                    Divider().background(NPColors.interactive.opacity(0.4))
-                    DetailText("mime: \(document.mimeType ?? "unknown")")
-                    if let sha256 = document.sha256 {
-                        DetailText("sha256: \(sha256)")
+                    Divider()
+                    Button(role: .destructive, action: onDelete) {
+                        Label(localized("document.delete"), systemImage: "trash")
                     }
-                    DetailText("updated: \(document.updatedAt)")
+                } label: {
+                    Image(systemName: "ellipsis")
                 }
+                .buttonStyle(NPDocumentIconButtonStyle())
+                .disabled(isBusy || isPreviewLoading)
+                .accessibilityLabel(localized("common.more_actions"))
+            }
 
-                if !artifacts.isEmpty {
-                    Divider().background(NPColors.interactive.opacity(0.4))
-                    SectionLabel("Artifacts")
-                    ForEach(artifacts) { artifact in
-                        HStack(alignment: .firstTextBaseline, spacing: NPSpacing.small) {
+            if detailsExpanded {
+                Divider()
+                DetailText(localizedFormat("document.detail.mime", document.mimeType ?? localized("common.unknown")))
+                if let sha256 = document.sha256 {
+                    DetailText(localizedFormat("document.detail.sha256", sha256))
+                }
+                DetailText(localizedFormat("document.detail.updated", document.updatedAt))
+            }
+
+            if !artifacts.isEmpty {
+                Divider()
+                SectionLabel(localized("document.artifacts"))
+                ForEach(artifacts) { artifact in
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        DetailText(
+                            [artifactTypeLabel(artifact.artifactType), artifact.mimeType, formatBytes(artifact.fileSize)]
+                                .compactMap { $0 }.joined(separator: " · ")
+                        )
+                        Spacer(minLength: 0)
+                        IconButton(systemImage: "arrow.down.circle", accessibilityLabel: localized("document.download_artifact"), enabled: !isBusy) {
+                            onArtifactDownload(artifact)
+                        }
+                    }
+                }
+            }
+
+            if !ocrArtifacts.isEmpty {
+                Divider()
+                VStack(alignment: .leading, spacing: 8) {
+                    SectionLabel(localized("document.ocr_results"))
+                    ForEach(ocrArtifacts) { artifact in
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
                             DetailText(
-                                [
-                                    artifactTypeLabel(artifact.artifactType),
-                                    artifact.mimeType,
-                                    formatBytes(artifact.fileSize),
-                                    artifact.metadataProcessor.map { "processor=\($0)" }
-                                ].compactMap { $0 }.joined(separator: " · ")
+                                [artifactTypeLabel(artifact.artifactType), artifact.mimeType, formatBytes(artifact.fileSize), compactDateTime(artifact.createdAt)]
+                                    .compactMap { $0 }.joined(separator: " · ")
                             )
                             Spacer(minLength: 0)
-                            IconButton(systemImage: "arrow.down.circle", accessibilityLabel: "Download artifact", enabled: !isBusy) {
-                                onArtifactDownload(artifact)
-                            }
-                        }
-                        if let metadataText = artifact.metadataText {
-                            DetailText("metadata: \(metadataText)", lineLimit: 2)
-                        }
-                    }
-                }
-
-                if !ocrArtifacts.isEmpty {
-                    Divider().background(NPColors.interactive.opacity(0.4))
-                    VStack(alignment: .leading, spacing: NPSpacing.small) {
-                        SectionLabel("OCR Results")
-                        ForEach(ocrArtifacts) { artifact in
-                            HStack(alignment: .firstTextBaseline, spacing: NPSpacing.small) {
-                                DetailText(
-                                    [
-                                        artifactTypeLabel(artifact.artifactType),
-                                        artifact.mimeType,
-                                        formatBytes(artifact.fileSize),
-                                        compactDateTime(artifact.createdAt)
-                                    ].compactMap { $0 }.joined(separator: " · ")
-                                )
-                                Spacer(minLength: 0)
-                                IconButton(systemImage: "arrow.down.circle", accessibilityLabel: "Download OCR result", enabled: !isBusy && artifact.downloadURL?.isEmpty == false) {
-                                    onOcrDownload(artifact)
-                                }
+                            IconButton(systemImage: "arrow.down.circle", accessibilityLabel: localized("document.download_ocr"), enabled: !isBusy && artifact.downloadURL?.isEmpty == false) {
+                                onOcrDownload(artifact)
                             }
                         }
                     }
                 }
             }
         }
+        .padding(12)
+        .modifier(NPListItemModifier())
+    }
+
+    static func == (lhs: DocumentRow, rhs: DocumentRow) -> Bool {
+        lhs.document == rhs.document
+            && lhs.artifacts == rhs.artifacts
+            && lhs.ocrArtifacts == rhs.ocrArtifacts
+            && lhs.isBusy == rhs.isBusy
+            && lhs.isPreviewLoading == rhs.isPreviewLoading
+            && lhs.canProcess == rhs.canProcess
+            && lhs.canDownload == rhs.canDownload
+            && lhs.thumbnailCacheKey == rhs.thumbnailCacheKey
     }
 
     private var processTitle: String {
-        document.status == "ready" || document.status == "failed" ? "Reprocess" : "Process"
+        localized(document.status == "ready" || document.status == "failed" ? "document.reprocess" : "document.process")
     }
 
 }
@@ -1657,10 +2236,14 @@ private struct TaskTab: View {
                 canRetryDocumentPurge: model.canRetryDocumentPurge,
                 onRetryDocumentPurge: model.retryDocumentPurge
             )
-                .padding(.horizontal, NPSpacing.outer)
-                .padding(.top, 14)
-                .padding(.bottom, NPSpacing.section)
+                .padding(.horizontal, 16)
+                .padding(.top, 12)
+                .workbenchContentBottomPadding()
         }
+        .background(NPColors.background)
+        .navigationTitle(localized("tasks.title"))
+        .navigationBarTitleDisplayMode(.inline)
+        .navigationBarHidden(false)
     }
 }
 
@@ -1676,9 +2259,10 @@ private struct TaskPanel: View {
         NPSection {
             VStack(alignment: .leading, spacing: 14) {
                 HStack {
-                    Label("Active task", systemImage: "clock.arrow.circlepath")
+                    Label(localized("task.active"), systemImage: "clock.arrow.circlepath")
                         .npSubheading()
                         .foregroundStyle(NPColors.textPrimary)
+                        .accessibilityIdentifier("taskScreen")
                     Spacer()
                     if let activeTask {
                         NPStatusChip(text: taskStatusLabel(activeTask), variant: taskStatusChipVariant(activeTask))
@@ -1701,13 +2285,13 @@ private struct TaskPanel: View {
                     }
                     HStack(spacing: NPSpacing.item) {
                         if let startedAt = activeTask.startedAt {
-                            TaskTime(label: "Started", value: compactDateTime(startedAt))
+                            TaskTime(label: localized("task.started"), value: compactDateTime(startedAt))
                         }
                         if let finishedAt = activeTask.finishedAt {
-                            TaskTime(label: "Completed", value: compactDateTime(finishedAt))
+                            TaskTime(label: localized("task.completed"), value: compactDateTime(finishedAt))
                         }
                         if let cancelRequestedAt = activeTask.cancelRequestedAt {
-                            TaskTime(label: "Cancel requested", value: compactDateTime(cancelRequestedAt))
+                            TaskTime(label: localized("task.cancel_requested"), value: compactDateTime(cancelRequestedAt))
                         }
                     }
                     if let taskMessage = terminalMessage(for: activeTask) {
@@ -1722,7 +2306,7 @@ private struct TaskPanel: View {
                             .clipShape(RoundedRectangle(cornerRadius: NPRadius.button, style: .continuous))
                     }
                     if let resultText = activeTask.resultText {
-                        DisclosureGroup("Task result", isExpanded: $resultExpanded) {
+                        DisclosureGroup(localized("task.result"), isExpanded: $resultExpanded) {
                             DetailText(resultText, lineLimit: nil)
                                 .padding(.top, 6)
                         }
@@ -1730,7 +2314,7 @@ private struct TaskPanel: View {
                     }
                     if canRetryDocumentPurge {
                         Button(action: onRetryDocumentPurge) {
-                            Label("Retry cleanup", systemImage: "arrow.clockwise")
+                            Label(localized("task.retry_cleanup"), systemImage: "arrow.clockwise")
                                 .frame(maxWidth: .infinity)
                         }
                         .buttonStyle(NPPrimaryButtonStyle())
@@ -1739,17 +2323,17 @@ private struct TaskPanel: View {
                 } else {
                     NPEmptyState(
                         systemImage: "checkmark.circle",
-                        title: "No active tasks",
-                        message: "Progress will appear here after processing documents or asking AI Co-pilot."
+                        title: localized("task.empty.title"),
+                        message: localized("task.empty.message")
                     )
                 }
 
                 if !events.isEmpty {
                     Divider().background(NPColors.interactive.opacity(0.4))
                     HStack {
-                        SectionLabel("Event log")
+                        SectionLabel(localized("task.event_log"))
                         Spacer()
-                        Button(eventsExpanded ? "Collapse" : "View all") {
+                        Button(eventsExpanded ? localized("common.collapse") : localized("common.view_all")) {
                             eventsExpanded.toggle()
                         }
                         .npCaption()
@@ -1795,7 +2379,7 @@ private struct TaskPanel: View {
                 ?? events.last(where: { $0.level == "error" })?.message
                 ?? events.last?.message
                 ?? task.errorMessage
-                ?? "Task cancelled."
+                ?? localized("task.cancelled_fallback")
         }
         return task.errorMessage
     }
@@ -1824,6 +2408,7 @@ private struct OpenClawChatTab: View {
     let model: NotePatchViewModel
     @ObservedObject var chatState: OpenClawViewState
     @ObservedObject var composerState: OpenClawComposerState
+    @Environment(\.workbenchBottomObstruction) private var bottomObstruction
     @State private var isRenaming = false
     @State private var titleDraft = ""
     @State private var isComposerFocused = false
@@ -1855,23 +2440,10 @@ private struct OpenClawChatTab: View {
                     }
                     .frame(height: 0)
 
-                    NotePatchLogoImage(height: 90)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, NPSpacing.outer)
-                        .padding(.top, NPSpacing.medium)
-                        .padding(.bottom, NPSpacing.small)
-
-                    Text("Patch your knowledge together.")
-                        .font(.system(size: 13, weight: .regular, design: .default))
-                        .foregroundStyle(NPColors.textTertiary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, NPSpacing.outer)
-                        .padding(.bottom, NPSpacing.xl)
-
                     // ——— Conversation header ———
                     HStack(spacing: 10) {
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(chatState.selectedConversation?.title ?? localized("New conversation"))
+                            Text(chatState.selectedConversation?.title ?? localized("chat.new_conversation"))
                                 .font(.system(size: 16, weight: .semibold))
                                 .foregroundStyle(NPColors.textPrimary)
                                 .lineLimit(1)
@@ -1889,7 +2461,7 @@ private struct OpenClawChatTab: View {
                                 dismissComposer()
                                 model.startNewConversation()
                             } label: {
-                                Label("New conversation", systemImage: "square.and.pencil")
+                                Label(localized("chat.new_conversation"), systemImage: "square.and.pencil")
                             }
                             if let conversation = chatState.selectedConversation {
                                 Button {
@@ -1897,13 +2469,13 @@ private struct OpenClawChatTab: View {
                                     titleDraft = conversation.title
                                     isRenaming = true
                                 } label: {
-                                    Label("Rename", systemImage: "pencil")
+                                    Label(localized("chat.rename"), systemImage: "pencil")
                                 }
                                 Button(role: .destructive) {
                                     dismissComposer()
                                     model.deleteCurrentConversation()
                                 } label: {
-                                    Label("Delete conversation", systemImage: "trash")
+                                    Label(localized("chat.delete_conversation"), systemImage: "trash")
                                 }
                             }
                             if !chatState.conversations.isEmpty {
@@ -1926,15 +2498,15 @@ private struct OpenClawChatTab: View {
                                 .clipShape(Circle())
                         }
                         .disabled(chatState.isHistoryLoading || chatState.isConversationMutating || chatState.isSending)
-                        .accessibilityLabel("Conversation actions")
+                        .accessibilityLabel(localized("chat.conversation_actions"))
                     }
                     .padding(.horizontal, NPSpacing.outer)
                     .padding(.vertical, 14)
-                    .background(NPColors.surface)
-                    .clipShape(RoundedRectangle(cornerRadius: NPRadius.card, style: .continuous))
-                    .modifier(NPCardShadow())
-                    .padding(.horizontal, NPSpacing.outer)
-                    .padding(.bottom, NPSpacing.large)
+                    .padding(12)
+                    .modifier(NPListItemModifier())
+                    .padding(.horizontal, 16)
+                    .padding(.top, 12)
+                    .padding(.bottom, 12)
 
                     // ——— Welcome card ———
                     if chatState.messages.isEmpty {
@@ -1944,10 +2516,10 @@ private struct OpenClawChatTab: View {
                                     .font(.system(size: 28, weight: .light))
                                     .foregroundStyle(NPColors.brand)
                                     .padding(.bottom, NPSpacing.xs)
-                                Text("How can NotePatch AI help today?")
+                                Text(localized("chat.welcome.title"))
                                     .font(.system(size: 16, weight: .semibold))
                                     .foregroundStyle(NPColors.textPrimary)
-                                Text("Organize ideas, summarize notes, and analyze your documents with Markdown support.")
+                                Text(localized("chat.welcome.message"))
                                     .font(.system(size: 13, weight: .regular))
                                     .foregroundStyle(NPColors.textSecondary)
                                     .multilineTextAlignment(.center)
@@ -1993,7 +2565,7 @@ private struct OpenClawChatTab: View {
                         .fill(.thinMaterial)
                         .opacity(isKeyboardPresented ? 0 : 1)
                 }
-                .padding(.bottom, isKeyboardPresented ? NPSpacing.small : 0)
+                .padding(.bottom, isKeyboardPresented ? NPSpacing.small : bottomObstruction)
                 .offset(y: -keyboardOffset)
                 .animation(.easeOut(duration: 0.22), value: keyboardOffset)
             }
@@ -2020,7 +2592,7 @@ private struct OpenClawChatTab: View {
                     userId: attachmentPickerUserId,
                     workspaceId: attachmentPickerWorkspaceId
                 ) {
-                    model.errorMessage = friendlyError(error)
+                    model.presentError(error)
                 }
             }
         }
@@ -2040,16 +2612,16 @@ private struct OpenClawChatTab: View {
                         userId: attachmentPickerUserId,
                         workspaceId: attachmentPickerWorkspaceId
                     ) {
-                        model.errorMessage = friendlyError(error)
+                        model.presentError(error)
                     }
                 }
             }
             .ignoresSafeArea()
         }
-        .alert("Rename conversation", isPresented: $isRenaming) {
-            TextField("Conversation title", text: $titleDraft)
-            Button("Cancel", role: .cancel) {}
-            Button("Save") { model.renameCurrentConversation(to: titleDraft) }
+        .alert(localized("chat.rename_title"), isPresented: $isRenaming) {
+            TextField(localized("chat.title_placeholder"), text: $titleDraft)
+            Button(localized("common.cancel"), role: .cancel) {}
+            Button(localized("common.save")) { model.renameCurrentConversation(to: titleDraft) }
                 .disabled(
                     chatState.isConversationMutating ||
                     titleDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
@@ -2110,7 +2682,7 @@ private struct OpenClawChatTab: View {
                 let textViewWidth = max(0, geometry.size.width)
 
                 ZStack(alignment: .topLeading) {
-                    Text("Ask AI Co-pilot")
+                    Text(localized("chat.composer_placeholder"))
                         .foregroundStyle(NPColors.textSecondary)
                         .padding(.leading, expanded ? NPSpacing.outer : 54)
                         .padding(.trailing, expanded ? NPSpacing.outer : 54)
@@ -2167,7 +2739,7 @@ private struct OpenClawChatTab: View {
                     AIComposerSurfaceBackground()
                         .overlay {
                             RoundedRectangle(cornerRadius: NPRadius.sheet, style: .continuous)
-                                .stroke(Color.white.opacity(0.38), lineWidth: 0.5)
+                                .stroke(NPColors.surfaceHighlight, lineWidth: 0.5)
                         }
                         .modifier(NPCardShadow())
                         .opacity(isActive ? 1 : 0)
@@ -2198,14 +2770,14 @@ private struct OpenClawChatTab: View {
                 captureAttachmentPickerContext()
                 isShowingAIPhotoLibrary = true
             } label: {
-                Label("Choose photo", systemImage: "photo.on.rectangle")
+                Label(localized("chat.choose_photo"), systemImage: "photo.on.rectangle")
             }
             Button {
                 dismissComposer()
                 captureAttachmentPickerContext()
                 isShowingAIFileImporter = true
             } label: {
-                Label("Choose file", systemImage: "folder")
+                Label(localized("chat.choose_file"), systemImage: "folder")
             }
         } label: {
             Image(systemName: "plus")
@@ -2213,7 +2785,7 @@ private struct OpenClawChatTab: View {
                 .frame(width: 38, height: 38)
         }
         .foregroundStyle(NPColors.textSecondary)
-        .accessibilityLabel("Add attachment")
+        .accessibilityLabel(localized("chat.add_attachment"))
         .accessibilityIdentifier("openClawAttachmentButton")
         .disabled(chatState.isSending)
     }
@@ -2247,8 +2819,8 @@ private struct OpenClawChatTab: View {
                 expectedUserId: expectedUserId,
                 expectedWorkspaceId: expectedWorkspaceId
             )
-            if didStage, let message = outcomes.compactMap(\.errorMessage).first {
-                model.errorMessage = message
+            if didStage, let message = outcomes.compactMap(\.errorDisplayText).first {
+                model.presentError(message)
             }
         }
     }
@@ -2292,7 +2864,7 @@ private struct OpenClawChatTab: View {
         .frame(width: 38, height: 38)
         .contentShape(Circle())
         .disabled(!canSend)
-        .accessibilityLabel("Send")
+        .accessibilityLabel(localized("chat.send"))
         .accessibilityIdentifier("openClawSendButton")
     }
 }
@@ -2355,14 +2927,30 @@ private struct LearningTab: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            Picker("Learning view", selection: $model.selectedLearningSection) {
-                ForEach(LearningSection.allCases) { section in
-                    Text(section.title).tag(section)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(LearningSection.allCases) { section in
+                        Button {
+                            withAnimation(.npInteractive) {
+                                model.selectedLearningSection = section
+                            }
+                        } label: {
+                            Text(section.title)
+                                .font(.subheadline.weight(model.selectedLearningSection == section ? .semibold : .regular))
+                                .foregroundStyle(model.selectedLearningSection == section ? NPColors.surfaceCard : NPColors.textSecondary)
+                                .padding(.horizontal, 14)
+                                .frame(minHeight: 36)
+                                .background(model.selectedLearningSection == section ? NPColors.brand : NPColors.surface)
+                                .clipShape(Capsule())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityAddTraits(model.selectedLearningSection == section ? .isSelected : [])
+                        .accessibilityIdentifier("reviewSection.\(section.rawValue)")
+                    }
                 }
+                .padding(.horizontal, 16)
             }
-            .pickerStyle(.segmented)
-            .padding(.horizontal, NPSpacing.outer)
-            .padding(.top, NPSpacing.xs)
+            .padding(.top, 4)
             .padding(.bottom, 12)
             .accessibilityIdentifier("reviewSectionPicker")
 
@@ -2379,8 +2967,8 @@ private struct LearningTab: View {
                         FlashcardsSection(model: model)
                     }
                 }
-                .padding(.horizontal, NPSpacing.outer)
-                .padding(.bottom, NPSpacing.section)
+                .padding(.horizontal, 16)
+                .workbenchContentBottomPadding()
             }
         }
         .onChange(of: model.selectedLearningSection) { section in
@@ -2397,7 +2985,7 @@ private struct LearningUnitsSection: View {
 
     var body: some View {
         LazyVStack(alignment: .leading, spacing: NPSpacing.item) {
-            LearningSectionHeader(title: "Learning units", subtitle: "Auto-organized results from your workspace", isLoading: model.isLearningLoading) {
+            LearningSectionHeader(title: localized("review.units.title"), subtitle: localized("review.units.subtitle"), isLoading: model.isLearningLoading) {
                 model.loadLearningUnits(allowOfflineNetwork: true)
             }
             HStack(spacing: NPSpacing.small) {
@@ -2419,7 +3007,7 @@ private struct LearningUnitsSection: View {
                 Spacer()
             }
             if model.isLearningLoading && model.learningUnits.isEmpty {
-                ProgressView("Loading learning units...")
+                ProgressView(localized("review.units.loading"))
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 28)
             } else if model.learningUnits.isEmpty {
@@ -2450,7 +3038,7 @@ private struct LearningUnitsSection: View {
                 }
             }
             if model.selectedLearningUnitId != nil {
-                Text(localized("Digital Notes")).npSubheading().padding(.top, 6)
+                Text(localized("notes.default_title")).npSubheading().padding(.top, 6)
                 if model.studyNotes.isEmpty {
                     Text(localized("notes.unit.empty"))
                         .npBody()
@@ -2460,7 +3048,7 @@ private struct LearningUnitsSection: View {
                         HStack(spacing: NPSpacing.medium) {
                             Image(systemName: "note.text").foregroundStyle(NPColors.brand)
                             VStack(alignment: .leading, spacing: 3) {
-                                Text(note.title.isEmpty ? localized("Digital Notes") : note.title)
+                                Text(note.title.isEmpty ? localized("notes.default_title") : note.title)
                                     .font(.body.weight(.medium))
                                     .lineLimit(2)
                                 Text(localizedFormat("note.version", String(note.versionNo))).npCaption()
@@ -2482,6 +3070,7 @@ private struct LearningUnitsSection: View {
                 }
             }
         }
+        .accessibilityIdentifier("learningUnitsSection")
         .sheet(isPresented: $model.isLearningUnitMergePresented) {
             LearningUnitMergeSheet(model: model)
         }
@@ -2818,27 +3407,31 @@ private struct KnowledgeSearchSection: View {
     var body: some View {
         LazyVStack(alignment: .leading, spacing: NPSpacing.item) {
             VStack(alignment: .leading, spacing: 2) {
-                Text("Knowledge search").npHeading()
-                Text("Search through your workspace materials").npCaption()
+                Text(localized("knowledge.title")).npHeading()
+                Text(localized("knowledge.subtitle")).npCaption()
             }
 
             NPSection {
                 VStack(alignment: .leading, spacing: 12) {
-                    LabeledField(title: "Search query") {
-                        TextField("e.g. What does the slope of a linear function mean?", text: $model.knowledgeQuery)
+                    LabeledField(title: "knowledge.query") {
+                        TextField(localized("knowledge.query_placeholder"), text: $model.knowledgeQuery)
                             .accessibilityIdentifier("knowledgeQueryField")
                     }
-                    Picker("Learning unit", selection: $model.knowledgeLearningUnitId) {
-                        Text("All units").tag("")
+                    Picker(localized("knowledge.learning_unit"), selection: $model.knowledgeLearningUnitId) {
+                        Text(localized("knowledge.all_units")).tag("")
                         ForEach(model.learningUnits) { unit in Text(unit.title).tag(unit.id) }
                     }
                     .pickerStyle(.menu)
-                    LabeledField(title: "Subject (optional)") {
-                        TextField("e.g. math", text: $model.knowledgeSubject)
+                    LabeledField(title: "knowledge.subject_optional") {
+                        TextField(localized("knowledge.subject_placeholder"), text: $model.knowledgeSubject)
                     }
-                    Stepper("Results: \(model.knowledgeLimit)", value: $model.knowledgeLimit, in: 1...20)
+                    Stepper(
+                        localizedFormat("knowledge.limit", String(model.knowledgeLimit)),
+                        value: $model.knowledgeLimit,
+                        in: 1...20
+                    )
                     Button { model.searchKnowledge() } label: {
-                        Label("Search", systemImage: "magnifyingglass")
+                        Label(localized("knowledge.search"), systemImage: "magnifyingglass")
                             .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(NPPrimaryButtonStyle())
@@ -2848,12 +3441,12 @@ private struct KnowledgeSearchSection: View {
             }
 
             if model.isKnowledgeSearching {
-                ProgressView("Searching knowledge base...").frame(maxWidth: .infinity).padding(.vertical, NPSpacing.large)
+                ProgressView(localized("knowledge.searching")).frame(maxWidth: .infinity).padding(.vertical, NPSpacing.large)
             } else if model.hasSearchedKnowledge && model.knowledgeResults.isEmpty {
-                NPEmptyState(systemImage: "magnifyingglass", title: "No matches found", message: "Try different keywords, unit, or subject.")
+                NPEmptyState(systemImage: "magnifyingglass", title: localized("knowledge.empty.title"), message: localized("knowledge.empty.message"))
             } else if !model.knowledgeResults.isEmpty {
                 HStack {
-                    Text("Search results").npSubheading()
+                    Text(localized("knowledge.results")).npSubheading()
                     Spacer()
                     Text(localizedFormat("knowledge.results_count", String(model.knowledgeResults.count))).npCaption()
                 }
@@ -2861,7 +3454,7 @@ private struct KnowledgeSearchSection: View {
                     NPSection {
                         VStack(alignment: .leading, spacing: NPSpacing.small) {
                             HStack(alignment: .firstTextBaseline) {
-                                Text(item.metadataTitle ?? item.sourceType ?? localized("Knowledge snippet"))
+                                Text(item.metadataTitle ?? item.sourceType ?? localized("knowledge.snippet"))
                                     .npSubheading()
                                     .foregroundStyle(NPColors.textPrimary)
                                     .lineLimit(2)
@@ -2871,13 +3464,18 @@ private struct KnowledgeSearchSection: View {
                                     .foregroundStyle(NPColors.textSecondary)
                             }
                             Text(item.content).npBody().textSelection(.enabled).foregroundStyle(NPColors.textPrimary)
-                            let details = [item.subject, item.gradeLevel, item.sourceType, item.pageReferences.map { "Page \($0)" }].compactMap { $0 }
+                            let details = [
+                                item.subject,
+                                item.gradeLevel,
+                                item.sourceType,
+                                item.pageReferences.map { localizedFormat("knowledge.page", $0) }
+                            ].compactMap { $0 }
                             if !details.isEmpty {
                                 Text(details.joined(separator: " · ")).npCaption()
                             }
                             if item.documentId != nil {
                                 Button { model.previewKnowledgeSource(item) } label: {
-                                    Label("Preview source", systemImage: "doc.text.magnifyingglass")
+                                    Label(localized("knowledge.preview_source"), systemImage: "doc.text.magnifyingglass")
                                 }
                                 .buttonStyle(NPSecondaryButtonStyle())
                                 .disabled(model.isBusy)
@@ -2899,14 +3497,14 @@ private struct HomeworkGradingSection: View {
         LazyVStack(alignment: .leading, spacing: NPSpacing.item) {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Homework grading").npHeading()
-                    Text("Configure grading rules, references, and start grading").npCaption()
+                    Text(localized("grading.title")).npHeading()
+                    Text(localized("grading.subtitle")).npCaption()
                 }
                 Spacer()
                 Button { isCreatingHomework = true } label: { Image(systemName: "plus") }
                     .buttonStyle(NPToolbarIconButtonStyle())
                     .disabled(model.homeworkDocumentCandidates.isEmpty)
-                    .accessibilityLabel("Create homework")
+                    .accessibilityLabel(localized("grading.create_homework"))
                 Button { model.loadLearningDashboard(allowOfflineNetwork: true) } label: { Image(systemName: "arrow.clockwise") }
                     .buttonStyle(NPToolbarIconButtonStyle())
                     .disabled(model.isHomeworkLoading)
@@ -2914,15 +3512,19 @@ private struct HomeworkGradingSection: View {
             }
 
             if model.isHomeworkLoading && model.homeworks.isEmpty {
-                ProgressView("Loading homework...").frame(maxWidth: .infinity).padding(.vertical, NPSpacing.xl)
+                ProgressView(localized("grading.loading")).frame(maxWidth: .infinity).padding(.vertical, NPSpacing.xl)
             } else if model.homeworks.isEmpty {
-                NPEmptyState(systemImage: "checklist", title: "No homework yet", message: model.homeworkDocumentCandidates.isEmpty ? "Upload and process a homework document first." : "Tap + to create a linked homework.")
+                NPEmptyState(
+                    systemImage: "checklist",
+                    title: localized("grading.empty.title"),
+                    message: localized(model.homeworkDocumentCandidates.isEmpty ? "grading.empty.upload_first" : "grading.empty.create")
+                )
             } else {
-                Picker("Current homework", selection: Binding(
+                Picker(localized("grading.current_homework"), selection: Binding(
                     get: { model.selectedHomeworkId ?? "" },
                     set: { if !$0.isEmpty { model.selectHomework($0) } }
                 )) {
-                    Text("Select homework").tag("")
+                    Text(localized("grading.select_homework")).tag("")
                     ForEach(model.homeworks) { homework in Text(homework.title).tag(homework.id) }
                 }
                 .pickerStyle(.menu)
@@ -2934,6 +3536,7 @@ private struct HomeworkGradingSection: View {
                 homeworkEditor(homework)
             }
         }
+        .accessibilityIdentifier("homeworkGradingSection")
         .sheet(isPresented: $isCreatingHomework) {
             HomeworkCreateSheet(model: model, isPresented: $isCreatingHomework)
         }
@@ -2952,23 +3555,23 @@ private struct HomeworkGradingSection: View {
                         Spacer()
                         NPStatusChip(text: statusLabel(homework.status), variant: statusChipVariant(homework.status))
                     }
-                    SectionLabel("Grading rubric")
+                    SectionLabel(localized("grading.rubric"))
                     TextEditor(text: $model.homeworkRubricText)
                         .frame(height: 92)
                         .padding(6)
                         .npInputField()
-                    LabeledField(title: "Max score") {
+                    LabeledField(title: "grading.max_score") {
                         TextField("100", text: $model.homeworkMaxScoreText)
                             .keyboardType(.decimalPad)
                     }
                     if model.isGradingConfigDirty {
-                        Label("Unsaved changes", systemImage: "exclamationmark.circle")
+                        Label(localized("grading.unsaved"), systemImage: "exclamationmark.circle")
                             .npCaption()
                             .foregroundStyle(NPColors.warning)
                             .accessibilityIdentifier("gradingConfigUnsavedLabel")
                     }
                     Button { model.saveGradingConfig() } label: {
-                        Label("Save grading config", systemImage: "checkmark")
+                        Label(localized("grading.save_config"), systemImage: "checkmark")
                             .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(NPPrimaryButtonStyle())
@@ -2977,9 +3580,9 @@ private struct HomeworkGradingSection: View {
             }
 
             VStack(alignment: .leading, spacing: 10) {
-                Text("Grading references").npSubheading()
+                Text(localized("grading.references")).npSubheading()
                 if model.homeworkReferences.isEmpty {
-                    Text("No answer key or rubric.").npBody().foregroundStyle(NPColors.textSecondary)
+                    Text(localized("grading.no_references")).npBody().foregroundStyle(NPColors.textSecondary)
                 } else {
                     ForEach(model.homeworkReferences) { reference in
                         HStack(spacing: 10) {
@@ -3000,11 +3603,11 @@ private struct HomeworkGradingSection: View {
                     }
                 }
                 if model.referenceDocumentCandidates.isEmpty {
-                    Text("No reference documents available. Upload and process an Answer Key or Rubric first.")
+                    Text(localized("grading.no_reference_documents"))
                         .npCaption()
                 } else {
-                    Picker("Add reference", selection: $selectedReferenceDocumentId) {
-                        Text("Select reference").tag("")
+                    Picker(localized("grading.add_reference"), selection: $selectedReferenceDocumentId) {
+                        Text(localized("grading.select_reference")).tag("")
                         ForEach(model.referenceDocumentCandidates) { document in
                             Text("\(documentKindLabel(document.documentKind)) · \(document.title ?? document.originalFilename)").tag(document.id)
                         }
@@ -3015,7 +3618,7 @@ private struct HomeworkGradingSection: View {
                             selectedReferenceDocumentId = ""
                         }
                     } label: {
-                        Label("Add grading reference", systemImage: "plus")
+                        Label(localized("grading.add_reference_action"), systemImage: "plus")
                     }
                     .buttonStyle(NPSecondaryButtonStyle())
                     .disabled(selectedReferenceDocumentId.isEmpty || model.isHomeworkLoading)
@@ -3031,7 +3634,7 @@ private struct HomeworkGradingSection: View {
                 }
             }
             Button { model.gradeSelectedHomework() } label: {
-                Label("Start grading", systemImage: "checkmark.seal")
+                Label(localized("grading.start"), systemImage: "checkmark.seal")
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(NPPrimaryButtonStyle())
@@ -3061,9 +3664,9 @@ private struct HomeworkCreateSheet: View {
     var body: some View {
         NavigationView {
             Form {
-                Section(header: Text("Homework document")) {
-                    Picker("Document", selection: $documentId) {
-                        Text("Select").tag("")
+                Section(header: Text(localized("grading.homework_document"))) {
+                    Picker(localized("grading.document"), selection: $documentId) {
+                        Text(localized("common.select")).tag("")
                         ForEach(model.homeworkDocumentCandidates) { document in
                             Text(document.title ?? document.originalFilename).tag(document.id)
                         }
@@ -3073,24 +3676,24 @@ private struct HomeworkCreateSheet: View {
                             title = document.title ?? document.originalFilename
                         }
                     }
-                    TextField("Homework title", text: $title)
-                    TextField("Description (optional)", text: $description)
+                    TextField(localized("grading.homework_title"), text: $title)
+                    TextField(localized("grading.description_optional"), text: $description)
                 }
-                Section(header: Text("Due date")) {
-                    Toggle("Set due date", isOn: $hasDueDate)
-                    if hasDueDate { DatePicker("Due date", selection: $dueAt) }
+                Section(header: Text(localized("grading.due_date"))) {
+                    Toggle(localized("grading.set_due_date"), isOn: $hasDueDate)
+                    if hasDueDate { DatePicker(localized("grading.due_date"), selection: $dueAt) }
                 }
-                Section(header: Text("Grading config")) {
+                Section(header: Text(localized("grading.config"))) {
                     TextEditor(text: $rubricText).frame(height: 90)
-                    TextField("Max score", text: $maxScoreText).keyboardType(.decimalPad)
+                    TextField(localized("grading.max_score"), text: $maxScoreText).keyboardType(.decimalPad)
                 }
             }
-            .navigationTitle("Create homework")
+            .navigationTitle(localized("grading.create_homework"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { isPresented = false } }
+                ToolbarItem(placement: .cancellationAction) { Button(localized("common.cancel")) { isPresented = false } }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Create") {
+                    Button(localized("common.create")) {
                         _ = model.createHomework(
                             documentId: documentId,
                             title: title,
@@ -3122,9 +3725,9 @@ private struct LearningEmptyState: View {
             Image(systemName: "book.closed")
                 .font(.system(size: 42, weight: .light))
                 .foregroundStyle(NPColors.textSecondary.opacity(0.5))
-            Text("No learning units yet")
+            Text(localized("review.units.empty.title"))
                 .npSubheading()
-            Text("Learning results will appear here after processing documents.")
+            Text(localized("review.units.empty.message"))
                 .npCaption()
                 .multilineTextAlignment(.center)
                 .lineSpacing(3)
@@ -3139,6 +3742,10 @@ private struct LearningEmptyState: View {
 private struct OpenClawMessageBubble: View {
     let message: OpenClawChatMessage
 
+    private var displayedContent: String {
+        message.id == "system" ? localized("chat.system_help") : message.content
+    }
+
     var body: some View {
         HStack {
             if message.role == .user {
@@ -3146,19 +3753,19 @@ private struct OpenClawMessageBubble: View {
             }
             VStack(alignment: .leading, spacing: NPSpacing.small) {
                 if message.role == .assistant {
-                    Label("OpenClaw", systemImage: "sparkles")
+                    Label(localized("chat.assistant_name"), systemImage: "sparkles")
                         .font(.caption.weight(.medium))
                         .foregroundStyle(NPColors.brand)
                 }
                 if message.status == .sending {
-                    Text("Thinking...")
+                    Text(localized("chat.thinking"))
                         .font(.body.weight(.medium))
                         .foregroundStyle(NPColors.textPrimary)
                     ProgressView(value: Double(message.progress ?? 0), total: 100)
                 } else if message.role == .assistant {
-                    LightweightMarkdownText(markdown: message.content, color: foregroundColor)
+                    LightweightMarkdownText(markdown: displayedContent, color: foregroundColor)
                 } else {
-                    Text(message.content)
+                    Text(displayedContent)
                         .foregroundStyle(foregroundColor)
                 }
                 if !message.attachments.isEmpty {
@@ -3178,11 +3785,11 @@ private struct OpenClawMessageBubble: View {
                         .lineLimit(3)
                 }
                 if message.sourceStatus == "partially_unavailable" {
-                    Label("Some source materials removed", systemImage: "exclamationmark.triangle")
+                    Label(localized("chat.sources.partially_removed"), systemImage: "exclamationmark.triangle")
                         .npCaption()
                         .foregroundStyle(NPColors.warning)
                 } else if message.sourceStatus == "unavailable" {
-                    Label("Source materials removed", systemImage: "exclamationmark.triangle.fill")
+                    Label(localized("chat.sources.removed"), systemImage: "exclamationmark.triangle.fill")
                         .npCaption()
                         .foregroundStyle(NPColors.warning)
                 } else if !message.citations.isEmpty {
@@ -3250,6 +3857,12 @@ private struct OpenClawMessageAttachmentView: View {
                         .fill(Color.black.opacity(0.28))
                     ProgressView()
                         .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                } else if attachment.status == .unavailable {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(Color.black.opacity(0.16))
+                    Image(systemName: "exclamationmark.icloud")
+                        .font(.system(size: 22, weight: .semibold))
+                        .foregroundStyle(Color.white)
                 }
             }
             .frame(width: 112, height: 88)
@@ -3273,20 +3886,14 @@ private struct ProfileTab: View {
 
     var body: some View {
         ScrollView {
-            VStack(spacing: 24) {
-                // ——— Brand Hero ———
-                NotePatchLogoImage(height: 90)
-                    .frame(maxWidth: .infinity, alignment: .center)
-                    .padding(.horizontal, NPSpacing.outer)
-                    .padding(.top, NPSpacing.large)
-                    .padding(.bottom, NPSpacing.small)
-
-                Text("Patch your knowledge together.")
-                    .font(.system(size: 13, weight: .regular, design: .default))
-                    .foregroundStyle(NPColors.textSecondary)
-                    .frame(maxWidth: .infinity, alignment: .center)
-                    .padding(.horizontal, NPSpacing.outer)
-                    .padding(.bottom, NPSpacing.large)
+            VStack(spacing: 16) {
+                CompactPageHeader(
+                    title: localized("profile.title"),
+                    subtitle: nil,
+                    actionSystemImage: nil,
+                    actionAccessibilityLabel: nil,
+                    action: nil
+                )
 
                 // ——— Profile Card ———
                 NPSection {
@@ -3311,9 +3918,6 @@ private struct ProfileTab: View {
                                     .lineLimit(1)
                             }
                         }
-                        Text("Pro Plan · Sync Enabled")
-                            .font(.system(size: 12, weight: .regular))
-                            .foregroundStyle(NPColors.textTertiary)
                     }
                 }
 
@@ -3329,21 +3933,36 @@ private struct ProfileTab: View {
                 // ——— Server ———
                 serverSection
 
+                NPSection {
+                    HStack(spacing: 12) {
+                        NotePatchLogoImage(height: 40)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(localized("profile.about.title"))
+                                .font(.body.weight(.semibold))
+                            Text(localized("profile.about.subtitle"))
+                                .font(.caption)
+                                .foregroundStyle(NPColors.textSecondary)
+                        }
+                    }
+                }
+                .accessibilityIdentifier("profileAbout")
+
                 // ——— Sign Out ———
                 Button(role: .destructive) {
                     model.logout()
                 } label: {
-                    Label("Sign Out", systemImage: "rectangle.portrait.and.arrow.right")
+                    Label(localized("profile.sign_out"), systemImage: "rectangle.portrait.and.arrow.right")
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(NPSecondaryButtonStyle())
                 .foregroundStyle(NPColors.destructive)
                 .disabled(model.isBusy)
                 .padding(.bottom, NPSpacing.xl)
+                .accessibilityIdentifier("profileSignOut")
             }
-            .padding(.horizontal, NPSpacing.outer)
-            .padding(.top, NPSpacing.small)
-            .padding(.bottom, 100)
+            .padding(.horizontal, 16)
+            .padding(.top, 12)
+            .workbenchContentBottomPadding()
         }
         .background(NPColors.background)
     }
@@ -3356,9 +3975,9 @@ private struct ProfileTab: View {
     private var languageSection: some View {
         NPSection {
             VStack(alignment: .leading, spacing: NPSpacing.small) {
-                Label("Language", systemImage: "globe")
+                Label(localized("profile.language"), systemImage: "globe")
                     .npSubheading()
-                Picker("Language", selection: Binding(
+                Picker(localized("profile.language"), selection: Binding(
                     get: { localization.language },
                     set: { localization.select($0) }
                 )) {
@@ -3369,7 +3988,7 @@ private struct ProfileTab: View {
                 .pickerStyle(MenuPickerStyle())
                 .tint(NPColors.brandDark)
                 .accessibilityIdentifier("appLanguagePicker")
-                Text("Changes apply immediately throughout NotePatch.")
+                Text(localized("profile.language_help"))
                     .npCaption()
             }
         }
@@ -3378,14 +3997,14 @@ private struct ProfileTab: View {
     private var aiSection: some View {
         NPSection {
             VStack(alignment: .leading, spacing: NPSpacing.medium) {
-                Label("AI", systemImage: "sparkles")
+                Label(localized("profile.ai"), systemImage: "sparkles")
                     .npSubheading()
-                Toggle("AI history", isOn: Binding(
+                Toggle(localized("profile.ai_history"), isOn: Binding(
                     get: { model.aiHistoryEnabled },
                     set: { model.updateAIHistoryEnabled($0) }
                 ))
                 .disabled(model.isBusy || model.isAIPreferenceUpdating)
-                Text("Session records are retained, but future requests won't include history context.")
+                Text(localized("profile.ai_history_help"))
                     .npCaption()
 
                 Divider()
@@ -3478,16 +4097,16 @@ private struct ProfileTab: View {
     private var serverSection: some View {
         NPSection {
             VStack(alignment: .leading, spacing: 14) {
-                Label("Server", systemImage: "server.rack")
+                Label(localized("profile.server"), systemImage: "server.rack")
                     .npSubheading()
 
-                LabeledField(title: "API address") {
-                    TextField("API address", text: $model.apiBaseURLText)
+                LabeledField(title: "profile.api_address") {
+                    TextField(localized("profile.api_address"), text: $model.apiBaseURLText)
                         .textInputAutocapitalization(.never)
                         .keyboardType(.URL)
                 }
-                LabeledField(title: "TUSD upload address") {
-                    TextField("TUSD address", text: $model.tusBaseURLText)
+                LabeledField(title: "profile.upload_address") {
+                    TextField(localized("profile.upload_address_placeholder"), text: $model.tusBaseURLText)
                         .textInputAutocapitalization(.never)
                         .keyboardType(.URL)
                 }
@@ -3495,7 +4114,7 @@ private struct ProfileTab: View {
                 Button {
                     model.saveServerURLs()
                 } label: {
-                    Label("Save server settings", systemImage: "checkmark")
+                    Label(localized("profile.save_server"), systemImage: "checkmark")
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(NPPrimaryButtonStyle())
@@ -3505,7 +4124,7 @@ private struct ProfileTab: View {
                     Button {
                         model.checkAPIConnection()
                     } label: {
-                        Label("Test API", systemImage: "network")
+                        Label(localized("profile.test_api"), systemImage: "network")
                             .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(NPSecondaryButtonStyle())
@@ -3514,7 +4133,7 @@ private struct ProfileTab: View {
                     Button {
                         model.checkTUSConnection()
                     } label: {
-                        Label("Test TUSD", systemImage: "arrow.up.circle")
+                        Label(localized("profile.test_tusd"), systemImage: "arrow.up.circle")
                             .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(NPSecondaryButtonStyle())
@@ -3533,7 +4152,7 @@ private struct WorkspaceManagementSection: View {
         NPSection {
             VStack(alignment: .leading, spacing: 14) {
                 HStack {
-                    Label("Workspace", systemImage: "person.crop.square")
+                    Label(localized("profile.workspace"), systemImage: "person.crop.square")
                         .npSubheading()
                     Spacer()
                     Button {
@@ -3544,7 +4163,7 @@ private struct WorkspaceManagementSection: View {
                     .buttonStyle(.plain)
                     .foregroundStyle(NPColors.brandDark)
                     .disabled(model.isBusy || model.selectedWorkspaceId == nil)
-                    .accessibilityLabel("Refresh workspace")
+                    .accessibilityLabel(localized("profile.refresh_workspace"))
                 }
                 if let selected {
                     HStack(spacing: 10) {
@@ -3558,18 +4177,18 @@ private struct WorkspaceManagementSection: View {
                                 .font(.body.weight(.medium))
                                 .foregroundStyle(NPColors.textPrimary)
                                 .lineLimit(1)
-                            Text("Active workspace")
+                            Text(localized("profile.active_workspace"))
                                 .npCaption()
                         }
                     }
                 } else {
-                    Text("No workspaces. Try restoring.")
+                    Text(localized("profile.no_workspace"))
                         .foregroundStyle(NPColors.textSecondary)
                 }
                 Button {
                     model.recoverPersonalWorkspace()
                 } label: {
-                    Label("Restore workspace", systemImage: "arrow.triangle.2.circlepath")
+                    Label(localized("profile.restore_workspace"), systemImage: "arrow.triangle.2.circlepath")
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(NPSecondaryButtonStyle())
@@ -3627,10 +4246,10 @@ private struct LightweightMarkdownText: View {
                 case .code:
                     Text(block.text)
                         .font(.system(.caption, design: .monospaced))
-                        .foregroundStyle(NPColors.surface)
+                        .foregroundStyle(NPColors.textPrimary)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(10)
-                        .background(Color.black.opacity(0.65))
+                        .background(NPColors.interactive)
                         .clipShape(RoundedRectangle(cornerRadius: NPRadius.xs))
                 case .paragraph:
                     MarkdownInlineText(tokens: block.inlineTokens, color: color)
@@ -3705,7 +4324,10 @@ private struct CollapsibleSection<Content: View>: View {
                     Button {
                         withAnimation(.npInteractive) { expanded.toggle() }
                     } label: {
-                        Label(expanded ? "Collapse" : "Expand", systemImage: expanded ? "chevron.up" : "chevron.down")
+                        Label(
+                            expanded ? localized("common.collapse") : localized("common.expand"),
+                            systemImage: expanded ? "chevron.up" : "chevron.down"
+                        )
                     }
                     .buttonStyle(.borderless)
                 }
@@ -3865,6 +4487,59 @@ private struct DetailText: View {
 
 // MARK: - Status Banner
 
+private struct WorkbenchStatusOverlay: View {
+    let isBusy: Bool
+    let statusMessage: String
+    let errorMessage: String?
+    let topSafeAreaInset: CGFloat
+    let bottomOffset: CGFloat
+    let onDismiss: () -> Void
+
+    var body: some View {
+        ZStack {
+            if isBusy || errorMessage != nil {
+                VStack {
+                    StatusBanner(
+                        isBusy: isBusy,
+                        statusMessage: statusMessage,
+                        errorMessage: errorMessage,
+                        onDismiss: onDismiss
+                    )
+                    .allowsHitTesting(errorMessage != nil)
+                    .padding(.top, max(0, topSafeAreaInset - 4))
+                    Spacer()
+                }
+            } else if !statusMessage.isEmpty {
+                VStack {
+                    Spacer()
+                    StatusBanner(
+                        isBusy: false,
+                        statusMessage: statusMessage,
+                        errorMessage: nil,
+                        onDismiss: onDismiss
+                    )
+                    .allowsHitTesting(false)
+                    .padding(.bottom, bottomOffset)
+                }
+                .onAppear(perform: scheduleDismiss)
+                .onChange(of: statusMessage) { _ in scheduleDismiss() }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .animation(.easeOut(duration: 0.2), value: statusMessage)
+        .animation(.easeOut(duration: 0.2), value: errorMessage)
+    }
+
+    private func scheduleDismiss() {
+        let message = statusMessage
+        guard !message.isEmpty else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+            guard statusMessage == message, !isBusy, errorMessage == nil else { return }
+            onDismiss()
+        }
+    }
+}
+
 private struct StatusBanner: View {
     let isBusy: Bool
     let statusMessage: String
@@ -3957,7 +4632,7 @@ private struct StatusPanel: View {
                 if isBusy {
                     HStack(spacing: NPSpacing.small) {
                         ProgressView()
-                        Text("Processing...")
+                        Text(localized("common.processing"))
                             .npBody()
                             .foregroundStyle(NPColors.textSecondary)
                     }
@@ -4016,6 +4691,38 @@ private func colorForStatus(_ status: String) -> Color {
     }
 }
 
+private func documentFileIcon(_ fileType: String) -> String {
+    switch fileType.lowercased() {
+    case "image": return "photo"
+    case "pdf": return "doc.richtext"
+    case "docx": return "doc.text"
+    case "pptx": return "rectangle.stack"
+    case "audio": return "waveform"
+    case "video": return "play.rectangle"
+    default: return "doc"
+    }
+}
+
+private func documentMetadataSummary(_ document: LearningDocumentItem) -> String {
+    var components = [fileTypeLabel(document.fileType)]
+    if let fileSize = document.fileSize {
+        components.append(formatBytes(fileSize))
+    }
+    let date = compactDateTime(document.updatedAt)
+    if !date.isEmpty {
+        components.append(date)
+    }
+    return components.joined(separator: " · ")
+}
+
+private func primaryDocumentStatus(_ document: LearningDocumentItem) -> String {
+    return statusLabel(document.status)
+}
+
+private func primaryDocumentStatusVariant(_ document: LearningDocumentItem) -> NPStatusChip.NPStatusChipVariant {
+    return statusChipVariant(document.status)
+}
+
 private func statusChipVariant(_ status: String) -> NPStatusChip.NPStatusChipVariant {
     switch status {
     case "failed", "infected", "cancelled", "deleted":
@@ -4063,9 +4770,9 @@ private func taskTypeLabel(_ taskType: String) -> String {
     case "merge_learning_units":
         return localized("task.type.merge_learning_units")
     case "openclaw", "openclaw_task":
-        return "OpenClaw"
+        return localized("task.type.ai_chat")
     default:
-        return taskType.replacingOccurrences(of: "_", with: " ")
+        return localized("task.type.other")
     }
 }
 
@@ -4189,7 +4896,7 @@ private struct AdaptiveComposerTextView: UIViewRepresentable {
         textView.alwaysBounceVertical = false
         textView.alwaysBounceHorizontal = false
         textView.isScrollEnabled = false
-        textView.accessibilityLabel = localized("Ask AI Co-pilot")
+        textView.accessibilityLabel = localized("chat.composer_accessibility")
         textView.accessibilityIdentifier = "openClawComposerTextView"
         return container
     }
@@ -4197,7 +4904,7 @@ private struct AdaptiveComposerTextView: UIViewRepresentable {
     func updateUIView(_ container: ComposerTextViewContainer, context: Context) {
         let textView = container.textView
         context.coordinator.update(parent: self)
-        textView.accessibilityLabel = localized("Ask AI Co-pilot")
+        textView.accessibilityLabel = localized("chat.composer_accessibility")
         let normalizedHorizontalInset = max(0, horizontalInset)
         let didChangeInsets =
             abs(textView.textContainerInset.left - normalizedHorizontalInset) > 0.5 ||
@@ -4403,7 +5110,7 @@ private struct PhotoLibraryPicker: UIViewControllerRepresentable {
                 guard let typeIdentifier = provider.registeredTypeIdentifiers.first(where: {
                     UTType($0)?.conforms(to: .image) == true
                 }) else {
-                    firstError = firstError ?? LearningBackendError("Unable to identify the selected image format.")
+                    firstError = firstError ?? LearningBackendError(localizedKey: "error.photo.type_unknown")
                     continue
                 }
                 group.enter()
@@ -4412,7 +5119,7 @@ private struct PhotoLibraryPicker: UIViewControllerRepresentable {
                     do {
                         if let error { throw error }
                         guard let temporaryURL else {
-                            throw LearningBackendError("Unable to read the selected image.")
+                            throw LearningBackendError(localizedKey: "error.photo.read_failed")
                         }
                         let type = UTType(typeIdentifier)
                         let fileExtension = type?.preferredFilenameExtension ?? "jpg"
@@ -4492,6 +5199,78 @@ private struct CameraPicker: UIViewControllerRepresentable {
 
 // MARK: - Quick Look Preview
 
+private struct UnsupportedFilePreview: View {
+    let preview: DownloadedPreview
+    @Environment(\.dismiss) private var dismiss
+    @State private var isSharing = false
+
+    var body: some View {
+        NavigationView {
+            VStack(spacing: 20) {
+                Spacer()
+                Image(systemName: "doc.questionmark")
+                    .font(.system(size: 54, weight: .light))
+                    .foregroundStyle(NPColors.brand)
+                    .frame(width: 88, height: 88)
+                    .background(NPColors.brandLight)
+                    .clipShape(RoundedRectangle(cornerRadius: NPRadius.medium, style: .continuous))
+
+                VStack(spacing: 8) {
+                    Text(localized("preview.unsupported.title"))
+                        .npHeading()
+                    Text(localized("preview.unsupported.message"))
+                        .npBody()
+                        .foregroundStyle(NPColors.textSecondary)
+                        .multilineTextAlignment(.center)
+                }
+
+                NPSection {
+                    VStack(alignment: .leading, spacing: 10) {
+                        DetailText(localizedFormat("preview.file.name", preview.filename))
+                        DetailText(localizedFormat("preview.file.type", preview.mimeType ?? localized("common.unknown")))
+                        DetailText(localizedFormat("preview.file.size", formatBytes(preview.fileSize)))
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+
+                Button {
+                    isSharing = true
+                } label: {
+                    Label(localized("preview.open_external"), systemImage: "square.and.arrow.up")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(NPPrimaryButtonStyle())
+                .accessibilityIdentifier("unsupportedPreviewOpenExternal")
+                Spacer()
+            }
+            .padding(20)
+            .background(NPColors.background.ignoresSafeArea())
+            .navigationTitle(preview.filename)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button(localized("common.done")) { dismiss() }
+                }
+            }
+        }
+        .navigationViewStyle(.stack)
+        .sheet(isPresented: $isSharing) {
+            ActivityViewController(items: [preview.url])
+        }
+        .accessibilityIdentifier("unsupportedFilePreview")
+    }
+}
+
+private struct ActivityViewController: UIViewControllerRepresentable {
+    let items: [Any]
+
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: items, applicationActivities: nil)
+    }
+
+    func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
+}
+
 private struct QuickLookPreview: UIViewControllerRepresentable {
     let url: URL
 
@@ -4545,6 +5324,8 @@ private struct ZoomableImagePreview: UIViewRepresentable {
         scrollView.showsVerticalScrollIndicator = false
         scrollView.bouncesZoom = true
         scrollView.addSubview(context.coordinator.imageView)
+        scrollView.addSubview(context.coordinator.activityIndicator)
+        context.coordinator.activityIndicator.startAnimating()
 
         let doubleTap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleDoubleTap(_:)))
         doubleTap.numberOfTapsRequired = 2
@@ -4556,8 +5337,28 @@ private struct ZoomableImagePreview: UIViewRepresentable {
     func updateUIView(_ scrollView: UIScrollView, context: Context) {
         if context.coordinator.loadedURL != url {
             context.coordinator.loadedURL = url
-            context.coordinator.imageView.image = UIImage(contentsOfFile: url.path)
+            context.coordinator.loadGeneration = UUID()
+            let generation = context.coordinator.loadGeneration
+            context.coordinator.imageView.image = nil
+            context.coordinator.activityIndicator.startAnimating()
             scrollView.setZoomScale(1, animated: false)
+            let maxPixelSize = min(
+                4096,
+                max(
+                    2048,
+                    Int(max(UIScreen.main.bounds.width, UIScreen.main.bounds.height) * UIScreen.main.scale * 1.5)
+                )
+            )
+            DispatchQueue.global(qos: .userInitiated).async {
+                let image = downsampleUploadImage(at: url, maxPixelSize: maxPixelSize)
+                DispatchQueue.main.async {
+                    guard context.coordinator.loadedURL == url,
+                          context.coordinator.loadGeneration == generation else { return }
+                    context.coordinator.imageView.image = image
+                    context.coordinator.activityIndicator.stopAnimating()
+                    context.coordinator.layoutImage(in: scrollView)
+                }
+            }
         }
         DispatchQueue.main.async {
             context.coordinator.layoutImage(in: scrollView)
@@ -4567,10 +5368,17 @@ private struct ZoomableImagePreview: UIViewRepresentable {
     final class Coordinator: NSObject, UIScrollViewDelegate {
         weak var scrollView: UIScrollView?
         var loadedURL: URL?
+        var loadGeneration = UUID()
         let imageView: UIImageView = {
             let view = UIImageView()
             view.contentMode = .scaleAspectFit
             view.isUserInteractionEnabled = true
+            return view
+        }()
+        let activityIndicator: UIActivityIndicatorView = {
+            let view = UIActivityIndicatorView(style: .large)
+            view.color = .white
+            view.hidesWhenStopped = true
             return view
         }()
 
@@ -4583,6 +5391,7 @@ private struct ZoomableImagePreview: UIViewRepresentable {
         }
 
         func layoutImage(in scrollView: UIScrollView) {
+            activityIndicator.center = CGPoint(x: scrollView.bounds.midX, y: scrollView.bounds.midY)
             guard let image = imageView.image, scrollView.bounds.width > 0, scrollView.bounds.height > 0 else {
                 return
             }
@@ -4630,20 +5439,15 @@ private struct ImagePreview: View {
     var body: some View {
         ZStack(alignment: .topTrailing) {
             Color.black.ignoresSafeArea()
-            if UIImage(contentsOfFile: url.path) != nil {
-                ZoomableImagePreview(url: url)
-                    .ignoresSafeArea()
-            } else {
-                Text("Cannot preview image")
-                    .foregroundStyle(NPColors.surface)
-            }
+            ZoomableImagePreview(url: url)
+                .ignoresSafeArea()
             Button {
                 dismiss()
             } label: {
-                Label("Close", systemImage: "xmark.circle.fill")
+                Label(localized("common.close"), systemImage: "xmark.circle.fill")
                     .labelStyle(.iconOnly)
                     .font(.title)
-                    .foregroundStyle(NPColors.surface)
+                    .foregroundStyle(Color.white)
                     .padding(18)
             }
         }

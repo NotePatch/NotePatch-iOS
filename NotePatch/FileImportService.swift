@@ -3,7 +3,7 @@ import UIKit
 
 struct FileImportOutcome: Sendable {
     let file: LocalUploadFile?
-    let errorMessage: String?
+    let errorDisplayText: AppDisplayText?
 }
 
 final class FileImportService {
@@ -79,7 +79,7 @@ final class FileImportService {
     func readUTF8File(at url: URL) async throws -> String {
         try await Task.detached(priority: .userInitiated) {
             guard let value = String(data: try Data(contentsOf: url), encoding: .utf8) else {
-                throw LearningBackendError("Note content is not UTF-8 Markdown.")
+                throw LearningBackendError(localizedKey: "error.note.invalid_encoding")
             }
             return value
         }.value
@@ -88,9 +88,9 @@ final class FileImportService {
     private static func outcome(_ result: Result<LocalUploadFile, Error>) -> FileImportOutcome {
         switch result {
         case .success(let file):
-            return FileImportOutcome(file: file, errorMessage: nil)
+            return FileImportOutcome(file: file, errorDisplayText: nil)
         case .failure(let error):
-            return FileImportOutcome(file: nil, errorMessage: friendlyError(error))
+            return FileImportOutcome(file: nil, errorDisplayText: friendlyDisplayText(error))
         }
     }
 }

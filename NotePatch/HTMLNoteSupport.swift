@@ -1,6 +1,51 @@
 import SwiftUI
 import WebKit
 
+@MainActor
+final class NoteWebViewRuntime {
+    static let shared = NoteWebViewRuntime()
+
+    private var didSchedulePrewarm = false
+    private var prewarmWebView: WKWebView?
+
+    private init() {}
+
+    func configuration(allowsContentJavaScript: Bool) -> WKWebViewConfiguration {
+        let configuration = WKWebViewConfiguration()
+        configuration.websiteDataStore = .nonPersistent()
+        configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
+        configuration.defaultWebpagePreferences.allowsContentJavaScript = allowsContentJavaScript
+        return configuration
+    }
+
+    func prewarmAfterInterfaceSettles() async {
+        guard !didSchedulePrewarm else { return }
+        didSchedulePrewarm = true
+        do {
+            try await Task.sleep(nanoseconds: 450_000_000)
+        } catch {
+            didSchedulePrewarm = false
+            return
+        }
+        guard !Task.isCancelled else {
+            didSchedulePrewarm = false
+            return
+        }
+
+        let webView = WKWebView(
+            frame: CGRect(x: 0, y: 0, width: 1, height: 1),
+            configuration: configuration(allowsContentJavaScript: false)
+        )
+        prewarmWebView = webView
+        webView.loadHTMLString("<html><body></body></html>", baseURL: nil)
+
+        try? await Task.sleep(nanoseconds: 1_500_000_000)
+        if prewarmWebView === webView {
+            prewarmWebView = nil
+        }
+    }
+}
+
 enum HTMLNoteCommand: Equatable {
     case undo
     case redo
@@ -153,24 +198,25 @@ enum HTMLNoteSecurity {
 }
 
 struct SafeHTMLNoteView: UIViewRepresentable {
+    @Environment(\.colorScheme) private var colorScheme
     let html: String
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
     func makeUIView(context: Context) -> WKWebView {
-        let configuration = WKWebViewConfiguration()
-        configuration.websiteDataStore = .nonPersistent()
-        configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
-        configuration.defaultWebpagePreferences.allowsContentJavaScript = false
+        let configuration = NoteWebViewRuntime.shared.configuration(allowsContentJavaScript: false)
+        LatexMathSupport.install(into: configuration)
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.isOpaque = false
         webView.backgroundColor = .clear
         webView.scrollView.backgroundColor = .clear
+        webView.overrideUserInterfaceStyle = colorScheme == .dark ? .dark : .light
         webView.navigationDelegate = context.coordinator
         return webView
     }
 
     func updateUIView(_ webView: WKWebView, context: Context) {
+        webView.overrideUserInterfaceStyle = colorScheme == .dark ? .dark : .light
         guard context.coordinator.loadedHTML != html else { return }
         context.coordinator.loadedHTML = html
         webView.loadHTMLString(HTMLNoteSecurity.readerDocument(bodyHTML: html), baseURL: nil)
@@ -178,6 +224,10 @@ struct SafeHTMLNoteView: UIViewRepresentable {
 
     final class Coordinator: NSObject, WKNavigationDelegate {
         var loadedHTML: String?
+
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            webView.evaluateJavaScript(LatexMathSupport.renderCommand)
+        }
 
         func webView(
             _ webView: WKWebView,
@@ -192,6 +242,7 @@ struct SafeHTMLNoteView: UIViewRepresentable {
 }
 
 struct SafeRenderedHTMLNoteView: UIViewRepresentable {
+    @Environment(\.colorScheme) private var colorScheme
     let url: URL
     let onAuthorizationExpired: () -> Void
     let onFailure: (String) -> Void
@@ -201,20 +252,20 @@ struct SafeRenderedHTMLNoteView: UIViewRepresentable {
     }
 
     func makeUIView(context: Context) -> WKWebView {
-        let configuration = WKWebViewConfiguration()
-        configuration.websiteDataStore = .nonPersistent()
-        configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
-        configuration.defaultWebpagePreferences.allowsContentJavaScript = false
+        let configuration = NoteWebViewRuntime.shared.configuration(allowsContentJavaScript: false)
+        LatexMathSupport.install(into: configuration)
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.isOpaque = false
         webView.backgroundColor = .clear
         webView.scrollView.backgroundColor = .clear
+        webView.overrideUserInterfaceStyle = colorScheme == .dark ? .dark : .light
         webView.navigationDelegate = context.coordinator
         webView.uiDelegate = context.coordinator
         return webView
     }
 
     func updateUIView(_ webView: WKWebView, context: Context) {
+        webView.overrideUserInterfaceStyle = colorScheme == .dark ? .dark : .light
         context.coordinator.onAuthorizationExpired = onAuthorizationExpired
         context.coordinator.onFailure = onFailure
         guard context.coordinator.loadedURL != url else { return }
@@ -275,6 +326,10 @@ struct SafeRenderedHTMLNoteView: UIViewRepresentable {
             }
         }
 
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            webView.evaluateJavaScript(LatexMathSupport.renderCommand)
+        }
+
         func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
             reportFailure(error.localizedDescription)
         }
@@ -307,6 +362,7 @@ struct SafeRenderedHTMLNoteView: UIViewRepresentable {
 }
 
 struct RichHTMLNoteEditor: UIViewRepresentable {
+    @Environment(\.colorScheme) private var colorScheme
     @Binding var html: String
     let command: HTMLNoteCommand?
     let commandToken: Int
@@ -314,10 +370,7 @@ struct RichHTMLNoteEditor: UIViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator(html: $html) }
 
     func makeUIView(context: Context) -> WKWebView {
-        let configuration = WKWebViewConfiguration()
-        configuration.websiteDataStore = .nonPersistent()
-        configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
-        configuration.defaultWebpagePreferences.allowsContentJavaScript = true
+        let configuration = NoteWebViewRuntime.shared.configuration(allowsContentJavaScript: true)
         configuration.userContentController.addUserScript(
             WKUserScript(
                 source: HTMLNoteSecurity.editorUserScript,
@@ -331,6 +384,7 @@ struct RichHTMLNoteEditor: UIViewRepresentable {
         webView.isOpaque = false
         webView.backgroundColor = .clear
         webView.scrollView.backgroundColor = .clear
+        webView.overrideUserInterfaceStyle = colorScheme == .dark ? .dark : .light
         webView.navigationDelegate = context.coordinator
         context.coordinator.webView = webView
         webView.loadHTMLString(HTMLNoteSecurity.editorDocument(), baseURL: nil)
@@ -338,6 +392,7 @@ struct RichHTMLNoteEditor: UIViewRepresentable {
     }
 
     func updateUIView(_ webView: WKWebView, context: Context) {
+        webView.overrideUserInterfaceStyle = colorScheme == .dark ? .dark : .light
         context.coordinator.binding = $html
         if context.coordinator.isReady,
            context.coordinator.lastHTML != html {

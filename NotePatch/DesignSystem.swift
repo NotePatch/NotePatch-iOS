@@ -12,6 +12,7 @@
 //
 
 import SwiftUI
+import UIKit
 
 // MARK: - Color Extension
 
@@ -37,6 +38,37 @@ extension Color {
             opacity: Double(a) / 255
         )
     }
+
+    static func adaptive(light: String, dark: String) -> Color {
+        let lightColor = UIColor(hex: light)
+        let darkColor = UIColor(hex: dark)
+        return Color(UIColor { traits in
+            traits.userInterfaceStyle == .dark ? darkColor : lightColor
+        })
+    }
+}
+
+private extension UIColor {
+    convenience init(hex: String) {
+        let hex = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
+        var int: UInt64 = 0
+        Scanner(string: hex).scanHexInt64(&int)
+        let a, r, g, b: UInt64
+        switch hex.count {
+        case 6:
+            (a, r, g, b) = (255, int >> 16, int >> 8 & 0xFF, int & 0xFF)
+        case 8:
+            (a, r, g, b) = (int >> 24, int >> 16 & 0xFF, int >> 8 & 0xFF, int & 0xFF)
+        default:
+            (a, r, g, b) = (255, 0, 0, 0)
+        }
+        self.init(
+            red: CGFloat(r) / 255,
+            green: CGFloat(g) / 255,
+            blue: CGFloat(b) / 255,
+            alpha: CGFloat(a) / 255
+        )
+    }
 }
 
 // MARK: - Color Tokens (Paper-inspired warm palette)
@@ -44,38 +76,40 @@ extension Color {
 struct NPColors {
     // ── 4-layer background hierarchy ──
     /// Page canvas — warm paper tone, never cold white.
-    static let background    = Color(hex: "#EEF2EC")
+    static let background    = Color.adaptive(light: "#F2F4F1", dark: "#0E110F")
     /// Primary surface — layering surface, slightly warm.
-    static let surface       = Color(hex: "#F8F9F6")
+    static let surface       = Color.adaptive(light: "#F8F9F6", dark: "#151A17")
     /// Card surface — pure white, like a premium notebook page.
-    static let surfaceCard   = Color(hex: "#FFFFFF")
+    static let surfaceCard   = Color.adaptive(light: "#FFFFFF", dark: "#1B211D")
     /// Interactive surface — barely perceptible warmth for tappable elements.
-    static let interactive   = Color(hex: "#F6F8F5")
+    static let interactive   = Color.adaptive(light: "#F6F8F5", dark: "#232A25")
+    /// Top-edge highlight used by cards and glass fallbacks.
+    static let surfaceHighlight = Color.adaptive(light: "#B3FFFFFF", dark: "#24FFFFFF")
 
     // ── Text hierarchy (warm near-black base) ──
     /// Primary — warm near-black for body and titles.
-    static let textPrimary   = Color(hex: "#171717")
+    static let textPrimary   = Color.adaptive(light: "#171717", dark: "#F2F5F1")
     /// Secondary — 62% of primary, for labels and helper text.
-    static let textSecondary = Color(red: 23.0/255.0, green: 23.0/255.0, blue: 23.0/255.0, opacity: 0.62)
+    static let textSecondary = Color.adaptive(light: "#9E171717", dark: "#B8D7DED8")
     /// Tertiary — 42% of primary, for metadata and captions.
-    static let textTertiary  = Color(red: 23.0/255.0, green: 23.0/255.0, blue: 23.0/255.0, opacity: 0.42)
+    static let textTertiary  = Color.adaptive(light: "#6B171717", dark: "#8FAEB7AF")
 
     // ── Dividers & Borders ──
     /// 5% black — subtle separation, paper-like.
-    static let border        = Color.black.opacity(0.05)
-    static let divider       = Color.black.opacity(0.05)
+    static let border        = Color.adaptive(light: "#0D000000", dark: "#24FFFFFF")
+    static let divider       = Color.adaptive(light: "#0D000000", dark: "#1FFFFFFF")
 
     // ── Brand (Muted Sage Green) ──
-    static let brandLight    = Color(hex: "#E2F0E8")
-    static let brand         = Color(hex: "#5D9972")
-    static let brandDark     = Color(hex: "#2E6548")
+    static let brandLight    = Color.adaptive(light: "#E2F0E8", dark: "#20382A")
+    static let brand         = Color.adaptive(light: "#5D9972", dark: "#78C68F")
+    static let brandDark     = Color.adaptive(light: "#2E6548", dark: "#A0DDB1")
 
     // ── Semantic ──
-    static let aiUserBubble  = Color(hex: "#EFF5F1")
-    static let destructive   = Color(hex: "#D15A5A")
-    static let warning       = Color(hex: "#E8A840")
-    static let successBg     = Color(hex: "#E7F3EA")
-    static let successText   = Color(hex: "#4F8E66")
+    static let aiUserBubble  = Color.adaptive(light: "#EFF5F1", dark: "#1C2B22")
+    static let destructive   = Color.adaptive(light: "#D15A5A", dark: "#FF8A8A")
+    static let warning       = Color.adaptive(light: "#C9861C", dark: "#F3C263")
+    static let successBg     = Color.adaptive(light: "#E7F3EA", dark: "#203629")
+    static let successText   = Color.adaptive(light: "#4F8E66", dark: "#8FD1A1")
 }
 
 // MARK: - Shadow Tokens (Single overhead light source)
@@ -168,9 +202,23 @@ struct NPCardModifier: ViewModifier {
             .clipShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
             .overlay {
                 RoundedRectangle(cornerRadius: radius, style: .continuous)
-                    .stroke(Color.white.opacity(0.70), lineWidth: 0.5)
+                    .stroke(NPColors.surfaceHighlight, lineWidth: 0.5)
             }
             .modifier(NPCardShadow())
+    }
+}
+
+struct NPListItemModifier: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(NPColors.surfaceCard)
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(NPColors.border, lineWidth: 1)
+            }
+            .shadow(color: .black.opacity(0.025), radius: 5, x: 0, y: 2)
     }
 }
 
@@ -260,11 +308,11 @@ struct NPUploadButtonStyle: ButtonStyle {
             .frame(maxWidth: .infinity)
             .background {
                 Capsule(style: .continuous)
-                    .fill(Color(hex: "#F8FBF8"))
+                    .fill(NPColors.interactive)
             }
             .overlay {
                 Capsule(style: .continuous)
-                    .stroke(Color(hex: "#5D9972").opacity(0.10), lineWidth: 1)
+                    .stroke(NPColors.brand.opacity(0.16), lineWidth: 1)
             }
             .shadow(
                 color: NPShadow.upload.color,
@@ -387,7 +435,7 @@ struct NPStatusChip: View {
         var bg: Color {
             switch self {
             case .brand:       return NPColors.successBg
-            case .neutral:     return Color.black.opacity(0.04)
+            case .neutral:     return NPColors.interactive
             case .warning:     return NPColors.warning.opacity(0.15)
             case .destructive: return NPColors.destructive.opacity(0.12)
             }
@@ -499,14 +547,14 @@ extension View {
 // MARK: - Segmented Control Styling
 
 enum NPSegmentedControl {
-    static let background    = Color(hex: "#E7EAE5")
-    static let selectedBg    = Color.white
+    static let background    = Color.adaptive(light: "#E7EAE5", dark: "#121613")
+    static let selectedBg    = NPColors.surfaceCard
     static let selectedShadow: (color: Color, radius: CGFloat, y: CGFloat) = (.black.opacity(0.04), 6, 2)
 }
 
 // MARK: - Tab Bar Styling (Floating Dock)
 
 enum NPTabBar {
-    static let background    = Color.white
+    static let background    = NPColors.surfaceCard
     static let shadow: (color: Color, radius: CGFloat, y: CGFloat) = (.black.opacity(0.08), 30, 12)
 }

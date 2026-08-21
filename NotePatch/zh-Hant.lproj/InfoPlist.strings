@@ -1,0 +1,4 @@
+"CFBundleDisplayName" = "NotePatch";
+"NSCameraUsageDescription" = "NotePatch 需要使用相機拍攝並上傳文件。";
+"NSPhotoLibraryAddUsageDescription" = "NotePatch 可能會在處理上傳時儲存暫存文件預覽。";
+"NSPhotoLibraryUsageDescription" = "NotePatch 需要存取照片圖庫以上傳所選圖片。";

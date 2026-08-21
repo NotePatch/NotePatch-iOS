@@ -2,7 +2,7 @@ import Foundation
 import SwiftUI
 import Combine
 
-enum AppDisplayText: Equatable {
+enum AppDisplayText: Equatable, Sendable {
     case localized(String, [String] = [])
     case raw(String)
 
@@ -85,7 +85,12 @@ final class AppLocalization: ObservableObject {
 
     static let requiredSemanticKeys = [
         "language.system",
-        "tab.documents", "tab.notes", "tab.ai", "tab.me",
+        "tab.home", "tab.documents", "tab.notes", "tab.ai", "tab.me",
+        "home.title", "home.refresh", "home.metric.documents", "home.metric.units",
+        "home.metric.homeworks", "home.active_task", "home.recent_documents",
+        "home.recent_notes", "home.review", "home.no_documents", "home.no_notes",
+        "home.loading_learning", "home.learning_failed", "home.note_metadata", "common.view_all",
+        "upload.title", "knowledge.snippet", "grading.set_due_date", "profile.ai_history",
         "notes.section.notes", "notes.section.review", "notes.section.picker",
         "documents.section.documents", "documents.section.tasks",
         "review.section.units", "review.section.search", "review.section.grading",
@@ -103,9 +108,10 @@ final class AppLocalization: ObservableObject {
         "ai.model.fetched_at", "ai.model.empty", "ai.model.loading",
         "ai.model.refresh", "operation.ai_model_saved",
         "task.status.cancelling", "task.type.document_cleanup", "task.type.document_processing",
-        "status.scanning", "scan.pending", "scan.scanning", "scan.clean", "scan.infected", "scan.failed", "scan.skipped",
-        "upload.security_scan_started", "upload.selected_completed", "document.scan_status", "document.detected_mime",
-        "document.error.security_scan_blocked", "document.error.not_processable", "artifact.converted_pdf",
+        "status.preparing", "upload.selected_completed", "document.error.not_available",
+        "document.error.not_processable", "artifact.converted_pdf",
+        "preview.unsupported.title", "preview.unsupported.message", "preview.file.name",
+        "preview.file.type", "preview.file.size", "preview.open_external",
         "merge.action", "merge.title", "merge.help", "merge.target", "merge.sources_count", "merge.continue",
         "merge.confirm.title", "merge.confirm.action", "merge.confirm.message", "merge.view_task",
         "merge.error.target_required", "merge.error.sources_required", "merge.starting", "merge.in_progress",
@@ -123,11 +129,31 @@ final class AppLocalization: ObservableObject {
         "operation.reference_removed", "operation.document_cleanup_completed",
         "error.http.unauthorized", "error.http.forbidden", "error.http.not_found",
         "error.http.conflict", "error.http.gone", "error.http.validation",
-        "error.http.generic"
+        "error.http.generic",
+        "common.expand", "upload.learning_info", "task.result", "task.cancelled_fallback",
+        "task.type.ai_chat", "task.type.other", "knowledge.limit", "knowledge.page",
+        "chat.composer_accessibility", "chat.system_help", "chat.no_content", "chat.recent_event",
+        "operation.registering", "operation.signing_in", "operation.note_downloaded",
+        "operation.image_downloaded", "operation.file_downloaded", "document.ocr_empty",
+        "document.ocr_loaded", "document.artifact_downloaded", "status.unknown",
+        "merge.status.unknown", "document_kind.unknown", "file_type.unknown", "artifact.unknown",
+        "error.image.orientation", "error.server.invalid_response", "error.download.invalid_url",
+        "error.session.expired", "error.session.refresh_cancelled", "error.auth.required",
+        "error.server.invalid_address", "error.task.stream_disconnected", "error.task.stream_incomplete",
+        "error.upload.confirmation_failed", "error.note.invalid_encoding", "error.upload.file_missing",
+        "error.tus.location_missing", "error.tus.version_missing", "error.tus.location_invalid",
+        "error.tus.chunk_failed", "error.photo.type_unknown", "error.photo.read_failed",
+        "error.network.invalid_address", "error.network.dns", "error.network.unreachable",
+        "error.network.timeout", "error.network.io", "note.error.conflict_refresh_failed_generic",
+        "upload.some_failed_generic", "filter.summary.status", "filter.summary.type", "filter.summary.file",
+        "status.pending", "status.rebuilding", "status.unavailable", "error.task.failed",
+        "common.collapse", "chat.ai.saved_session", "chat.ai.auto_saved_after_first_message"
     ]
 
     @Published private(set) var language: AppLanguage
     private let settings: SettingsStore
+    private var localizedValueCache: [String: String] = [:]
+    private var localizationBundleCache: (identifier: String, bundle: Bundle)?
 
     init(settings: SettingsStore? = nil) {
         let settings = settings ?? SettingsStore()
@@ -149,12 +175,19 @@ final class AppLocalization: ObservableObject {
     func select(_ language: AppLanguage) {
         guard self.language != language else { return }
         self.language = language
+        localizedValueCache.removeAll(keepingCapacity: true)
+        localizationBundleCache = nil
         settings.saveAppLanguage(language)
     }
 
     func string(_ key: String) -> String {
+        if let cached = localizedValueCache[key] {
+            return cached
+        }
         let bundle = localizationBundle
-        return bundle.localizedString(forKey: key, value: key, table: "Localizable")
+        let value = bundle.localizedString(forKey: key, value: key, table: "Localizable")
+        localizedValueCache[key] = value
+        return value
     }
 
     func string(_ key: String, _ arguments: CVarArg...) -> String {
@@ -178,10 +211,15 @@ final class AppLocalization: ObservableObject {
     }
 
     private var localizationBundle: Bundle {
-        guard let path = Bundle.main.path(forResource: language.resourceIdentifier, ofType: "lproj"),
+        let identifier = language.resourceIdentifier
+        if let cached = localizationBundleCache, cached.identifier == identifier {
+            return cached.bundle
+        }
+        guard let path = Bundle.main.path(forResource: identifier, ofType: "lproj"),
               let bundle = Bundle(path: path) else {
             return Bundle.main
         }
+        localizationBundleCache = (identifier, bundle)
         return bundle
     }
 }

@@ -9,6 +9,7 @@ private let defaultPresenceHeartbeatIntervalSeconds = 30
 private let defaultPersonalWorkspaceName = "My Workspace"
 
 private enum DeferredWorkspaceContent: Hashable {
+    case home
     case notes
     case chat
     case learning
@@ -20,7 +21,7 @@ private struct DeferredWorkspaceLoadKey: Hashable {
 }
 
 enum WorkbenchTab: Int, CaseIterable, Identifiable {
-    case documents
+    case home
     case notes
     case openClaw
     case profile
@@ -29,7 +30,7 @@ enum WorkbenchTab: Int, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .documents: return localized("tab.documents")
+        case .home: return localized("tab.home")
         case .notes: return localized("tab.notes")
         case .openClaw: return localized("tab.ai")
         case .profile: return localized("tab.me")
@@ -38,11 +39,28 @@ enum WorkbenchTab: Int, CaseIterable, Identifiable {
 
     var iconName: String {
         switch self {
-        case .documents: return "house"
+        case .home: return "house"
         case .notes: return "note.text"
         case .openClaw: return "sparkles"
         case .profile: return "person.crop.circle"
         }
+    }
+}
+
+@MainActor
+final class WorkbenchNavigationState: ObservableObject {
+    @Published var selectedTab: WorkbenchTab = .home
+    @Published var isUploadPresented = false
+    @Published var bottomBarFrame: CGRect = .null
+    @Published var isBottomBarHiddenForKeyboard = false
+}
+
+@MainActor
+final class AuthenticationState: ObservableObject {
+    @Published var session: SavedSession?
+
+    init(session: SavedSession?) {
+        self.session = session
     }
 }
 
@@ -72,6 +90,13 @@ enum DocumentsSection: String, CaseIterable, Identifiable {
         case .tasks: return localized("documents.section.tasks")
         }
     }
+}
+
+enum HomeDestination: String, Identifiable {
+    case documents
+    case tasks
+
+    var id: String { rawValue }
 }
 
 enum LearningSection: String, CaseIterable, Identifiable {
@@ -106,6 +131,7 @@ enum OpenClawMessageStatus: Equatable {
 enum OpenClawAttachmentStatus: Equatable {
     case uploading
     case ready
+    case unavailable
 }
 
 struct OpenClawChatAttachment: Identifiable, Equatable {
@@ -164,7 +190,9 @@ struct OpenClawChatMessage: Identifiable, Equatable {
 
 @MainActor
 final class NotePatchViewModel: ObservableObject {
-    @Published var session: SavedSession?
+    let homeDashboardState: HomeDashboardState
+    let workbenchNavigationState: WorkbenchNavigationState
+    let authenticationState: AuthenticationState
     @Published var apiBaseURLText: String
     @Published var tusBaseURLText: String
     @Published var emailText: String
@@ -173,14 +201,17 @@ final class NotePatchViewModel: ObservableObject {
     @Published var isBusy = false
     @Published private var statusDisplayText: AppDisplayText = .raw("")
     @Published private var errorDisplayText: AppDisplayText?
-    @Published var selectedTab: WorkbenchTab = .documents
     @Published var selectedDocumentsSection: DocumentsSection = .documents
     @Published var selectedNotesSection: NotesSection = .notes
 
     @Published var workspaces: [WorkspaceItem] = []
     @Published var selectedWorkspaceId: String?
-    @Published var documents: [LearningDocumentItem] = []
-    @Published var activeTask: TaskItem?
+    @Published var documents: [LearningDocumentItem] = [] {
+        didSet { homeDashboardState.updateDocuments(documents) }
+    }
+    @Published var activeTask: TaskItem? {
+        didSet { homeDashboardState.updateActiveTask(activeTask) }
+    }
     @Published var taskEvents: [TaskEventItem] = []
     @Published private(set) var isDocumentPurgeRetryAvailable = false
     @Published var selectedArtifactDocumentId: String?
@@ -202,7 +233,7 @@ final class NotePatchViewModel: ObservableObject {
     @Published var selectedAIModelId: String?
     @Published private(set) var isAIModelsLoading = false
     @Published private(set) var isAIModelUpdating = false
-    @Published private(set) var aiModelsError: String?
+    @Published private var aiModelsErrorText: AppDisplayText?
     @Published var learningUnits: [LearningUnit] = []
     @Published var selectedLearningUnitId: String?
     @Published var studyNotes: [StudyNoteVersion] = []
@@ -212,14 +243,14 @@ final class NotePatchViewModel: ObservableObject {
     @Published var selectedStudyNoteItem: StudyNoteListItem?
     @Published var studyNoteHTML: String?
     @Published var studyNoteRenderedURL: URL?
-    @Published var studyNoteReaderError: String?
+    @Published private var studyNoteReaderErrorText: AppDisplayText?
     @Published var isStudyNoteLoading = false
     @Published var isStudyNoteEditorPresented = false
     @Published var isStudyNoteEditorLoading = false
     @Published var studyNoteDraftTitle = ""
     @Published var studyNoteDraftHTML = ""
-    @Published var studyNoteDraftSummary = "Manual Edit"
-    @Published var studyNoteEditorError: String?
+    @Published var studyNoteDraftSummary = ""
+    @Published private var studyNoteEditorErrorText: AppDisplayText?
     @Published var isStudyNoteSaving = false
     @Published var isStudyNoteConflictPending = false
     @Published var selectedLearningSection: LearningSection = .units
@@ -236,7 +267,7 @@ final class NotePatchViewModel: ObservableObject {
     @Published var flashcardIndex = 0
     @Published var isFlashcardShowingBack = false
     @Published var isFlashcardsLoading = false
-    @Published var flashcardError: String?
+    @Published private var flashcardErrorText: AppDisplayText?
     @Published var knowledgeQuery = ""
     @Published var knowledgeLearningUnitId = ""
     @Published var knowledgeSubject = ""
@@ -258,6 +289,7 @@ final class NotePatchViewModel: ObservableObject {
     @Published var uploadGradeLevel = ""
     @Published var uploadTopic = ""
     @Published var downloadedPreview: DownloadedPreview?
+    @Published private(set) var previewLoadingDocumentIds = Set<String>()
     @Published var queuedUploadItems: [QueuedUploadItem] = []
     @Published private(set) var isOfflineTestMode = false
 
@@ -269,9 +301,6 @@ final class NotePatchViewModel: ObservableObject {
     private var nextOpenClawMessageId: Int64 = 1
     private var presenceTask: Task<Void, Never>?
     private var studyNoteGenerationPollingTask: Task<Void, Never>?
-    private var scanTrackingTask: Task<Void, Never>?
-    private var scanTrackingDocumentIds = Set<String>()
-    private var scanTrackingWorkspaceId: String?
     private var aiModelLoadTask: Task<Void, Never>?
     private var aiModelLoadGeneration = UUID()
     private var aiModelCatalogWorkspaceId: String?
@@ -309,19 +338,43 @@ final class NotePatchViewModel: ObservableObject {
 
     var uploadCacheDirectory: URL { cacheDirectory }
 
+    var session: SavedSession? {
+        get { authenticationState.session }
+        set {
+            guard authenticationState.session != newValue else { return }
+            objectWillChange.send()
+            authenticationState.session = newValue
+        }
+    }
+
+    var selectedTab: WorkbenchTab {
+        get { workbenchNavigationState.selectedTab }
+        set { workbenchNavigationState.selectedTab = newValue }
+    }
+
+    var aiModelsError: String? { aiModelsErrorText?.resolved() }
+    var studyNoteReaderError: String? { studyNoteReaderErrorText?.resolved() }
+    var studyNoteEditorError: String? { studyNoteEditorErrorText?.resolved() }
+    var flashcardError: String? { flashcardErrorText?.resolved() }
+
+    var selectedHomeDestination: HomeDestination? {
+        get { homeDashboardState.destination }
+        set { homeDashboardState.destination = newValue }
+    }
+
     var statusMessage: String {
         get { statusDisplayText.resolved() }
-        set { statusDisplayText = newValue.isEmpty ? .raw("") : .localized(newValue) }
+        set { statusDisplayText = .raw(newValue) }
     }
 
     var errorMessage: String? {
         get { errorDisplayText?.resolved() }
-        set { errorDisplayText = newValue.map { .localized($0) } }
+        set { errorDisplayText = newValue.map { .raw($0) } }
     }
 
     var uploadProgressLabel: String {
         get { uploadProgressDisplayText.resolved() }
-        set { uploadProgressDisplayText = newValue.isEmpty ? .raw("") : .localized(newValue) }
+        set { uploadProgressDisplayText = .raw(newValue) }
     }
 
     private func setStatus(_ key: String, _ arguments: String...) {
@@ -338,6 +391,14 @@ final class NotePatchViewModel: ObservableObject {
 
     private func setUploadProgress(_ key: String, _ arguments: String...) {
         uploadProgressDisplayText = .localized(key, arguments)
+    }
+
+    func presentError(_ error: Error) {
+        showError(error)
+    }
+
+    func presentError(_ displayText: AppDisplayText) {
+        errorDisplayText = displayText
     }
 
     var openClawInput: String {
@@ -390,6 +451,13 @@ final class NotePatchViewModel: ObservableObject {
         cacheDirectory: URL = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first ?? FileManager.default.temporaryDirectory,
         taskEventStreamingEnabled: Bool = true
     ) {
+        if ProcessInfo.processInfo.arguments.contains("-NotePatchUITestNoSession") {
+            settings.clearSession()
+        }
+        let loadedSession = settings.loadSession()
+        self.homeDashboardState = HomeDashboardState()
+        self.workbenchNavigationState = WorkbenchNavigationState()
+        self.authenticationState = AuthenticationState(session: loadedSession)
         self.openClawState = OpenClawViewState()
         self.openClawComposerState = OpenClawComposerState()
         self.settings = settings
@@ -397,11 +465,6 @@ final class NotePatchViewModel: ObservableObject {
         self.tusSession = tusSession
         self.cacheDirectory = cacheDirectory
         self.taskEventStreamingEnabled = taskEventStreamingEnabled
-        if ProcessInfo.processInfo.arguments.contains("-NotePatchUITestNoSession") {
-            settings.clearSession()
-        }
-        let loadedSession = settings.loadSession()
-        self.session = loadedSession
         self.apiBaseURLText = loadedSession?.baseURL ?? settings.loadBaseURL()
         self.tusBaseURLText = loadedSession?.tusBaseURL ?? settings.loadTUSBaseURL()
         self.emailText = loadedSession?.email ?? ""
@@ -425,7 +488,7 @@ final class NotePatchViewModel: ObservableObject {
         }
         didRestoreSession = true
         isBusy = true
-        statusMessage = "Restoring login session..."
+        setStatus("operation.restoring_session")
         errorMessage = nil
         do {
             try await loadWorkspaces(activeSession: activeSession, preferredWorkspaceId: activeSession.selectedWorkspaceId)
@@ -441,14 +504,12 @@ final class NotePatchViewModel: ObservableObject {
         case .active:
             isAppActive = true
             resumeStudyNoteGenerationPollingIfNeeded()
-            startScanTrackingIfNeeded()
             if !isOfflineTestMode, let session {
                 startPresence(activeSession: session)
             }
         case .background, .inactive:
             isAppActive = false
             stopStudyNoteGenerationPolling()
-            stopScanTracking(clearDocuments: false)
             if !isOfflineTestMode {
                 stopPresence(activeSession: session, sendOffline: true, clearClientId: false)
             }
@@ -459,6 +520,9 @@ final class NotePatchViewModel: ObservableObject {
 
     func ensureContentForSelectedTabLoaded() {
         switch selectedTab {
+        case .home:
+            stopStudyNoteGenerationPolling()
+            loadHomeDashboard(force: false)
         case .notes:
             if selectedNotesSection == .notes {
                 loadNotesOverview(force: false)
@@ -475,10 +539,76 @@ final class NotePatchViewModel: ObservableObject {
         case .profile:
             stopStudyNoteGenerationPolling()
             loadAIModels()
-        case .documents:
-            stopStudyNoteGenerationPolling()
-            break
         }
+    }
+
+    func loadHomeDashboard(force: Bool = true) {
+        if isOfflineTestMode {
+            homeDashboardState.applySupplementaryContent(
+                learningUnits: learningUnits,
+                homeworks: homeworks,
+                noteGroups: studyNoteGroups
+            )
+            return
+        }
+        beginDeferredLoad(
+            .home,
+            force: force,
+            allowOfflineNetwork: false,
+            showsGlobalError: false,
+            setLoading: { [weak self] isLoading in
+                guard let self else { return }
+                if isLoading {
+                    self.homeDashboardState.beginSupplementaryLoad()
+                } else if self.homeDashboardState.isLoadingSupplementaryContent {
+                    self.homeDashboardState.finishSupplementaryLoad(error: nil)
+                }
+            }
+        ) { [weak self] activeSession, workspaceId, isCurrent in
+            guard let self else { return }
+            do {
+                let client = self.clientFor(activeSession)
+                async let unitsRequest = client.listLearningUnits(workspaceId: workspaceId)
+                async let homeworksRequest = client.listHomeworks(workspaceId: workspaceId)
+                let (units, loadedHomeworks) = try await (
+                    unitsRequest,
+                    homeworksRequest
+                )
+                guard isCurrent() else { throw CancellationError() }
+                let noteResults = await self.loadStudyNoteGroupsConcurrently(
+                    activeSession: activeSession,
+                    workspaceId: workspaceId,
+                    units: units
+                )
+                guard isCurrent() else { throw CancellationError() }
+                let groups = noteResults.compactMap(\.group)
+                self.learningUnits = units
+                self.homeworks = loadedHomeworks
+                self.gradingDocuments = self.documents
+                self.studyNoteGroups = groups
+                self.homeDashboardState.applySupplementaryContent(
+                    learningUnits: units,
+                    homeworks: loadedHomeworks,
+                    noteGroups: groups
+                )
+                self.loadedDeferredContent.insert(
+                    DeferredWorkspaceLoadKey(workspaceId: workspaceId, content: .notes)
+                )
+                self.loadedDeferredContent.insert(
+                    DeferredWorkspaceLoadKey(workspaceId: workspaceId, content: .learning)
+                )
+            } catch {
+                if isCurrent() {
+                    self.homeDashboardState.finishSupplementaryLoad(error: friendlyDisplayText(error))
+                }
+                throw error
+            }
+        }
+    }
+
+    func refreshHomeDashboard() {
+        refreshCurrentWorkspace()
+        loadHomeDashboard(force: true)
     }
 
     func dismissStatusBanner() {
@@ -496,10 +626,10 @@ final class NotePatchViewModel: ObservableObject {
             isBusy = true
             defer { isBusy = false }
             errorMessage = nil
-            statusMessage = "Checking API..."
+            setStatus("operation.checking_api")
             do {
                 _ = try await LearningBackendClient(baseURL: baseURL, session: backendSession).healthCheck()
-                statusMessage = "API connected."
+                setStatus("operation.api_connected")
             } catch {
                 showError(error)
             }
@@ -514,10 +644,10 @@ final class NotePatchViewModel: ObservableObject {
             isBusy = true
             defer { isBusy = false }
             errorMessage = nil
-            statusMessage = "Checking tusd..."
+            setStatus("operation.checking_upload_service")
             do {
                 try await TusUploader.checkEndpoint(tusBaseURL, session: tusSession)
-                statusMessage = "tusd connected."
+                setStatus("operation.upload_service_connected")
             } catch {
                 showError(error)
             }
@@ -535,11 +665,11 @@ final class NotePatchViewModel: ObservableObject {
         let password = passwordText
         let fullName = fullNameText.trimmingCharacters(in: .whitespacesAndNewlines)
         if email.isEmpty || password.isEmpty {
-            errorMessage = "Please enter email and password."
+            setError("auth.error.credentials_required")
             return
         }
         if register, password.count < 8 {
-            errorMessage = "Password must be at least 8 characters."
+            setError("auth.error.password_length")
             return
         }
 
@@ -547,7 +677,7 @@ final class NotePatchViewModel: ObservableObject {
             isBusy = true
             defer { isBusy = false }
             errorMessage = nil
-            statusMessage = register ? "Registering..." : "Signing in..."
+            setStatus(register ? "operation.registering" : "operation.signing_in")
             do {
                 let client = LearningBackendClient(baseURL: baseURL, session: backendSession)
                 let token: TokenResponse
@@ -572,10 +702,10 @@ final class NotePatchViewModel: ObservableObject {
                     selectedWorkspaceId: nil,
                     aiHistoryEnabled: token.user.aiHistoryEnabled
                 )
-                saveSession(savedSession)
+                saveSession(savedSession, synchronizeServerURLFields: true)
                 startPresence(activeSession: savedSession)
                 passwordText = ""
-                statusMessage = "Loading workspace..."
+                setStatus("operation.loading_workspace")
                 try await loadWorkspaces(activeSession: savedSession, preferredWorkspaceId: nil)
             } catch {
                 showError(error)
@@ -603,10 +733,11 @@ final class NotePatchViewModel: ObservableObject {
                     fullName: activeSession.fullName,
                     selectedWorkspaceId: activeSession.selectedWorkspaceId,
                     aiHistoryEnabled: activeSession.aiHistoryEnabled
-                )
+                ),
+                synchronizeServerURLFields: true
             )
         }
-        statusMessage = "Server addresses saved."
+        setStatus("operation.server_saved")
         errorMessage = nil
     }
 
@@ -630,7 +761,7 @@ final class NotePatchViewModel: ObservableObject {
             return
         }
         guard let workspaceId = selectedWorkspaceId else {
-            errorMessage = "Please select or recover a workspace first."
+            setError("workspace.error.required")
             return
         }
         Task {
@@ -641,10 +772,10 @@ final class NotePatchViewModel: ObservableObject {
                 }
             }
             errorMessage = nil
-            statusMessage = "Refreshing documents..."
+            setStatus("operation.refreshing_documents")
             do {
                 try await refreshWorkspaceContent(activeSession: activeSession, workspaceId: workspaceId)
-                statusMessage = "Documents refreshed."
+                setStatus("operation.documents_refreshed")
             } catch {
                 guard isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) else { return }
                 showError(error)
@@ -668,7 +799,7 @@ final class NotePatchViewModel: ObservableObject {
             errorMessage = nil
             selectedArtifacts = []
             selectedArtifactDocumentId = nil
-            statusMessage = "Switching workspace..."
+            setStatus("operation.switching_workspace")
             do {
                 try await refreshWorkspaceContent(activeSession: session ?? activeSession, workspaceId: workspaceId)
                 let name = workspaces.first(where: { $0.id == workspaceId })?.name ?? workspaceId
@@ -691,7 +822,7 @@ final class NotePatchViewModel: ObservableObject {
                 }
             }
             errorMessage = nil
-            statusMessage = "Recovering workspace..."
+            setStatus("operation.recovering_workspace")
             do {
                 let client = clientFor(activeSession)
                 let workspace: WorkspaceItem
@@ -707,7 +838,7 @@ final class NotePatchViewModel: ObservableObject {
                 guard isCurrentSessionContext(activeSession) else { return }
                 try await loadWorkspaces(activeSession: activeSession, preferredWorkspaceId: workspace.id)
                 guard isCurrentSessionContext(activeSession) else { return }
-                statusMessage = "Workspace recovered."
+                setStatus("operation.workspace_recovered")
             } catch {
                 guard isCurrentSessionContext(activeSession) else { return }
                 showError(error)
@@ -751,7 +882,7 @@ final class NotePatchViewModel: ObservableObject {
             isBusy = true
             errorMessage = nil
             defer { isBusy = false }
-            statusMessage = "Reading selected files..."
+            setStatus("operation.reading_files")
             let outcomes = await FileImportService.shared.importFiles(
                 sourceURLs,
                 fallbackPrefix: "file",
@@ -765,8 +896,8 @@ final class NotePatchViewModel: ObservableObject {
             for outcome in outcomes {
                 if let uploadFile = outcome.file {
                     stageUploadFileForPreview(uploadFile, documentKind: documentKind, learningMetadata: learningMetadata)
-                } else if let message = outcome.errorMessage {
-                    errorMessage = message
+                } else if let message = outcome.errorDisplayText {
+                    errorDisplayText = message
                 }
             }
         }
@@ -785,7 +916,7 @@ final class NotePatchViewModel: ObservableObject {
             isBusy = true
             errorMessage = nil
             defer { isBusy = false }
-            statusMessage = "Reading selected photos..."
+            setStatus("operation.reading_photos")
             let outcomes = await FileImportService.shared.writePhotos(selections, cacheDirectory: cacheDirectory)
             guard importGeneration == uploadImportGeneration,
                   isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) else {
@@ -795,8 +926,8 @@ final class NotePatchViewModel: ObservableObject {
             for outcome in outcomes {
                 if let uploadFile = outcome.file {
                     stageUploadFileForPreview(uploadFile, documentKind: documentKind, learningMetadata: learningMetadata)
-                } else if let message = outcome.errorMessage {
-                    errorMessage = message
+                } else if let message = outcome.errorDisplayText {
+                    errorDisplayText = message
                 }
             }
         }
@@ -810,7 +941,7 @@ final class NotePatchViewModel: ObservableObject {
         Task {
             isBusy = true
             errorMessage = nil
-            statusMessage = "Reading image..."
+            setStatus("operation.reading_image")
             do {
                 let uploadFile = try await FileImportService.shared.writeCameraImage(image, cacheDirectory: cacheDirectory)
                 guard importGeneration == uploadImportGeneration,
@@ -908,7 +1039,7 @@ final class NotePatchViewModel: ObservableObject {
         guard !isBusy, let activeSession = currentSessionOrError(), let workspaceId = selectedWorkspaceId else { return }
         let selectedIds = queuedUploadItems.filter(\.isSelected).map(\.id)
         guard !selectedIds.isEmpty else {
-            errorMessage = "Please select files or photos to upload first."
+            setError("upload.error.selection_required")
             return
         }
 
@@ -924,9 +1055,8 @@ final class NotePatchViewModel: ObservableObject {
                     isBusy = false
                 }
             }
-            var failureMessages: [String] = []
+            var didFail = false
             var successCount = 0
-            var scanningCount = 0
             for (offset, id) in selectedIds.enumerated() {
                 guard uploadQueueGeneration == generation,
                       isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) else { return }
@@ -936,10 +1066,9 @@ final class NotePatchViewModel: ObservableObject {
                 setUploadProgress("upload.batch_progress", String(offset + 1), String(selectedIds.count), item.file.filename)
                 uploadProgressPercent = 0
                 do {
-                    let uploaded = try await performUpload(item, activeSession: activeSession, workspaceId: workspaceId)
+                    _ = try await performUpload(item, activeSession: activeSession, workspaceId: workspaceId)
                     guard uploadQueueGeneration == generation,
                           isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) else { return }
-                    if isDocumentAwaitingSecurityScan(uploaded) { scanningCount += 1 }
                     if let completedIndex = queuedUploadItems.firstIndex(where: { $0.id == id }) {
                         let completed = queuedUploadItems.remove(at: completedIndex)
                         UploadThumbnailCache.shared.remove(file: completed.file)
@@ -949,8 +1078,8 @@ final class NotePatchViewModel: ObservableObject {
                 } catch {
                     guard uploadQueueGeneration == generation,
                           isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) else { return }
-                    let message = friendlyError(error)
-                    failureMessages.append("\(item.file.filename): \(message)")
+                    let message = friendlyDisplayText(error)
+                    didFail = true
                     if let failedIndex = queuedUploadItems.firstIndex(where: { $0.id == id }) {
                         queuedUploadItems[failedIndex].state = .failed(message)
                         queuedUploadItems[failedIndex].isSelected = true
@@ -962,12 +1091,10 @@ final class NotePatchViewModel: ObservableObject {
             }
             guard uploadQueueGeneration == generation,
                   isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) else { return }
-            if failureMessages.isEmpty {
-                statusMessage = scanningCount > 0
-                    ? localized("upload.security_scan_started")
-                    : localized("upload.selected_completed")
+            if !didFail {
+                setStatus("upload.selected_completed")
             } else {
-                setError("upload.some_failed", failureMessages.joined(separator: "\n"))
+                setError("upload.some_failed_generic")
             }
         }
     }
@@ -976,7 +1103,7 @@ final class NotePatchViewModel: ObservableObject {
         let prepared = try await FileImportService.shared.prepareForUpload(item.file, cacheDirectory: cacheDirectory)
         guard isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) else { throw CancellationError() }
         let client = clientFor(activeSession)
-        statusMessage = "Creating upload session..."
+        setStatus("upload.creating_session")
         let uploadSession = try await client.createUploadSession(
             workspaceId: workspaceId,
             filename: prepared.filename,
@@ -986,7 +1113,7 @@ final class NotePatchViewModel: ObservableObject {
             learningMetadata: item.learningMetadata
         )
         guard isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) else { throw CancellationError() }
-        statusMessage = "Uploading via tus..."
+        setStatus("upload.sending")
         let endpoint = TusUploader.preferredEndpoint(
             configuredEndpoint: activeSession.tusBaseURL,
             serverEndpoint: uploadSession.tusEndpoint
@@ -1004,7 +1131,7 @@ final class NotePatchViewModel: ObservableObject {
             }
         }
         guard isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) else { throw CancellationError() }
-        statusMessage = "Confirming upload..."
+        setStatus("upload.confirming")
         let completedDocument = try await completeUploadWithRetry(
             client: client,
             workspaceId: workspaceId,
@@ -1013,10 +1140,6 @@ final class NotePatchViewModel: ObservableObject {
             file: prepared
         )
         guard isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) else { throw CancellationError() }
-        registerScanningDocuments([completedDocument], workspaceId: workspaceId)
-        if isDocumentAwaitingSecurityScan(completedDocument) {
-            statusMessage = localized("upload.security_scan_started")
-        }
         return completedDocument
     }
 
@@ -1025,15 +1148,13 @@ final class NotePatchViewModel: ObservableObject {
             return
         }
         guard canProcessDocument(document) else {
-            errorMessage = isDocumentSecurityBlocked(document)
-                ? localized("document.error.security_scan_blocked")
-                : localized("document.error.not_processable")
+            setError("document.error.not_processable")
             return
         }
         isBusy = true
         errorMessage = nil
         taskEvents = []
-        statusMessage = "Starting document processing..."
+        setStatus("document.processing_starting")
         Task {
             defer {
                 if isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) {
@@ -1049,8 +1170,9 @@ final class NotePatchViewModel: ObservableObject {
                 )
                 guard isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) else { return }
                 activeTask = task
-                selectedTab = .documents
+                selectedTab = .home
                 selectedDocumentsSection = .tasks
+                selectedHomeDestination = .tasks
                 let finishedTask = try await pollTask(activeSession: activeSession, workspaceId: workspaceId, taskId: task.id) { [weak self] updatedTask, events in
                     guard let self,
                           self.isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId),
@@ -1080,7 +1202,7 @@ final class NotePatchViewModel: ObservableObject {
                     try? await refreshLearningUnits(activeSession: activeSession, workspaceId: workspaceId)
                     try? await refreshHomeworks(activeSession: activeSession, workspaceId: workspaceId)
                 }
-                statusMessage = "Document processing complete."
+                setStatus("document.processing_complete")
             } catch {
                 guard isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) else { return }
                 showError(error)
@@ -1094,13 +1216,13 @@ final class NotePatchViewModel: ObservableObject {
             return false
         }
         guard let workspaceId = selectedWorkspaceId else {
-            errorMessage = "Please select or recover a workspace first."
+            setError("workspace.error.required")
             return false
         }
         guard !isOpenClawSending else { return false }
         let trimmedPrompt = rawPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedPrompt.isEmpty || !files.isEmpty else {
-            errorMessage = "Please enter an AI Co-pilot prompt."
+            setError("chat.error.prompt_required")
             return false
         }
         let prompt = trimmedPrompt.isEmpty ? localized("chat.attachment_default_prompt") : trimmedPrompt
@@ -1183,7 +1305,7 @@ final class NotePatchViewModel: ObservableObject {
                         "filename": document.originalFilename,
                         "file_type": document.fileType
                     ]
-                    if let mimeType = document.detectedMimeType ?? document.mimeType, !mimeType.isEmpty {
+                    if let mimeType = document.mimeType, !mimeType.isEmpty {
                         value["mime_type"] = mimeType
                     }
                     return value
@@ -1241,7 +1363,7 @@ final class NotePatchViewModel: ObservableObject {
                 } else {
                     let answer = formatOpenClawTaskResult(finishedTask.resultText)
                     updateOpenClawMessage(assistantMessageId) {
-                        $0.content = answer.isEmpty ? "No content returned." : answer
+                        $0.content = answer.isEmpty ? localized("chat.no_content") : answer
                         $0.status = .done
                         $0.progress = finishedTask.progress.clamped(to: 0...100)
                         $0.events = latestEvents
@@ -1261,7 +1383,7 @@ final class NotePatchViewModel: ObservableObject {
                     showError(error)
                 }
                 let eventMessage = latestEvents.last(where: { $0.level == "error" })?.message ?? latestEvents.last?.message
-                let message = [friendlyError(error), eventMessage.map { "Recent event: \($0)" }]
+                let message = [friendlyError(error), eventMessage.map { localizedFormat("chat.recent_event", $0) }]
                     .compactMap { $0 }
                     .joined(separator: "\n\n")
                 updateOpenClawMessage(assistantMessageId) {
@@ -1291,16 +1413,11 @@ final class NotePatchViewModel: ObservableObject {
         while true {
             try Task.checkCancellation()
             guard selectedWorkspaceId == workspaceId else { throw CancellationError() }
-            if isDocumentSecurityBlocked(document) {
-                throw LearningBackendError(
-                    document.scanMessage ?? localized("document.error.security_scan_blocked")
-                )
-            }
-            if ["uploaded", "ready"].contains(document.status), !isDocumentAwaitingSecurityScan(document) {
+            if ["uploaded", "ready"].contains(document.status) {
                 return document
             }
             if ["failed", "deleted"].contains(document.status) {
-                throw LearningBackendError(document.scanMessage ?? localized("chat.attachment_upload_failed"))
+                throw LearningBackendError(localized("chat.attachment_upload_failed"))
             }
 
             try await Task.sleep(nanoseconds: 3_000_000_000)
@@ -1415,18 +1532,18 @@ final class NotePatchViewModel: ObservableObject {
               let conversationId = selectedConversationId, !isConversationMutating else { return }
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
-            errorMessage = "Please enter a conversation title."
+            setError("chat.error.title_required")
             return
         }
         guard trimmed.count <= 160 else {
-            errorMessage = "Conversation title cannot exceed 160 characters."
+            setError("chat.error.title_length")
             return
         }
         isConversationMutating = true
         let generation = UUID()
         conversationMutationGeneration = generation
         errorMessage = nil
-        statusMessage = "Saving conversation title..."
+        setStatus("chat.saving_title")
         Task {
             defer {
                 if conversationMutationGeneration == generation {
@@ -1438,7 +1555,7 @@ final class NotePatchViewModel: ObservableObject {
                 guard conversationMutationGeneration == generation,
                       isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) else { return }
                 conversations = conversations.map { $0.id == updated.id ? updated : $0 }
-                statusMessage = "Conversation title saved."
+                setStatus("chat.title_saved")
             } catch {
                 guard conversationMutationGeneration == generation,
                       isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) else { return }
@@ -1454,7 +1571,7 @@ final class NotePatchViewModel: ObservableObject {
         let generation = UUID()
         conversationMutationGeneration = generation
         errorMessage = nil
-        statusMessage = "Deleting conversation..."
+        setStatus("chat.deleting_conversation")
         Task {
             defer {
                 if conversationMutationGeneration == generation {
@@ -1468,7 +1585,7 @@ final class NotePatchViewModel: ObservableObject {
                 conversations.removeAll { $0.id == conversationId }
                 selectedConversationId = conversations.first?.id
                 openClawMessages = [welcomeChatMessage]
-                statusMessage = "Conversation deleted."
+                setStatus("chat.conversation_deleted")
 
                 do {
                     try await refreshConversations(
@@ -1510,7 +1627,7 @@ final class NotePatchViewModel: ObservableObject {
         let generation = UUID()
         aiPreferenceGeneration = generation
         errorMessage = nil
-        statusMessage = "Saving AI history setting..."
+        setStatus("profile.saving_ai_history")
         aiPreferenceTask = Task {
             defer {
                 if aiPreferenceGeneration == generation {
@@ -1524,7 +1641,7 @@ final class NotePatchViewModel: ObservableObject {
                       let currentSession = session,
                       currentSession.userId == activeSession.userId else { return }
                 saveSession(currentSession.withAIHistoryEnabled(response.aiHistoryEnabled))
-                statusMessage = "AI history setting saved."
+                setStatus("profile.ai_history_saved")
             } catch is CancellationError {
                 return
             } catch {
@@ -1557,7 +1674,7 @@ final class NotePatchViewModel: ObservableObject {
         let generation = UUID()
         aiModelLoadGeneration = generation
         isAIModelsLoading = true
-        aiModelsError = nil
+        aiModelsErrorText = nil
 
         aiModelLoadTask = Task { [weak self] in
             guard let self else { return }
@@ -1584,7 +1701,7 @@ final class NotePatchViewModel: ObservableObject {
                 return
             } catch {
                 guard self.aiModelLoadGeneration == generation else { return }
-                self.aiModelsError = friendlyError(error)
+                self.aiModelsErrorText = friendlyDisplayText(error)
                 if let backendError = error as? LearningBackendError,
                    backendError.shouldClearSession || backendError.statusCode == 403 {
                     self.showError(error)
@@ -1605,7 +1722,7 @@ final class NotePatchViewModel: ObservableObject {
         aiModelSelectionGeneration = generation
         selectedAIModelId = modelId
         isAIModelUpdating = true
-        aiModelsError = nil
+        aiModelsErrorText = nil
 
         aiModelSelectionTask = Task { [weak self] in
             guard let self else { return }
@@ -1643,7 +1760,7 @@ final class NotePatchViewModel: ObservableObject {
                 }
                 self.selectedAIModelId = previousSelection
                 self.aiModelCatalog = previousCatalog
-                self.aiModelsError = friendlyError(error)
+                self.aiModelsErrorText = friendlyDisplayText(error)
                 if let backendError = error as? LearningBackendError,
                    backendError.shouldClearSession || backendError.statusCode == 403 {
                     self.showError(error)
@@ -1708,20 +1825,23 @@ final class NotePatchViewModel: ObservableObject {
         selectedStudyNoteItem = item
         studyNoteHTML = nil
         studyNoteRenderedURL = nil
-        studyNoteReaderError = nil
+        studyNoteReaderErrorText = nil
         renderedStudyNoteRefreshAttempted = false
 
         if isOfflineTestMode, item.note.id == "note-1" {
-            studyNoteHTML = """
+            studyNoteHTML = #"""
             <h1>Fractions &amp; Ratios</h1>
             <h2>Key Concepts</h2>
             <p>A fraction represents a part of a whole, while ratios compare the relationship between two quantities.</p>
+            <p>An equivalent ratio can be written inline as \(\frac{a}{b}=\frac{c}{d}\).</p>
+            <p>Cross multiplication gives:</p>
+            <p>$$a \times d = b \times c$$</p>
             <ul>
               <li>Antecedent and consequent terms of a ratio must use the same unit.</li>
               <li>In a proportion, the product of the extremes equals the product of the means.</li>
             </ul>
             <blockquote>First convert to common units, then simplify and calculate.</blockquote>
-            """
+            """#
             return
         }
 
@@ -1744,12 +1864,12 @@ final class NotePatchViewModel: ObservableObject {
                 guard studyNoteReaderGeneration == generation,
                       isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId),
                       selectedStudyNoteItem?.id == item.id else { return }
-                statusMessage = localized("operation.note_loaded")
+                setStatus("operation.note_loaded")
             } catch {
                 guard studyNoteReaderGeneration == generation,
                       isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId),
                       selectedStudyNoteItem?.id == item.id else { return }
-                studyNoteReaderError = friendlyError(error)
+                studyNoteReaderErrorText = friendlyDisplayText(error)
             }
         }
     }
@@ -1760,7 +1880,7 @@ final class NotePatchViewModel: ObservableObject {
         selectedStudyNoteItem = nil
         studyNoteHTML = nil
         studyNoteRenderedURL = nil
-        studyNoteReaderError = nil
+        studyNoteReaderErrorText = nil
         isStudyNoteLoading = false
         renderedStudyNoteRefreshAttempted = false
     }
@@ -1778,13 +1898,13 @@ final class NotePatchViewModel: ObservableObject {
               let item = selectedStudyNoteItem,
               let activeSession = currentSessionOrError(),
               let workspaceId = selectedWorkspaceId else {
-            studyNoteReaderError = localized("note.error.latest_only")
+            studyNoteReaderErrorText = .localized("note.error.latest_only")
             return
         }
         studyNoteDraftTitle = item.note.title
         studyNoteDraftSummary = localized("note.editor.default_summary")
         studyNoteDraftHTML = ""
-        studyNoteEditorError = nil
+        studyNoteEditorErrorText = nil
         isStudyNoteConflictPending = false
         isStudyNoteEditorPresented = true
         isStudyNoteEditorLoading = true
@@ -1808,7 +1928,7 @@ final class NotePatchViewModel: ObservableObject {
                 guard selectedStudyNoteItem?.id == item.id, isStudyNoteEditorPresented else { return }
                 studyNoteDraftHTML = html
             } catch {
-                studyNoteEditorError = friendlyError(error)
+                studyNoteEditorErrorText = friendlyDisplayText(error)
             }
         }
     }
@@ -1819,7 +1939,7 @@ final class NotePatchViewModel: ObservableObject {
         studyNoteDraftTitle = ""
         studyNoteDraftHTML = ""
         studyNoteDraftSummary = localized("note.editor.default_summary")
-        studyNoteEditorError = nil
+        studyNoteEditorErrorText = nil
         isStudyNoteConflictPending = false
         isStudyNoteSaving = false
     }
@@ -1847,26 +1967,26 @@ final class NotePatchViewModel: ObservableObject {
         let title = studyNoteDraftTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         let summary = studyNoteDraftSummary.trimmingCharacters(in: .whitespacesAndNewlines)
         guard HTMLNoteSecurity.hasVisibleContent(html) else {
-            studyNoteEditorError = localized("note.error.empty_html")
+            studyNoteEditorErrorText = .localized("note.error.empty_html")
             return
         }
         guard html.count <= 2_000_000 else {
-            studyNoteEditorError = localized("note.error.html_too_long")
+            studyNoteEditorErrorText = .localized("note.error.html_too_long")
             return
         }
         guard title.isEmpty || title.count <= 255 else {
-            studyNoteEditorError = localized("note.error.title_too_long")
+            studyNoteEditorErrorText = .localized("note.error.title_too_long")
             return
         }
         guard summary.isEmpty || summary.count <= 500 else {
-            studyNoteEditorError = localized("note.error.summary_too_long")
+            studyNoteEditorErrorText = .localized("note.error.summary_too_long")
             return
         }
 
         isStudyNoteSaving = true
         let saveGeneration = UUID()
         studyNoteSaveGeneration = saveGeneration
-        studyNoteEditorError = nil
+        studyNoteEditorErrorText = nil
         errorMessage = nil
         Task {
             defer {
@@ -1894,7 +2014,7 @@ final class NotePatchViewModel: ObservableObject {
                 selectedStudyNoteItem = optimisticItem
                 studyNoteHTML = html
                 isStudyNoteEditorPresented = false
-                statusMessage = localized("operation.note_revision_saved")
+                setStatus("operation.note_revision_saved")
 
                 do {
                     let refreshedItems = try await refreshStudyNoteGroup(
@@ -1932,7 +2052,7 @@ final class NotePatchViewModel: ObservableObject {
                 guard studyNoteSaveGeneration == saveGeneration,
                       isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId),
                       isStudyNoteEditorPresented else { return }
-                studyNoteEditorError = friendlyError(error)
+                studyNoteEditorErrorText = friendlyDisplayText(error)
                 if let backendError = error as? LearningBackendError,
                    backendError.shouldClearSession || backendError.statusCode == 403 {
                     showError(error)
@@ -2003,12 +2123,12 @@ final class NotePatchViewModel: ObservableObject {
 
     func requestLearningUnitMergeConfirmation() {
         guard learningUnits.contains(where: { $0.id == mergeTargetLearningUnitId }) else {
-            errorMessage = localized("merge.error.target_required")
+            setError("merge.error.target_required")
             return
         }
         guard (1...50).contains(mergeSourceLearningUnitIds.count),
               !mergeSourceLearningUnitIds.contains(mergeTargetLearningUnitId) else {
-            errorMessage = localized("merge.error.sources_required")
+            setError("merge.error.sources_required")
             return
         }
         isLearningUnitMergeConfirmationPresented = true
@@ -2023,13 +2143,13 @@ final class NotePatchViewModel: ObservableObject {
         guard learningUnits.contains(where: { $0.id == targetId }),
               (1...50).contains(sourceIds.count),
               !sourceIds.contains(targetId) else {
-            errorMessage = localized("merge.error.sources_required")
+            setError("merge.error.sources_required")
             return
         }
 
         isLearningUnitMerging = true
         errorMessage = nil
-        statusMessage = localized("merge.starting")
+        setStatus("merge.starting")
         taskEvents = []
         Task {
             defer { isLearningUnitMerging = false }
@@ -2046,7 +2166,7 @@ final class NotePatchViewModel: ObservableObject {
                 isLearningUnitMergePresented = false
                 isLearningUnitMergeConfirmationPresented = false
                 mergeSourceLearningUnitIds = []
-                statusMessage = localized("merge.in_progress")
+                setStatus("merge.in_progress")
 
                 _ = try await pollTask(
                     activeSession: activeSession,
@@ -2073,14 +2193,14 @@ final class NotePatchViewModel: ObservableObject {
                         learningUnit: target
                     )
                     activeMergeTargetLearningUnitId = nil
-                    statusMessage = localized("merge.completed")
+                    setStatus("merge.completed")
                     if selectedLearningSection == .flashcards {
                         loadFlashcards(learningUnitId: targetId)
                     }
                 } else if learningUnits.first(where: { $0.id == targetId })?.mergeStatus == "failed" {
-                    errorMessage = "merge.status.failed"
+                    setError("merge.status.failed")
                 } else {
-                    statusMessage = localized("merge.rebuilding")
+                    setStatus("merge.rebuilding")
                     resumeStudyNoteGenerationPollingIfNeeded()
                 }
             } catch {
@@ -2093,8 +2213,9 @@ final class NotePatchViewModel: ObservableObject {
     }
 
     func viewLearningUnitMergeTask() {
-        selectedTab = .documents
+        selectedTab = .home
         selectedDocumentsSection = .tasks
+        selectedHomeDestination = .tasks
     }
 
     func displayedMergeStatus(for unit: LearningUnit) -> String? {
@@ -2149,7 +2270,7 @@ final class NotePatchViewModel: ObservableObject {
         flashcardIndex = 0
         isFlashcardShowingBack = false
         isFlashcardsLoading = true
-        flashcardError = nil
+        flashcardErrorText = nil
         Task {
             defer { isFlashcardsLoading = false }
             do {
@@ -2163,7 +2284,7 @@ final class NotePatchViewModel: ObservableObject {
                       selectedFlashcardDeckId == deckId else { return }
                 flashcardDeckDetail = sortedFlashcardDetail(detail)
             } catch {
-                flashcardError = friendlyError(error)
+                flashcardErrorText = friendlyDisplayText(error)
                 if let backendError = error as? LearningBackendError,
                    backendError.shouldClearSession || backendError.statusCode == 403 {
                     showError(error)
@@ -2195,7 +2316,7 @@ final class NotePatchViewModel: ObservableObject {
               !isFlashcardsLoading else { return }
         selectedFlashcardLearningUnitId = learningUnitId
         isFlashcardsLoading = true
-        flashcardError = nil
+        flashcardErrorText = nil
         Task {
             defer { isFlashcardsLoading = false }
             do {
@@ -2230,7 +2351,7 @@ final class NotePatchViewModel: ObservableObject {
             } catch {
                 guard selectedWorkspaceId == workspaceId,
                       selectedFlashcardLearningUnitId == learningUnitId else { return }
-                flashcardError = friendlyError(error)
+                flashcardErrorText = friendlyDisplayText(error)
                 if let backendError = error as? LearningBackendError,
                    backendError.shouldClearSession || backendError.statusCode == 403 {
                     showError(error)
@@ -2288,11 +2409,11 @@ final class NotePatchViewModel: ObservableObject {
         guard !isKnowledgeSearching else { return }
         let query = knowledgeQuery.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else {
-            errorMessage = "Please enter a knowledge search query."
+            setError("knowledge.error.query_required")
             return
         }
         guard query.count <= 8000 else {
-            errorMessage = "Knowledge search query cannot exceed 8,000 characters."
+            setError("knowledge.error.query_length")
             return
         }
         let limit = knowledgeLimit.clamped(to: 1...20)
@@ -2324,7 +2445,7 @@ final class NotePatchViewModel: ObservableObject {
                 knowledgeResults = response.items
                 hasSearchedKnowledge = true
                 if response.items.isEmpty {
-                    statusMessage = "No matching results in the knowledge base."
+                    setStatus("knowledge.no_results")
                 } else {
                     setStatus("knowledge.results_found", String(response.items.count))
                 }
@@ -2414,15 +2535,15 @@ final class NotePatchViewModel: ObservableObject {
               !isHomeworkLoading else { return false }
         let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard homeworkDocumentCandidates.contains(where: { $0.id == documentId }) else {
-            errorMessage = "Please select a processed homework document."
+            setError("grading.error.document_required")
             return false
         }
         guard !trimmedTitle.isEmpty else {
-            errorMessage = "Please enter a homework title."
+            setError("grading.error.title_required")
             return false
         }
         guard let maxScore = Double(maxScoreText), maxScore > 0 else {
-            errorMessage = "Maximum score must be greater than 0."
+            setError("grading.error.max_score")
             return false
         }
         let input = HomeworkCreateInput(
@@ -2449,7 +2570,7 @@ final class NotePatchViewModel: ObservableObject {
                 homeworkReferences = []
                 homeworkRubricText = homework.rubricText ?? ""
                 homeworkMaxScoreText = formatScore(homework.maxScore)
-                statusMessage = "Homework created."
+                setStatus("grading.homework_created")
                 onCommitted()
                 do {
                     try await refreshHomeworks(activeSession: activeSession, workspaceId: workspaceId)
@@ -2469,7 +2590,7 @@ final class NotePatchViewModel: ObservableObject {
         guard let activeSession = currentSessionOrError(), let workspaceId = selectedWorkspaceId,
               let homeworkId = selectedHomeworkId, !isHomeworkLoading else { return }
         guard let maxScore = Double(homeworkMaxScoreText), maxScore > 0 else {
-            errorMessage = "Maximum score must be greater than 0."
+            setError("grading.error.max_score")
             return
         }
         guard isGradingConfigDirty else { return }
@@ -2478,7 +2599,7 @@ final class NotePatchViewModel: ObservableObject {
         let submittedMaxScoreText = homeworkMaxScoreText
         isHomeworkLoading = true
         errorMessage = nil
-        statusMessage = "Saving grading configuration..."
+        setStatus("grading.saving_config")
         Task {
             defer { isHomeworkLoading = false }
             do {
@@ -2492,7 +2613,7 @@ final class NotePatchViewModel: ObservableObject {
                     homeworkMaxScoreText = formatScore(updated.maxScore)
                 }
                 lastGradingTask = nil
-                statusMessage = "Grading configuration saved. Please re-grade."
+                setStatus("grading.config_saved")
             } catch {
                 guard isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId),
                       selectedHomeworkId == homeworkId else { return }
@@ -2527,7 +2648,7 @@ final class NotePatchViewModel: ObservableObject {
                     homeworkReferences.append(reference)
                 }
                 lastGradingTask = nil
-                statusMessage = "Reference added. Please re-grade."
+                setStatus("grading.reference_added")
                 onCommitted()
             } catch {
                 guard isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId),
@@ -2542,7 +2663,7 @@ final class NotePatchViewModel: ObservableObject {
               let homeworkId = selectedHomeworkId, !isHomeworkLoading else { return }
         isHomeworkLoading = true
         errorMessage = nil
-        statusMessage = "Removing reference..."
+        setStatus("grading.removing_reference")
         Task {
             defer { isHomeworkLoading = false }
             do {
@@ -2552,7 +2673,7 @@ final class NotePatchViewModel: ObservableObject {
                       selectedHomeworkId == homeworkId else { return }
                 homeworkReferences.removeAll { $0.id == reference.id }
                 lastGradingTask = nil
-                statusMessage = "Reference removed. Please re-grade."
+                setStatus("grading.reference_removed")
                 do {
                     let refreshedReferences = try await client.listHomeworkReferences(workspaceId: workspaceId, homeworkId: homeworkId)
                     guard isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId),
@@ -2583,8 +2704,9 @@ final class NotePatchViewModel: ObservableObject {
                 guard isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId),
                       selectedHomeworkId == homeworkId else { return }
                 activeTask = task
-                selectedTab = .documents
+                selectedTab = .home
                 selectedDocumentsSection = .tasks
+                selectedHomeDestination = .tasks
                 let finished = try await pollTask(activeSession: activeSession, workspaceId: workspaceId, taskId: task.id) { [weak self] task, events in
                     guard let self,
                           self.isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId),
@@ -2602,7 +2724,7 @@ final class NotePatchViewModel: ObservableObject {
                 lastGradingTask = finished
                 try await refreshHomeworks(activeSession: activeSession, workspaceId: workspaceId)
                 try? await refreshLearningUnits(activeSession: activeSession, workspaceId: workspaceId)
-                statusMessage = "Homework grading complete."
+                setStatus("grading.complete")
             } catch {
                 guard isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId),
                       selectedHomeworkId == homeworkId else { return }
@@ -2633,7 +2755,8 @@ final class NotePatchViewModel: ObservableObject {
                     downloadURL: response.downloadURL,
                     filename: response.filename,
                     mimeType: "text/html",
-                    completionMessage: "Study note downloaded.",
+                    cacheKey: note.id,
+                    completionText: .localized("operation.note_downloaded"),
                     shouldApply: { [weak self] in
                         self?.isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) == true
                     }
@@ -2650,7 +2773,7 @@ final class NotePatchViewModel: ObservableObject {
             return
         }
         guard canDownloadDocument(document) else {
-            errorMessage = localized("document.error.security_scan_blocked")
+            setError("document.error.not_available")
             return
         }
         Task {
@@ -2661,7 +2784,7 @@ final class NotePatchViewModel: ObservableObject {
                 }
             }
             errorMessage = nil
-            statusMessage = "Loading artifacts..."
+            setStatus("document.loading_artifacts")
             do {
                 let loadedArtifacts = try await clientFor(activeSession).listArtifacts(
                     workspaceId: workspaceId,
@@ -2670,7 +2793,7 @@ final class NotePatchViewModel: ObservableObject {
                 guard isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) else { return }
                 selectedArtifactDocumentId = document.id
                 selectedArtifacts = loadedArtifacts
-                statusMessage = "Artifacts loaded."
+                setStatus("document.artifacts_loaded")
             } catch {
                 guard isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) else { return }
                 showError(error)
@@ -2683,7 +2806,7 @@ final class NotePatchViewModel: ObservableObject {
             return
         }
         guard canDownloadDocument(document) else {
-            errorMessage = localized("document.error.security_scan_blocked")
+            setError("document.error.not_available")
             return
         }
         Task {
@@ -2694,7 +2817,7 @@ final class NotePatchViewModel: ObservableObject {
                 }
             }
             errorMessage = nil
-            statusMessage = "Loading OCR results..."
+            setStatus("document.loading_ocr")
             do {
                 let loadedArtifacts = try await clientFor(activeSession)
                     .getOcrArtifacts(workspaceId: workspaceId, documentId: document.id, includeDownloadURL: true)
@@ -2702,7 +2825,7 @@ final class NotePatchViewModel: ObservableObject {
                 guard isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) else { return }
                 selectedOcrDocumentId = document.id
                 selectedOcrArtifacts = loadedArtifacts
-                statusMessage = selectedOcrArtifacts.isEmpty ? "No OCR results yet." : "OCR results loaded."
+                setStatus(selectedOcrArtifacts.isEmpty ? "document.ocr_empty" : "document.ocr_loaded")
             } catch {
                 guard isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) else { return }
                 showError(error)
@@ -2727,7 +2850,7 @@ final class NotePatchViewModel: ObservableObject {
         isDocumentPurgeRetryAvailable = false
         errorMessage = nil
         taskEvents = []
-        statusMessage = "Requesting document deletion..."
+        setStatus("document.deleting")
 
         Task {
             var deletionAccepted = false
@@ -2743,9 +2866,10 @@ final class NotePatchViewModel: ObservableObject {
                 guard isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) else { return }
                 retryableDocumentPurgeId = response.documentId
                 removeDeletedDocumentFromLocalState(response.documentId)
-                selectedTab = .documents
+                selectedTab = .home
                 selectedDocumentsSection = .tasks
-                statusMessage = "Document deleted. Cleaning up original and derivative data..."
+                selectedHomeDestination = .tasks
+                setStatus("document.cleanup_started")
 
                 let initialTask = try await client.getTask(workspaceId: workspaceId, taskId: response.purgeTaskId)
                 guard isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) else { return }
@@ -2772,7 +2896,7 @@ final class NotePatchViewModel: ObservableObject {
                 guard finishedTask.status == "succeeded" else { return }
                 retryableDocumentPurgeId = nil
                 isDocumentPurgeRetryAvailable = false
-                statusMessage = "Document and derivative data cleanup complete."
+                setStatus("document.cleanup_complete")
                 if let refreshError = await refreshAfterDocumentDeletion(activeSession: activeSession, workspaceId: workspaceId) {
                     handlePostCommitRefreshFailure(refreshError, completionKey: "operation.document_cleanup_completed")
                 }
@@ -2817,7 +2941,7 @@ final class NotePatchViewModel: ObservableObject {
                 }
             }
             errorMessage = nil
-            statusMessage = "Fetching artifact download link..."
+            setStatus("document.fetching_artifact_link")
             do {
                 let client = clientFor(activeSession)
                 let response = try await client.getArtifactDownloadURL(
@@ -2833,7 +2957,12 @@ final class NotePatchViewModel: ObservableObject {
                     downloadURL: response.downloadURL,
                     filename: filename,
                     mimeType: response.mimeType ?? artifact.mimeType,
-                    completionMessage: "\(artifactTypeLabel(artifact.artifactType)) downloaded.",
+                    fileSize: artifact.fileSize,
+                    cacheKey: artifact.id,
+                    completionText: .localized(
+                        "document.artifact_downloaded",
+                        [artifactTypeLabel(artifact.artifactType)]
+                    ),
                     shouldApply: { [weak self] in
                         self?.isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) == true
                     }
@@ -2850,7 +2979,7 @@ final class NotePatchViewModel: ObservableObject {
             return
         }
         guard let downloadURL = artifact.downloadURL, !downloadURL.isEmpty else {
-            errorMessage = "OCR artifact has no available download link. Please reload OCR results."
+            setError("document.error.ocr_link_missing")
             return
         }
         Task {
@@ -2861,14 +2990,19 @@ final class NotePatchViewModel: ObservableObject {
                 }
             }
             errorMessage = nil
-            statusMessage = "Downloading OCR results..."
+            setStatus("document.downloading_ocr")
             do {
                 try await downloadAndPreview(
                     client: clientFor(activeSession),
                     downloadURL: downloadURL,
                     filename: defaultArtifactFilename(type: artifact.artifactType, mimeType: artifact.mimeType, fallback: artifact.id),
                     mimeType: artifact.mimeType,
-                    completionMessage: "\(artifactTypeLabel(artifact.artifactType)) downloaded.",
+                    fileSize: artifact.fileSize,
+                    cacheKey: artifact.id,
+                    completionText: .localized(
+                        "document.artifact_downloaded",
+                        [artifactTypeLabel(artifact.artifactType)]
+                    ),
                     shouldApply: { [weak self] in
                         self?.isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) == true
                     }
@@ -2885,33 +3019,154 @@ final class NotePatchViewModel: ObservableObject {
             return
         }
         guard canDownloadDocument(document) else {
-            errorMessage = localized("document.error.security_scan_blocked")
+            setError("document.error.not_available")
             return
         }
+        guard !previewLoadingDocumentIds.contains(document.id) else { return }
+        previewLoadingDocumentIds.insert(document.id)
         Task {
-            isBusy = true
             defer {
                 if isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) {
-                    isBusy = false
+                    previewLoadingDocumentIds.remove(document.id)
                 }
             }
             errorMessage = nil
-            statusMessage = "Fetching download link..."
+            setStatus("document.fetching_download_link")
             do {
                 let client = clientFor(activeSession)
-                let response = try await client.getDownloadURL(workspaceId: workspaceId, documentId: document.id)
+                let safeFilename = sanitizeFileName(document.originalFilename)
+                let targetURL = cacheDirectory
+                    .appendingPathComponent("downloads", isDirectory: true)
+                    .appendingPathComponent(sanitizeFileName(document.id), isDirectory: true)
+                    .appendingPathComponent(safeFilename)
+                var downloadedURL: URL?
+                var lastError: Error?
+                for attempt in 0..<2 {
+                    do {
+                        let response = try await client.getDownloadURL(workspaceId: workspaceId, documentId: document.id)
+                        guard isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) else { throw CancellationError() }
+                        setStatus("document.downloading")
+                        downloadedURL = try await client.download(downloadURL: response.downloadURL, targetURL: targetURL)
+                        break
+                    } catch {
+                        lastError = error
+                        guard attempt == 0, shouldRetryDocumentPreviewDownload(error) else { throw error }
+                    }
+                }
+                guard let downloadedURL else {
+                    throw lastError ?? LearningBackendError(localizedKey: "document.error.not_available")
+                }
                 guard isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) else { return }
-                statusMessage = "Downloading file..."
-                let directory = cacheDirectory.appendingPathComponent("downloads", isDirectory: true)
-                let targetURL = directory.appendingPathComponent(sanitizeFileName(document.originalFilename))
-                let downloadedURL = try await client.download(downloadURL: response.downloadURL, targetURL: targetURL)
-                guard isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) else { return }
-                downloadedPreview = DownloadedPreview(url: downloadedURL, mimeType: document.mimeType ?? contentTypeForFilename(document.originalFilename))
-                statusMessage = document.mimeType?.hasPrefix("image/") == true ? "Image downloaded." : "File downloaded."
+                downloadedPreview = DownloadedPreview(
+                    url: downloadedURL,
+                    mimeType: document.mimeType ?? contentTypeForFilename(document.originalFilename),
+                    filename: document.originalFilename,
+                    fileSize: document.fileSize
+                )
+                setStatus(
+                    document.mimeType?.hasPrefix("image/") == true
+                        ? "operation.image_downloaded"
+                        : "operation.file_downloaded"
+                )
             } catch {
                 guard isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) else { return }
                 showError(error)
             }
+        }
+    }
+
+    func documentThumbnailIdentifier(for document: LearningDocumentItem) -> String {
+        guard let activeSession = session else {
+            return [document.workspaceId, document.id, document.updatedAt, document.originalFilename]
+                .joined(separator: "|")
+        }
+        return documentThumbnailCacheKey(
+            baseURL: activeSession.baseURL,
+            userId: activeSession.userId,
+            workspaceId: document.workspaceId,
+            document: document
+        )
+    }
+
+    func generateDocumentThumbnail(
+        for document: LearningDocumentItem,
+        maxPixelSize: Int = 160
+    ) async -> UIImage? {
+        guard documentSupportsImageThumbnail(document),
+              !isOfflineTestMode,
+              let activeSession = session,
+              let workspaceId = selectedWorkspaceId,
+              document.workspaceId == workspaceId else {
+            return nil
+        }
+
+        let thumbnailURL = documentThumbnailCacheURL(
+            cacheDirectory: cacheDirectory,
+            baseURL: activeSession.baseURL,
+            userId: activeSession.userId,
+            workspaceId: workspaceId,
+            document: document
+        )
+        if FileManager.default.fileExists(atPath: thumbnailURL.path) {
+            return await Task.detached(priority: .utility) {
+                UIImage(contentsOfFile: thumbnailURL.path)
+            }.value
+        }
+
+        let sourceURL = cacheDirectory
+            .appendingPathComponent("document-thumbnail-sources", isDirectory: true)
+            .appendingPathComponent(sanitizeFileName(workspaceId), isDirectory: true)
+            .appendingPathComponent(sanitizeFileName(document.id), isDirectory: true)
+            .appendingPathComponent(sanitizeFileName(document.originalFilename))
+        let client = clientFor(activeSession)
+
+        do {
+            var downloadedSource: URL?
+            for attempt in 0..<2 {
+                do {
+                    let response = try await client.getDownloadURL(
+                        workspaceId: workspaceId,
+                        documentId: document.id
+                    )
+                    downloadedSource = try await client.download(
+                        downloadURL: response.downloadURL,
+                        targetURL: sourceURL
+                    )
+                    break
+                } catch {
+                    guard attempt == 0, shouldRetryDocumentPreviewDownload(error) else {
+                        throw error
+                    }
+                }
+            }
+            guard let downloadedSource,
+                  isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) else {
+                return nil
+            }
+            return await Task.detached(priority: .utility) {
+                defer { try? FileManager.default.removeItem(at: downloadedSource) }
+                guard let image = downsampleUploadImage(
+                    at: downloadedSource,
+                    maxPixelSize: max(1, maxPixelSize)
+                ) else {
+                    return nil
+                }
+                do {
+                    try FileManager.default.createDirectory(
+                        at: thumbnailURL.deletingLastPathComponent(),
+                        withIntermediateDirectories: true
+                    )
+                    if let data = image.pngData() {
+                        try data.write(to: thumbnailURL, options: .atomic)
+                    }
+                } catch {
+                    // A memory-cached thumbnail is still useful if disk caching fails.
+                }
+                return image
+            }.value
+        } catch {
+            try? FileManager.default.removeItem(at: sourceURL)
+            return nil
         }
     }
 
@@ -2920,17 +3175,31 @@ final class NotePatchViewModel: ObservableObject {
         downloadURL: String,
         filename: String,
         mimeType: String?,
-        completionMessage: String,
+        fileSize: Int64? = nil,
+        cacheKey: String = "shared",
+        completionText: AppDisplayText,
         shouldApply: @escaping @MainActor () -> Bool = { true }
     ) async throws {
-        statusMessage = "Downloading file..."
-        let directory = cacheDirectory.appendingPathComponent("downloads", isDirectory: true)
+        setStatus("document.downloading")
+        let directory = cacheDirectory
+            .appendingPathComponent("downloads", isDirectory: true)
+            .appendingPathComponent(sanitizeFileName(cacheKey), isDirectory: true)
         let safeFilename = sanitizeFileName(filename)
         let targetURL = directory.appendingPathComponent(safeFilename)
         let downloadedURL = try await client.download(downloadURL: downloadURL, targetURL: targetURL)
         guard shouldApply() else { throw CancellationError() }
-        downloadedPreview = DownloadedPreview(url: downloadedURL, mimeType: mimeType ?? contentTypeForFilename(safeFilename))
-        statusMessage = completionMessage
+        downloadedPreview = DownloadedPreview(
+            url: downloadedURL,
+            mimeType: mimeType ?? contentTypeForFilename(safeFilename),
+            filename: filename,
+            fileSize: fileSize
+        )
+        statusDisplayText = completionText
+    }
+
+    private func shouldRetryDocumentPreviewDownload(_ error: Error) -> Bool {
+        guard let backendError = error as? LearningBackendError else { return false }
+        return backendError.statusCode == 401 || backendError.statusCode == 403
     }
 
     private func shouldForceReprocess(_ document: LearningDocumentItem) -> Bool {
@@ -2939,22 +3208,14 @@ final class NotePatchViewModel: ObservableObject {
 
     func canProcessDocument(_ document: LearningDocumentItem) -> Bool {
         ["uploaded", "ready", "failed"].contains(document.status)
-            && !isDocumentAwaitingSecurityScan(document)
-            && !isDocumentSecurityBlocked(document)
     }
 
     func canDownloadDocument(_ document: LearningDocumentItem) -> Bool {
-        document.status != "deleted"
-            && !isDocumentAwaitingSecurityScan(document)
-            && !isDocumentSecurityBlocked(document)
+        document.status != "deleted" && document.purgeStatus != "completed"
     }
 
-    private func isDocumentAwaitingSecurityScan(_ document: LearningDocumentItem) -> Bool {
-        document.status == "scanning" || ["pending", "scanning"].contains(document.scanStatus ?? "")
-    }
-
-    private func isDocumentSecurityBlocked(_ document: LearningDocumentItem) -> Bool {
-        ["infected", "failed"].contains(document.scanStatus ?? "")
+    func isDocumentPreviewLoading(_ documentId: String) -> Bool {
+        previewLoadingDocumentIds.contains(documentId)
     }
 
     private func defaultArtifactFilename(type: String, mimeType: String?, fallback: String) -> String {
@@ -2980,7 +3241,7 @@ final class NotePatchViewModel: ObservableObject {
 
     private func currentSessionOrError() -> SavedSession? {
         guard let session else {
-            errorMessage = "Please sign in or register first."
+            setError("auth.error.session_required")
             return nil
         }
         return session
@@ -3006,12 +3267,13 @@ final class NotePatchViewModel: ObservableObject {
         }
         if let backendError = error as? LearningBackendError,
            backendError.statusCode != nil,
+           backendError.localizationKey == nil,
            !backendError.shouldClearSession {
-            setRawError(friendlyError(error))
+            setRawError(backendError.message)
         } else {
-            errorMessage = friendlyError(error)
+            errorDisplayText = friendlyDisplayText(error)
         }
-        statusMessage = ""
+        statusDisplayText = .raw("")
     }
 
     private func handlePostCommitRefreshFailure(_ error: Error, completionKey: String) {
@@ -3032,6 +3294,7 @@ final class NotePatchViewModel: ObservableObject {
         invalidateDeferredContentLoads()
         clearAIModelState()
         selectedWorkspaceId = nil
+        selectedHomeDestination = nil
         settings.saveSelectedWorkspaceId(nil)
         documents = []
         selectedArtifacts = []
@@ -3069,7 +3332,7 @@ final class NotePatchViewModel: ObservableObject {
         let sampleDocuments = [
             LearningDocumentItem(id: "homework-doc", workspaceId: "ui-workspace", title: "Algebra Homework", originalFilename: "homework.pdf", mimeType: "application/pdf", fileType: "pdf", documentKind: "homework", status: "ready"),
             LearningDocumentItem(id: "answer-doc", workspaceId: "ui-workspace", title: "Answer Key", originalFilename: "answer.pdf", mimeType: "application/pdf", fileType: "pdf", documentKind: "answer_key", status: "ready"),
-            LearningDocumentItem(id: "scan-doc", workspaceId: "ui-workspace", title: "New Worksheet", originalFilename: "worksheet.pdf", mimeType: "application/pdf", fileType: "pdf", documentKind: "homework", scanStatus: "scanning", scanMessage: "Checking the uploaded file", status: "scanning")
+            LearningDocumentItem(id: "preparing-doc", workspaceId: "ui-workspace", title: "New Worksheet", originalFilename: "worksheet.pdf", mimeType: "application/pdf", fileType: "pdf", documentKind: "homework", status: "scanning")
         ]
         isOfflineTestMode = true
         didRestoreSession = true
@@ -3120,6 +3383,11 @@ final class NotePatchViewModel: ObservableObject {
             )
         ]
         homeworks = [HomeworkItem(id: "homework-1", workspaceId: "ui-workspace", title: "Algebra Homework 01", documentId: "homework-doc", rubricText: "10 points per question", maxScore: 100)]
+        homeDashboardState.applySupplementaryContent(
+            learningUnits: learningUnits,
+            homeworks: homeworks,
+            noteGroups: studyNoteGroups
+        )
         selectedHomeworkId = "homework-1"
         homeworkRubricText = "10 points per question"
         homeworkMaxScoreText = "100"
@@ -3200,7 +3468,7 @@ final class NotePatchViewModel: ObservableObject {
             isDocumentPurgeRetryAvailable = true
         }
         errorMessage = nil
-        statusMessage = "UI Offline Test Mode"
+        setStatus("operation.offline_test_mode")
     }
 
 
@@ -3208,7 +3476,6 @@ final class NotePatchViewModel: ObservableObject {
         presenceTask?.cancel()
         presenceTask = nil
         stopStudyNoteGenerationPolling()
-        stopScanTracking(clearDocuments: true)
         invalidateDeferredContentLoads()
         aiPreferenceGeneration = UUID()
         aiPreferenceTask?.cancel()
@@ -3222,6 +3489,7 @@ final class NotePatchViewModel: ObservableObject {
         studyNoteReaderGeneration = UUID()
         studyNoteSaveGeneration = UUID()
         settings.clearSession()
+        DocumentThumbnailPipeline.shared.removeAll()
         isBusy = false
         uploadProgressPercent = nil
         uploadProgressLabel = ""
@@ -3276,13 +3544,15 @@ final class NotePatchViewModel: ObservableObject {
         }
     }
 
-    private func saveSession(_ updated: SavedSession) {
+    private func saveSession(_ updated: SavedSession, synchronizeServerURLFields: Bool = false) {
         if !isOfflineTestMode {
             settings.saveSession(updated)
         }
         session = updated
-        apiBaseURLText = updated.baseURL
-        tusBaseURLText = updated.tusBaseURL
+        if synchronizeServerURLFields {
+            apiBaseURLText = updated.baseURL
+            tusBaseURLText = updated.tusBaseURL
+        }
         emailText = updated.email
         fullNameText = updated.fullName ?? ""
         selectedWorkspaceId = updated.selectedWorkspaceId
@@ -3292,6 +3562,7 @@ final class NotePatchViewModel: ObservableObject {
     private func saveSelectedWorkspace(_ workspaceId: String?) {
         if selectedWorkspaceId != workspaceId {
             invalidateDeferredContentLoads()
+            DocumentThumbnailPipeline.shared.removeAll()
             clearAIModelState()
             clearChatWorkspaceState()
         }
@@ -3363,7 +3634,7 @@ final class NotePatchViewModel: ObservableObject {
                         break
                     }
                     if !self.isBusy {
-                        self.statusMessage = "AI Co-pilot presence sync failed. Will retry automatically."
+                        self.setStatus("chat.presence_retry")
                     }
                     delayBeforeNextHeartbeat = UInt64(self.presenceDelayMillis(defaultPresenceHeartbeatIntervalSeconds)) * 1_000_000
                 }
@@ -3405,6 +3676,7 @@ final class NotePatchViewModel: ObservableObject {
         _ content: DeferredWorkspaceContent,
         force: Bool,
         allowOfflineNetwork: Bool = false,
+        showsGlobalError: Bool = true,
         setLoading: @escaping @MainActor (Bool) -> Void,
         operation: @escaping @MainActor (SavedSession, String, @escaping @MainActor () -> Bool) async throws -> Void
     ) {
@@ -3419,7 +3691,9 @@ final class NotePatchViewModel: ObservableObject {
         let generation = UUID()
         deferredLoadGenerations[key] = generation
         setLoading(true)
-        errorMessage = nil
+        if showsGlobalError {
+            errorMessage = nil
+        }
 
         deferredLoadTasks[key] = Task { [weak self] in
             guard let self else { return }
@@ -3435,7 +3709,8 @@ final class NotePatchViewModel: ObservableObject {
             } catch is CancellationError {
                 // The workspace or session changed while this request was in flight.
             } catch {
-                if self.isCurrentDeferredLoad(key, generation: generation, session: activeSession) {
+                if showsGlobalError,
+                   self.isCurrentDeferredLoad(key, generation: generation, session: activeSession) {
                     self.showError(error)
                 }
             }
@@ -3640,14 +3915,14 @@ final class NotePatchViewModel: ObservableObject {
                                     learningUnit: target
                                 )
                                 self.activeMergeTargetLearningUnitId = nil
-                                self.statusMessage = localized("merge.completed")
+                                self.setStatus("merge.completed")
                                 if self.selectedLearningSection == .flashcards {
                                     self.loadFlashcards(learningUnitId: target.id)
                                 }
                             } else if target.mergeStatus == "failed" {
                                 self.statusMessage = ""
                                 if self.errorMessage == nil {
-                                    self.errorMessage = "merge.status.failed"
+                                    self.setError("merge.status.failed")
                                 }
                             }
                         }
@@ -3699,7 +3974,6 @@ final class NotePatchViewModel: ObservableObject {
             throw CancellationError()
         }
         documents = loadedDocuments
-        registerScanningDocuments(documents, workspaceId: workspaceId)
         if let selectedArtifactDocumentId,
            !documents.contains(where: { $0.id == selectedArtifactDocumentId }) {
             self.selectedArtifactDocumentId = nil
@@ -3709,119 +3983,6 @@ final class NotePatchViewModel: ObservableObject {
            !documents.contains(where: { $0.id == selectedOcrDocumentId }) {
             self.selectedOcrDocumentId = nil
             selectedOcrArtifacts = []
-        }
-    }
-
-    private func registerScanningDocuments(_ loadedDocuments: [LearningDocumentItem], workspaceId: String) {
-        let pendingIds = Set(loadedDocuments.filter(isDocumentAwaitingSecurityScan).map(\.id))
-        if scanTrackingWorkspaceId != workspaceId {
-            stopScanTracking(clearDocuments: true)
-            scanTrackingWorkspaceId = workspaceId
-        }
-        scanTrackingDocumentIds.formUnion(pendingIds)
-        startScanTrackingIfNeeded()
-    }
-
-    private func startScanTrackingIfNeeded() {
-        guard isAppActive,
-              !isOfflineTestMode,
-              scanTrackingTask?.isCancelled != false,
-              !scanTrackingDocumentIds.isEmpty,
-              let activeSession = session,
-              let workspaceId = selectedWorkspaceId,
-              workspaceId == scanTrackingWorkspaceId else { return }
-
-        scanTrackingTask = Task { [weak self] in
-            var failureCount = 0
-            while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 3_000_000_000)
-                guard !Task.isCancelled,
-                      let self,
-                      self.isAppActive,
-                      self.selectedWorkspaceId == workspaceId,
-                      self.session?.userId == activeSession.userId else { break }
-
-                let ids = Array(self.scanTrackingDocumentIds)
-                guard !ids.isEmpty else { break }
-                let results = await self.loadScanningDocuments(
-                    ids: ids,
-                    activeSession: activeSession,
-                    workspaceId: workspaceId
-                )
-                var transitioned = false
-                var successfulRequest = false
-                for (documentId, result) in results {
-                    switch result {
-                    case .success(let document):
-                        successfulRequest = true
-                        if let index = self.documents.firstIndex(where: { $0.id == document.id }),
-                           self.documents[index] != document {
-                            self.documents[index] = document
-                        }
-                        if !self.isDocumentAwaitingSecurityScan(document) {
-                            self.scanTrackingDocumentIds.remove(document.id)
-                            transitioned = true
-                        }
-                    case .failure(let error):
-                        if let backendError = error as? LearningBackendError, backendError.statusCode == 404 {
-                            self.scanTrackingDocumentIds.remove(documentId)
-                        }
-                    }
-                }
-                if successfulRequest { failureCount = 0 } else { failureCount += 1 }
-                if transitioned {
-                    try? await self.refreshWorkspaceContent(activeSession: activeSession, workspaceId: workspaceId)
-                }
-                if self.scanTrackingDocumentIds.isEmpty { break }
-                if !successfulRequest {
-                    let delays: [UInt64] = [5, 10, 20, 30]
-                    let delay = delays[min(max(failureCount - 1, 0), delays.count - 1)]
-                    try? await Task.sleep(nanoseconds: delay * 1_000_000_000)
-                }
-            }
-            self?.scanTrackingTask = nil
-        }
-    }
-
-    private func loadScanningDocuments(
-        ids: [String],
-        activeSession: SavedSession,
-        workspaceId: String
-    ) async -> [(String, Result<LearningDocumentItem, Error>)] {
-        let client = clientFor(activeSession)
-        var results = Array<Result<LearningDocumentItem, Error>?>(repeating: nil, count: ids.count)
-        await withTaskGroup(of: (Int, Result<LearningDocumentItem, Error>).self) { group in
-            var nextIndex = 0
-            func enqueueNext() {
-                guard nextIndex < ids.count else { return }
-                let index = nextIndex
-                let id = ids[index]
-                nextIndex += 1
-                group.addTask {
-                    do {
-                        return (index, .success(try await client.getDocument(workspaceId: workspaceId, documentId: id)))
-                    } catch {
-                        return (index, .failure(error))
-                    }
-                }
-            }
-            for _ in 0..<min(4, ids.count) { enqueueNext() }
-            while let (index, result) = await group.next() {
-                results[index] = result
-                enqueueNext()
-            }
-        }
-        return results.enumerated().compactMap { index, result in
-            result.map { (ids[index], $0) }
-        }
-    }
-
-    private func stopScanTracking(clearDocuments: Bool) {
-        scanTrackingTask?.cancel()
-        scanTrackingTask = nil
-        if clearDocuments {
-            scanTrackingDocumentIds = []
-            scanTrackingWorkspaceId = nil
         }
     }
 
@@ -3885,7 +4046,7 @@ final class NotePatchViewModel: ObservableObject {
             ensureContentForSelectedTabLoaded()
         } else {
             documents = []
-            statusMessage = "Your account doesn't have a workspace yet. Please recover one in Settings."
+            setStatus("workspace.recovery_needed")
         }
     }
 
@@ -3965,7 +4126,7 @@ final class NotePatchViewModel: ObservableObject {
                         }
                         break
                     }
-                    throw LearningBackendError("Task event stream disconnected.")
+                    throw LearningBackendError(localizedKey: "error.task.stream_disconnected")
                 } catch is CancellationError {
                     throw CancellationError()
                 } catch let error as LearningBackendError
@@ -4021,21 +4182,20 @@ final class NotePatchViewModel: ObservableObject {
         case "succeeded":
             return task
         case "failed":
-            throw LearningBackendError(
-                task.errorMessage
-                    ?? events.last(where: { $0.level == "error" })?.message
-                    ?? "Task failed."
-            )
+            if let message = task.errorMessage ?? events.last(where: { $0.level == "error" })?.message {
+                throw LearningBackendError(message)
+            }
+            throw LearningBackendError(localizedKey: "error.task.failed")
         case "cancelled":
-            throw LearningBackendError(
-                events.last(where: { $0.eventType.contains("cancel") })?.message
-                    ?? events.last(where: { $0.level == "error" })?.message
-                    ?? events.last?.message
-                    ?? task.errorMessage
-                    ?? "Task cancelled."
-            )
+            if let message = events.last(where: { $0.eventType.contains("cancel") })?.message
+                ?? events.last(where: { $0.level == "error" })?.message
+                ?? events.last?.message
+                ?? task.errorMessage {
+                throw LearningBackendError(message)
+            }
+            throw LearningBackendError(localizedKey: "task.cancelled_fallback")
         default:
-            throw LearningBackendError("Task event stream ended before the task completed.")
+            throw LearningBackendError(localizedKey: "error.task.stream_incomplete")
         }
     }
 
@@ -4063,7 +4223,7 @@ final class NotePatchViewModel: ObservableObject {
                 try await Task.sleep(nanoseconds: 1_000_000_000)
             }
         }
-        throw lastConflict ?? LearningBackendError("Upload confirmation failed.")
+        throw lastConflict ?? LearningBackendError(localizedKey: "error.upload.confirmation_failed")
     }
 
     private func allocateOpenClawMessageId() -> String {
@@ -4077,7 +4237,7 @@ final class NotePatchViewModel: ObservableObject {
     }
 
     private var welcomeChatMessage: OpenClawChatMessage {
-        OpenClawChatMessage(id: "system", role: .system, content: "AI Co-pilot can help you organize ideas and analyze document results. Supports Markdown for replies.", status: .done, taskId: nil, progress: nil, events: [])
+        OpenClawChatMessage(id: "system", role: .system, content: "", status: .done, taskId: nil, progress: nil, events: [])
     }
 
     private func refreshConversations(
@@ -4102,6 +4262,7 @@ final class NotePatchViewModel: ObservableObject {
     ) async throws {
         let response = try await clientFor(activeSession).listChatMessages(workspaceId: workspaceId, conversationId: conversationId)
         guard shouldApply() else { throw CancellationError() }
+        var serverAttachmentsByMessageId: [String: [ChatMessageAttachment]] = [:]
         let messages = response.items.map { chatMessage -> OpenClawChatMessage in
             let role: OpenClawChatRole
             switch chatMessage.role {
@@ -4114,6 +4275,15 @@ final class NotePatchViewModel: ObservableObject {
             if status == .sending { content = chatMessage.content.isEmpty ? "Thinking..." : chatMessage.content }
             else if status == .error { content = chatMessage.errorMessage ?? chatMessage.content }
             else { content = chatMessage.content }
+            let serverAttachments = chatMessage.attachments ?? []
+            if !serverAttachments.isEmpty {
+                serverAttachmentsByMessageId[chatMessage.id] = serverAttachments
+            }
+            let restoredAttachments = restoreChatAttachments(
+                serverAttachments,
+                messageId: chatMessage.id,
+                workspaceId: workspaceId
+            )
             return OpenClawChatMessage(
                 id: chatMessage.id,
                 role: role,
@@ -4125,10 +4295,136 @@ final class NotePatchViewModel: ObservableObject {
                 citations: chatMessage.citations ?? [],
                 sourceStatus: chatMessage.sourceStatus,
                 modelId: chatMessage.modelId,
-                attachments: chatAttachmentsByMessageId[chatMessage.id] ?? []
+                attachments: restoredAttachments
             )
         }
         openClawMessages = messages.isEmpty ? [welcomeChatMessage] : messages
+        try await hydrateChatAttachments(
+            serverAttachmentsByMessageId,
+            activeSession: activeSession,
+            workspaceId: workspaceId,
+            shouldApply: shouldApply
+        )
+    }
+
+    private func restoreChatAttachments(
+        _ serverAttachments: [ChatMessageAttachment],
+        messageId: String,
+        workspaceId: String
+    ) -> [OpenClawChatAttachment] {
+        let validAttachments = serverAttachments.filter { !$0.documentId.isEmpty }
+        guard !validAttachments.isEmpty else {
+            return chatAttachmentsByMessageId[messageId] ?? []
+        }
+        let existing = chatAttachmentsByMessageId[messageId] ?? []
+        let restored = validAttachments.map { attachment -> OpenClawChatAttachment in
+            if let local = existing.first(where: { $0.documentId == attachment.documentId }),
+               FileManager.default.fileExists(atPath: local.file.url.path) {
+                var ready = local
+                ready.status = .ready
+                return ready
+            }
+            let file = localChatAttachmentFile(attachment, workspaceId: workspaceId)
+            let fileExists = FileManager.default.fileExists(atPath: file.url.path)
+            let shouldDownload = attachment.isImage && attachment.availability != "unavailable"
+            return OpenClawChatAttachment(
+                file: file,
+                documentId: attachment.documentId,
+                status: fileExists ? .ready : (shouldDownload ? .uploading : .unavailable)
+            )
+        }
+        chatAttachmentsByMessageId[messageId] = restored
+        return restored
+    }
+
+    private func hydrateChatAttachments(
+        _ attachmentsByMessageId: [String: [ChatMessageAttachment]],
+        activeSession: SavedSession,
+        workspaceId: String,
+        shouldApply: @escaping @MainActor () -> Bool
+    ) async throws {
+        guard !attachmentsByMessageId.isEmpty else { return }
+        let client = clientFor(activeSession)
+        for (messageId, attachments) in attachmentsByMessageId {
+            for attachment in attachments where !attachment.documentId.isEmpty && attachment.isImage && attachment.availability != "unavailable" {
+                try Task.checkCancellation()
+                guard shouldApply() else { throw CancellationError() }
+                let file = localChatAttachmentFile(attachment, workspaceId: workspaceId)
+                if FileManager.default.fileExists(atPath: file.url.path) {
+                    updateRestoredChatAttachment(messageId: messageId, documentId: attachment.documentId, file: file, status: .ready)
+                    continue
+                }
+                do {
+                    let response = try await client.getDownloadURL(
+                        workspaceId: workspaceId,
+                        documentId: attachment.documentId
+                    )
+                    let downloadedURL = try await client.download(
+                        downloadURL: response.downloadURL,
+                        targetURL: file.url
+                    )
+                    guard shouldApply() else { throw CancellationError() }
+                    let downloadedFile = LocalUploadFile(
+                        id: file.id,
+                        url: downloadedURL,
+                        filename: file.filename,
+                        mimeType: file.mimeType
+                    )
+                    updateRestoredChatAttachment(
+                        messageId: messageId,
+                        documentId: attachment.documentId,
+                        file: downloadedFile,
+                        status: .ready
+                    )
+                } catch is CancellationError {
+                    throw CancellationError()
+                } catch {
+                    guard shouldApply() else { throw CancellationError() }
+                    updateRestoredChatAttachment(
+                        messageId: messageId,
+                        documentId: attachment.documentId,
+                        file: file,
+                        status: .unavailable
+                    )
+                }
+            }
+        }
+    }
+
+    private func localChatAttachmentFile(
+        _ attachment: ChatMessageAttachment,
+        workspaceId: String
+    ) -> LocalUploadFile {
+        let filename = sanitizeFileName(
+            attachment.filename.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? (attachment.title ?? attachment.documentId)
+                : attachment.filename
+        )
+        let directory = cacheDirectory
+            .appendingPathComponent("chat-attachments", isDirectory: true)
+            .appendingPathComponent(sanitizeFileName(workspaceId), isDirectory: true)
+            .appendingPathComponent(sanitizeFileName(attachment.documentId), isDirectory: true)
+        return LocalUploadFile(
+            id: UUID(uuidString: attachment.documentId) ?? UUID(),
+            url: directory.appendingPathComponent(filename),
+            filename: filename,
+            mimeType: attachment.mimeType ?? contentTypeForFilename(filename)
+        )
+    }
+
+    private func updateRestoredChatAttachment(
+        messageId: String,
+        documentId: String,
+        file: LocalUploadFile,
+        status: OpenClawAttachmentStatus
+    ) {
+        var attachments = chatAttachmentsByMessageId[messageId] ?? []
+        guard let index = attachments.firstIndex(where: { $0.documentId == documentId }) else { return }
+        attachments[index] = OpenClawChatAttachment(file: file, documentId: documentId, status: status)
+        chatAttachmentsByMessageId[messageId] = attachments
+        updateOpenClawMessage(messageId) { message in
+            message.attachments = attachments
+        }
     }
 
     private func installOfflineAIModelFixtureIfNeeded() {
@@ -4157,7 +4453,7 @@ final class NotePatchViewModel: ObservableObject {
         )
         selectedAIModelId = nil
         aiModelCatalogWorkspaceId = selectedWorkspaceId
-        aiModelsError = nil
+        aiModelsErrorText = nil
     }
 
     private func clearAIModelState() {
@@ -4172,7 +4468,7 @@ final class NotePatchViewModel: ObservableObject {
         selectedAIModelId = nil
         isAIModelsLoading = false
         isAIModelUpdating = false
-        aiModelsError = nil
+        aiModelsErrorText = nil
     }
 
     private func refreshLearningUnits(activeSession: SavedSession, workspaceId: String) async throws {
@@ -4294,7 +4590,7 @@ final class NotePatchViewModel: ObservableObject {
               let item = selectedStudyNoteItem,
               let activeSession = currentSessionOrError(),
               let workspaceId = selectedWorkspaceId else {
-            studyNoteReaderError = localized("note.reader.signed_url_expired")
+            studyNoteReaderErrorText = .localized("note.reader.signed_url_expired")
             studyNoteRenderedURL = nil
             return
         }
@@ -4311,11 +4607,11 @@ final class NotePatchViewModel: ObservableObject {
                 )
                 guard selectedStudyNoteItem?.id == item.id else { return }
                 studyNoteRenderedURL = try clientFor(activeSession).resolveServiceURL(response.downloadURL)
-                studyNoteReaderError = nil
+                studyNoteReaderErrorText = nil
             } catch {
                 guard selectedStudyNoteItem?.id == item.id else { return }
                 studyNoteRenderedURL = nil
-                studyNoteReaderError = friendlyError(error)
+                studyNoteReaderErrorText = friendlyDisplayText(error)
             }
         }
     }
@@ -4323,7 +4619,7 @@ final class NotePatchViewModel: ObservableObject {
     func handleRenderedStudyNoteFailure(_ message: String) {
         guard selectedStudyNoteItem != nil else { return }
         studyNoteRenderedURL = nil
-        studyNoteReaderError = message
+        studyNoteReaderErrorText = .raw(message)
     }
 
     private func loadStudyNoteHTML(
@@ -4394,7 +4690,7 @@ final class NotePatchViewModel: ObservableObject {
                 learningUnit: learningUnit
             )
             guard let latest = refreshedItems.first else {
-                throw LearningBackendError(localized("note.error.no_server_versions"))
+                throw LearningBackendError(localizedKey: "note.error.no_server_versions")
             }
             selectedStudyNoteItem = latest
             do {
@@ -4406,14 +4702,16 @@ final class NotePatchViewModel: ObservableObject {
                     prefersHighlighted: true
                 )
             } catch {
-                studyNoteReaderError = friendlyError(error)
+                studyNoteReaderErrorText = friendlyDisplayText(error)
             }
-            studyNoteEditorError = afterConflictConfirmation
-                ? localized("note.error.conflict_during_save")
-                : localized("note.error.conflict_available")
+            studyNoteEditorErrorText = .localized(
+                afterConflictConfirmation
+                    ? "note.error.conflict_during_save"
+                    : "note.error.conflict_available"
+            )
             isStudyNoteConflictPending = true
         } catch {
-            studyNoteEditorError = localizedFormat("note.error.conflict_refresh_failed", friendlyError(error))
+            studyNoteEditorErrorText = .localized("note.error.conflict_refresh_failed_generic")
             if let backendError = error as? LearningBackendError,
                backendError.shouldClearSession || backendError.statusCode == 403 {
                 showError(error)
@@ -4474,6 +4772,7 @@ final class NotePatchViewModel: ObservableObject {
 
     private func clearLearningWorkspaceState() {
         invalidateDeferredContentLoads()
+        homeDashboardState.reset()
         homeworkSelectionGeneration = UUID()
         homeworkSelectionTask?.cancel()
         homeworkSelectionTask = nil
@@ -4491,7 +4790,6 @@ final class NotePatchViewModel: ObservableObject {
         isBusy = false
         uploadProgressPercent = nil
         uploadProgressLabel = ""
-        stopScanTracking(clearDocuments: true)
         isLearningUnitMergePresented = false
         isLearningUnitMergeConfirmationPresented = false
         mergeTargetLearningUnitId = ""
@@ -4521,7 +4819,7 @@ final class NotePatchViewModel: ObservableObject {
         isFlashcardShowingBack = false
         isFlashcardsLoading = false
         isHomeworkLoading = false
-        flashcardError = nil
+        flashcardErrorText = nil
         studyNoteGroups = []
         closeStudyNoteReader()
     }

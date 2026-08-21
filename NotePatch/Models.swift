@@ -1,7 +1,7 @@
 import Foundation
 
-let defaultServiceRootURL = "https://api.ls-jl.cn:8443/notepatch/1"
-let defaultTUSDServiceRootURL = "https://api.ls-jl.cn:8443/notepatch/2"
+let defaultServiceRootURL = "https://8.137.78.255/np-b9a6aede5d0fbb05229d9541144a6067"
+let defaultTUSDServiceRootURL = defaultServiceRootURL
 let defaultLearningBackendBaseURL = defaultServiceRootURL
 let defaultTUSDBaseURL = "\(defaultTUSDServiceRootURL)/files/"
 
@@ -63,6 +63,8 @@ func normalizeTUSBaseURL(_ rawBaseURL: String) -> String {
 
 struct LearningBackendError: Error, LocalizedError {
     let message: String
+    let localizationKey: String?
+    let localizationArguments: [String]
     let statusCode: Int?
     let shouldClearSession: Bool
     let refreshTokenAttempt: String?
@@ -76,6 +78,25 @@ struct LearningBackendError: Error, LocalizedError {
         cause: Error? = nil
     ) {
         self.message = message
+        self.localizationKey = nil
+        self.localizationArguments = []
+        self.statusCode = statusCode
+        self.shouldClearSession = shouldClearSession
+        self.refreshTokenAttempt = refreshTokenAttempt
+        self.cause = cause
+    }
+
+    nonisolated init(
+        localizedKey: String,
+        arguments: [String] = [],
+        statusCode: Int? = nil,
+        shouldClearSession: Bool = false,
+        refreshTokenAttempt: String? = nil,
+        cause: Error? = nil
+    ) {
+        self.message = localizedKey
+        self.localizationKey = localizedKey
+        self.localizationArguments = arguments
         self.statusCode = statusCode
         self.shouldClearSession = shouldClearSession
         self.refreshTokenAttempt = refreshTokenAttempt
@@ -84,6 +105,31 @@ struct LearningBackendError: Error, LocalizedError {
 
     nonisolated var errorDescription: String? {
         message
+    }
+
+    nonisolated func withContext(
+        statusCode: Int?,
+        shouldClearSession: Bool,
+        refreshTokenAttempt: String? = nil,
+        cause: Error? = nil
+    ) -> LearningBackendError {
+        if let localizationKey {
+            return LearningBackendError(
+                localizedKey: localizationKey,
+                arguments: localizationArguments,
+                statusCode: statusCode,
+                shouldClearSession: shouldClearSession,
+                refreshTokenAttempt: refreshTokenAttempt,
+                cause: cause ?? self
+            )
+        }
+        return LearningBackendError(
+            message,
+            statusCode: statusCode,
+            shouldClearSession: shouldClearSession,
+            refreshTokenAttempt: refreshTokenAttempt,
+            cause: cause ?? self
+        )
     }
 }
 
@@ -311,10 +357,6 @@ struct LearningDocumentItem: Decodable, Equatable, Identifiable {
     let uploadId: String?
     let tusUploadURL: String?
     let sha256: String?
-    let scanStatus: String?
-    let scanMessage: String?
-    let scannedAt: String?
-    let detectedMimeType: String?
     let status: String
     let purgeStatus: String?
     let purgeTaskId: String?
@@ -339,10 +381,6 @@ struct LearningDocumentItem: Decodable, Equatable, Identifiable {
         case uploadId = "upload_id"
         case tusUploadURL = "tus_upload_url"
         case sha256
-        case scanStatus = "scan_status"
-        case scanMessage = "scan_message"
-        case scannedAt = "scanned_at"
-        case detectedMimeType = "detected_mime_type"
         case status
         case purgeStatus = "purge_status"
         case purgeTaskId = "purge_task_id"
@@ -368,10 +406,6 @@ struct LearningDocumentItem: Decodable, Equatable, Identifiable {
         uploadId: String? = nil,
         tusUploadURL: String? = nil,
         sha256: String? = nil,
-        scanStatus: String? = nil,
-        scanMessage: String? = nil,
-        scannedAt: String? = nil,
-        detectedMimeType: String? = nil,
         status: String,
         purgeStatus: String? = nil,
         purgeTaskId: String? = nil,
@@ -395,10 +429,6 @@ struct LearningDocumentItem: Decodable, Equatable, Identifiable {
         self.uploadId = uploadId
         self.tusUploadURL = tusUploadURL
         self.sha256 = sha256
-        self.scanStatus = scanStatus
-        self.scanMessage = scanMessage
-        self.scannedAt = scannedAt
-        self.detectedMimeType = detectedMimeType
         self.status = status
         self.purgeStatus = purgeStatus
         self.purgeTaskId = purgeTaskId
@@ -629,6 +659,47 @@ struct ChatConversation: Decodable, Equatable, Identifiable {
     }
 }
 
+struct ChatMessageAttachment: Decodable, Equatable, Identifiable {
+    let documentId: String
+    let filename: String
+    let title: String?
+    let mimeType: String?
+    let fileType: String?
+    let fileSize: Int64?
+    let status: String?
+    let availability: String?
+
+    var id: String { documentId }
+    var isImage: Bool {
+        mimeType?.hasPrefix("image/") == true
+            || fileType == "image"
+            || ["jpg", "jpeg", "png", "webp", "heic"].contains((filename as NSString).pathExtension.lowercased())
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case documentId = "document_id"
+        case filename
+        case title
+        case mimeType = "mime_type"
+        case fileType = "file_type"
+        case fileSize = "file_size"
+        case status
+        case availability
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        documentId = try container.decodeIfPresent(String.self, forKey: .documentId) ?? ""
+        filename = try container.decodeIfPresent(String.self, forKey: .filename) ?? ""
+        title = try container.decodeIfPresent(String.self, forKey: .title)
+        mimeType = try container.decodeIfPresent(String.self, forKey: .mimeType)
+        fileType = try container.decodeIfPresent(String.self, forKey: .fileType)
+        fileSize = try container.decodeIfPresent(Int64.self, forKey: .fileSize)
+        status = try container.decodeIfPresent(String.self, forKey: .status)
+        availability = try container.decodeIfPresent(String.self, forKey: .availability)
+    }
+}
+
 struct ChatMessage: Decodable, Equatable, Identifiable {
     let id: String
     let conversationId: String
@@ -640,6 +711,7 @@ struct ChatMessage: Decodable, Equatable, Identifiable {
     let citations: [ChatCitation]?
     let sourceStatus: String?
     let modelId: String?
+    let attachments: [ChatMessageAttachment]?
     let createdAt: String
 
     enum CodingKeys: String, CodingKey {
@@ -653,6 +725,7 @@ struct ChatMessage: Decodable, Equatable, Identifiable {
         case citations
         case sourceStatus = "source_status"
         case modelId = "model_id"
+        case attachments
         case createdAt = "created_at"
     }
 }

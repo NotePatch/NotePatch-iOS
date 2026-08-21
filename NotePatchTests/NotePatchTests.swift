@@ -1,10 +1,20 @@
 import Combine
 import Foundation
+import JavaScriptCore
 import QuickLookThumbnailing
 import SwiftUI
 import Testing
 import UIKit
+import WebKit
 @testable import NotePatch
+
+private actor ThumbnailTestCounter {
+    private(set) var value = 0
+
+    func increment() {
+        value += 1
+    }
+}
 
 @Suite(.serialized)
 struct NotePatchTests {
@@ -23,13 +33,13 @@ struct NotePatchTests {
     @Test func normalizeBaseURLs_defaultAndAddScheme() {
         #expect(normalizeLearningBackendBaseURL("") == defaultLearningBackendBaseURL)
         #expect(normalizeLearningBackendBaseURL("192.168.100.123:8001/") == "http://192.168.100.123:8001")
-        #expect(normalizeLearningBackendBaseURL("https://api.ls-jl.cn:8443/notepatch/1/") == defaultLearningBackendBaseURL)
+        #expect(normalizeLearningBackendBaseURL("\(defaultServiceRootURL)/") == defaultLearningBackendBaseURL)
         #expect(normalizeLearningBackendBaseURL("https://example.test/api/v1/") == "https://example.test/api/v1")
         #expect(normalizeLearningBackendBaseURL("https://example.test/api/") == "https://example.test/api")
 
         #expect(normalizeTUSBaseURL("") == defaultTUSDBaseURL)
         #expect(normalizeTUSBaseURL("192.168.100.123:1080/files") == "http://192.168.100.123:1080/files/")
-        #expect(normalizeTUSBaseURL("https://api.ls-jl.cn:8443/notepatch/2/") == defaultTUSDBaseURL)
+        #expect(normalizeTUSBaseURL(defaultTUSDServiceRootURL) == defaultTUSDBaseURL)
         #expect(normalizeTUSBaseURL("https://example.test/files/") == "https://example.test/files/")
     }
 
@@ -38,9 +48,9 @@ struct NotePatchTests {
         let session = Self.mockSession { request in
             requestedURLs.append(request.url?.absoluteString ?? "")
             switch request.url?.path {
-            case "/notepatch/1/health":
+            case "/np-b9a6aede5d0fbb05229d9541144a6067/health":
                 return Self.response(request, status: 200, body: #"{"status":"ok"}"#)
-            case "/notepatch/1/api/v1/auth/me":
+            case "/np-b9a6aede5d0fbb05229d9541144a6067/api/v1/auth/me":
                 return Self.response(
                     request,
                     status: 200,
@@ -51,7 +61,7 @@ struct NotePatchTests {
             }
         }
         let client = LearningBackendClient(
-            baseURL: "https://example.test/notepatch/1/",
+            baseURL: defaultLearningBackendBaseURL,
             accessToken: "access",
             refreshToken: "refresh",
             session: session
@@ -61,8 +71,8 @@ struct NotePatchTests {
         _ = try await client.me()
 
         #expect(requestedURLs == [
-            "https://example.test/notepatch/1/health",
-            "https://example.test/notepatch/1/api/v1/auth/me"
+            "\(defaultServiceRootURL)/health",
+            "\(defaultServiceRootURL)/api/v1/auth/me"
         ])
     }
 
@@ -95,12 +105,57 @@ struct NotePatchTests {
         #expect(defaults.string(forKey: "learning_base_url") == defaultLearningBackendBaseURL)
         #expect(defaults.string(forKey: "tusd_base_url") == defaultTUSDBaseURL)
 
+        defaults.set("https://api.ls-jl.cn:8443/notepatch/1", forKey: "learning_base_url")
+        defaults.set(3, forKey: "api_base_url_contract_version")
+        defaults.set("https://api.ls-jl.cn:8443/notepatch/2/files/", forKey: "tusd_base_url")
+        #expect(store.loadBaseURL() == defaultLearningBackendBaseURL)
+        #expect(store.loadTUSBaseURL() == defaultTUSDBaseURL)
+        #expect(store.loadBaseURL() == defaultLearningBackendBaseURL)
+        #expect(store.loadTUSBaseURL() == defaultTUSDBaseURL)
+
+        defaults.set("https://custom.example.test/root", forKey: "learning_base_url")
+        defaults.set(3, forKey: "api_base_url_contract_version")
+        defaults.set("https://uploads.example.test/custom/", forKey: "tusd_base_url")
+        #expect(store.loadBaseURL() == "https://custom.example.test/root")
+        #expect(store.loadTUSBaseURL() == "https://uploads.example.test/custom/")
+        #expect(defaults.integer(forKey: "api_base_url_contract_version") == 4)
+
         defaults.set("https://api.example.test/notepatch/api/v1", forKey: "learning_base_url")
         defaults.removeObject(forKey: "api_base_url_contract_version")
-        #expect(store.loadBaseURL() == "https://api.example.test/notepatch")
+        #expect(store.loadBaseURL() == "https://api.example.test/notepatch/api/v1")
 
         store.saveBaseURL("https://api.example.test/notepatch/api/v1")
         #expect(store.loadBaseURL() == "https://api.example.test/notepatch/api/v1")
+    }
+
+    @Test func settingsStore_migratesOfficialSessionWithoutClearingCredentials() throws {
+        let suiteName = "NotePatchSessionURLMigrationTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        let keychain = KeychainStore(service: "\(suiteName).keychain")
+        defer {
+            defaults.removePersistentDomain(forName: suiteName)
+            keychain.removeString(forKey: "learning_access_token")
+            keychain.removeString(forKey: "learning_refresh_token")
+        }
+        defaults.set("https://api.ls-jl.cn:8443/notepatch/1", forKey: "learning_base_url")
+        defaults.set("https://api.ls-jl.cn:8443/notepatch/2/files/", forKey: "tusd_base_url")
+        defaults.set(3, forKey: "api_base_url_contract_version")
+        defaults.set("2099-01-01T00:00:00Z", forKey: "learning_expires_at")
+        defaults.set("user-1", forKey: "learning_user_id")
+        defaults.set("user@example.test", forKey: "learning_email")
+        defaults.set("workspace-1", forKey: "learning_selected_workspace_id")
+        defaults.set(true, forKey: "ai_history_enabled")
+        keychain.setString("access-token", forKey: "learning_access_token")
+        keychain.setString("refresh-token", forKey: "learning_refresh_token")
+
+        let session = try #require(SettingsStore(defaults: defaults, keychain: keychain).loadSession())
+
+        #expect(session.baseURL == defaultLearningBackendBaseURL)
+        #expect(session.tusBaseURL == defaultTUSDBaseURL)
+        #expect(session.accessToken == "access-token")
+        #expect(session.refreshToken == "refresh-token")
+        #expect(session.userId == "user-1")
+        #expect(session.selectedWorkspaceId == "workspace-1")
     }
 
     @Test func appLanguage_resolvesSupportedSystemLanguagesAndPersistsChoice() throws {
@@ -155,6 +210,182 @@ struct NotePatchTests {
         localization.select(.english)
         #expect(status.resolved(using: localization) == "Task 42: 75%")
         #expect(AppDisplayText.raw("backend detail").resolved(using: localization) == "backend detail")
+
+        func keys(in resource: String) throws -> Set<String> {
+            let url = try #require(Bundle.main.url(
+                forResource: "Localizable",
+                withExtension: "strings",
+                subdirectory: nil,
+                localization: resource
+            ))
+            let data = try Data(contentsOf: url)
+            var format = PropertyListSerialization.PropertyListFormat.openStep
+            let values = try #require(
+                try PropertyListSerialization.propertyList(from: data, options: [], format: &format)
+                    as? [String: String]
+            )
+            return Set(values.keys)
+        }
+
+        let englishKeys = try keys(in: "en")
+        let simplifiedChineseKeys = try keys(in: "zh-Hans")
+        let traditionalChineseKeys = try keys(in: "zh-Hant")
+        #expect(englishKeys == simplifiedChineseKeys)
+        #expect(englishKeys == traditionalChineseKeys)
+    }
+
+    @Test @MainActor func sourceLocalizationKeysAndFormatArgumentsAreComplete() throws {
+        func values(in resource: String) throws -> [String: String] {
+            let url = try #require(Bundle.main.url(
+                forResource: "Localizable",
+                withExtension: "strings",
+                subdirectory: nil,
+                localization: resource
+            ))
+            let data = try Data(contentsOf: url)
+            var format = PropertyListSerialization.PropertyListFormat.openStep
+            return try #require(
+                try PropertyListSerialization.propertyList(from: data, options: [], format: &format)
+                    as? [String: String]
+            )
+        }
+
+        let localizedValues = try [
+            "en": values(in: "en"),
+            "zh-Hans": values(in: "zh-Hans"),
+            "zh-Hant": values(in: "zh-Hant")
+        ]
+        let englishValues = try #require(localizedValues["en"])
+        for key in englishValues.keys {
+            let expectedArgumentCount = englishValues[key]?.components(separatedBy: "%@").count ?? 1
+            for (language, table) in localizedValues {
+                let value = try #require(table[key], "Missing \(key) for \(language)")
+                #expect(
+                    value.components(separatedBy: "%@").count == expectedArgumentCount,
+                    "Format argument mismatch for \(key) in \(language)"
+                )
+            }
+        }
+
+        let sourceRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("NotePatch", isDirectory: true)
+        let sourceFiles = try FileManager.default.contentsOfDirectory(
+            at: sourceRoot,
+            includingPropertiesForKeys: nil
+        ).filter { $0.pathExtension == "swift" }
+        let keyPatterns = [
+            #"(?:localized|localizedFormat|setStatus|setError|setUploadProgress)\s*\(\s*\"([^\"]+)\""#,
+            #"localizedKey:\s*\"([^\"]+)\""#,
+            #"\.localized\(\s*\"([^\"]+)\""#
+        ].map { try! NSRegularExpression(pattern: $0) }
+        let visibleLiteralPattern = try NSRegularExpression(
+            pattern: #"(?<![A-Za-z])(?:Text|Label|Button|DisclosureGroup|Stepper|navigationTitle|accessibilityLabel)\s*\(\s*\"([^\"]+)\""#
+        )
+
+        var sourceKeys = Set(AppLocalization.requiredSemanticKeys)
+        var visibleLiterals = Set<String>()
+        for file in sourceFiles {
+            let source = try String(contentsOf: file, encoding: .utf8)
+            let range = NSRange(source.startIndex..<source.endIndex, in: source)
+            for pattern in keyPatterns {
+                for match in pattern.matches(in: source, range: range) {
+                    guard let captureRange = Range(match.range(at: 1), in: source) else { continue }
+                    let key = String(source[captureRange])
+                    if !key.contains(#"\("#) {
+                        sourceKeys.insert(key)
+                    }
+                }
+            }
+            for match in visibleLiteralPattern.matches(in: source, range: range) {
+                guard let captureRange = Range(match.range(at: 1), in: source) else { continue }
+                visibleLiterals.insert(String(source[captureRange]))
+            }
+        }
+
+        for key in sourceKeys {
+            for (language, table) in localizedValues {
+                #expect(table[key]?.isEmpty == false, "Missing source key \(key) for \(language)")
+            }
+        }
+        let permittedVisibleLiterals: Set<String> = ["NotePatch"]
+        let untranslatedVisibleLiterals = visibleLiterals.filter { literal in
+            literal.range(of: "[A-Za-z]", options: .regularExpression) != nil
+                && !literal.contains(#"\("#)
+                && !permittedVisibleLiterals.contains(literal)
+        }
+        #expect(untranslatedVisibleLiterals.isEmpty, "Unlocalized UI literals: \(untranslatedVisibleLiterals.sorted())")
+    }
+
+    @Test @MainActor func darkModeColorTokensResolveToDistinctReadableSurfaces() throws {
+        func resolved(_ color: Color, style: UIUserInterfaceStyle) -> UIColor {
+            UIColor(color).resolvedColor(with: UITraitCollection(userInterfaceStyle: style))
+        }
+
+        func components(_ color: UIColor) throws -> (CGFloat, CGFloat, CGFloat) {
+            var red: CGFloat = 0
+            var green: CGFloat = 0
+            var blue: CGFloat = 0
+            var alpha: CGFloat = 0
+            #expect(color.getRed(&red, green: &green, blue: &blue, alpha: &alpha))
+            #expect((0...1).contains(red))
+            #expect((0...1).contains(green))
+            #expect((0...1).contains(blue))
+            #expect((0...1).contains(alpha))
+            return (red, green, blue)
+        }
+
+        func luminance(_ rgb: (CGFloat, CGFloat, CGFloat)) -> CGFloat {
+            func linear(_ component: CGFloat) -> CGFloat {
+                component <= 0.03928
+                    ? component / 12.92
+                    : pow((component + 0.055) / 1.055, 2.4)
+            }
+            return 0.2126 * linear(rgb.0) + 0.7152 * linear(rgb.1) + 0.0722 * linear(rgb.2)
+        }
+
+        func contrast(_ first: UIColor, _ second: UIColor) throws -> CGFloat {
+            let firstLuminance = luminance(try components(first))
+            let secondLuminance = luminance(try components(second))
+            return (max(firstLuminance, secondLuminance) + 0.05)
+                / (min(firstLuminance, secondLuminance) + 0.05)
+        }
+
+        let lightBackground = resolved(NPColors.background, style: .light)
+        let darkBackground = resolved(NPColors.background, style: .dark)
+        #expect(lightBackground != darkBackground)
+        #expect(try contrast(resolved(NPColors.textPrimary, style: .light), lightBackground) >= 4.5)
+        #expect(try contrast(resolved(NPColors.textPrimary, style: .dark), darkBackground) >= 4.5)
+        #expect(resolved(NPColors.surfaceCard, style: .light) != resolved(NPColors.surfaceCard, style: .dark))
+        #expect(resolved(NPColors.brand, style: .light) != resolved(NPColors.brand, style: .dark))
+    }
+
+    @Test func infoPlistPermissionDescriptionsExistInEverySupportedLanguage() throws {
+        let sourceRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("NotePatch", isDirectory: true)
+        let requiredKeys = [
+            "CFBundleDisplayName",
+            "NSCameraUsageDescription",
+            "NSPhotoLibraryAddUsageDescription",
+            "NSPhotoLibraryUsageDescription"
+        ]
+        for resource in ["en", "zh-Hans", "zh-Hant"] {
+            let url = sourceRoot
+                .appendingPathComponent("\(resource).lproj", isDirectory: true)
+                .appendingPathComponent("InfoPlist.strings")
+            let data = try Data(contentsOf: url)
+            var format = PropertyListSerialization.PropertyListFormat.openStep
+            let values = try #require(
+                try PropertyListSerialization.propertyList(from: data, options: [], format: &format)
+                    as? [String: String]
+            )
+            for key in requiredKeys {
+                #expect(values[key]?.isEmpty == false, "Missing \(key) for \(resource)")
+            }
+        }
     }
 
     @Test @MainActor func composerTextLayout_usesProvidedWidthAndWrapsText() throws {
@@ -213,11 +444,49 @@ struct NotePatchTests {
         #expect(workbenchBottomBarAdditionalPadding(safeAreaBottom: 0) == 8)
     }
 
+    @Test func bottomNavigationObstructionUsesMeasuredFrameAndVisibility() {
+        let bar = CGRect(x: 16, y: 722, width: 358, height: 66)
+        #expect(workbenchBottomObstruction(containerHeight: 844, bottomBarFrame: bar, isVisible: true) == 122)
+        #expect(workbenchBottomObstruction(containerHeight: 844, bottomBarFrame: bar, isVisible: false) == 0)
+        #expect(workbenchBottomObstruction(containerHeight: 844, bottomBarFrame: .null, isVisible: true) == 0)
+        #expect(workbenchBottomObstruction(containerHeight: 700, bottomBarFrame: bar, isVisible: true) == 0)
+    }
+
     @Test @MainActor func workbenchTabsHaveExpectedOrderAndDefault() throws {
-        #expect(WorkbenchTab.allCases == [.documents, .notes, .openClaw, .profile])
+        #expect(WorkbenchTab.allCases == [.home, .notes, .openClaw, .profile])
         let model = NotePatchViewModel()
-        #expect(model.selectedTab == .documents)
+        #expect(model.selectedTab == .home)
         #expect(model.selectedNotesSection == .notes)
+
+        var rootPublicationCount = 0
+        let rootPublication = model.objectWillChange.sink { rootPublicationCount += 1 }
+        model.selectedTab = .notes
+        #expect(model.workbenchNavigationState.selectedTab == .notes)
+        #expect(rootPublicationCount == 0)
+        withExtendedLifetime(rootPublication) {}
+    }
+
+    @Test @MainActor func homeDashboardKeepsDocumentCountAndFiveMostRecentRows() {
+        let state = HomeDashboardState()
+        let documents = (1...6).map { index in
+            LearningDocumentItem(
+                id: "document-\(index)",
+                workspaceId: "workspace",
+                title: "Document \(index)",
+                originalFilename: "document-\(index).pdf",
+                fileType: "pdf",
+                documentKind: "courseware",
+                status: "ready",
+                updatedAt: "2026-08-\(String(format: "%02d", index))T12:00:00Z"
+            )
+        }
+
+        state.updateDocuments(documents)
+
+        #expect(state.documentCount == 6)
+        #expect(state.recentDocuments.map(\.id) == [
+            "document-6", "document-5", "document-4", "document-3", "document-2"
+        ])
     }
 
     @Test func fileHelpers_sanitizeMimeAndByteFormatting() {
@@ -283,15 +552,28 @@ struct NotePatchTests {
             "/api/v1/workspaces/ws-1/documents"
         ])
 
-        model.selectedTab = .notes
+        model.selectedTab = .home
         model.ensureContentForSelectedTabLoaded()
-        try await Self.waitUntil { !model.isNotesLoading && model.studyNoteGroups.count == 1 }
+        try await Self.waitUntil {
+            !model.homeDashboardState.isLoadingSupplementaryContent
+                && model.studyNoteGroups.count == 1
+        }
         #expect(paths.filter { $0 == "/api/v1/workspaces/ws-1/learning-units" }.count == 1)
         #expect(paths.filter { $0 == "/api/v1/workspaces/ws-1/learning-units/unit-1/notes" }.count == 1)
+        #expect(paths.filter { $0 == "/api/v1/workspaces/ws-1/homeworks" }.count == 1)
+        #expect(paths.filter { $0 == "/api/v1/workspaces/ws-1/documents" }.count == 1)
+        #expect(model.homeDashboardState.learningUnitCount == 1)
+        #expect(model.homeDashboardState.recentNotes.count == 1)
 
         model.ensureContentForSelectedTabLoaded()
         try await Task.sleep(nanoseconds: 50_000_000)
         #expect(paths.filter { $0 == "/api/v1/workspaces/ws-1/learning-units" }.count == 1)
+
+        model.selectedTab = .notes
+        model.ensureContentForSelectedTabLoaded()
+        try await Task.sleep(nanoseconds: 50_000_000)
+        #expect(paths.filter { $0 == "/api/v1/workspaces/ws-1/learning-units" }.count == 1)
+        #expect(paths.filter { $0 == "/api/v1/workspaces/ws-1/learning-units/unit-1/notes" }.count == 1)
 
         let requestsBeforeProfile = paths.count
         model.selectedTab = .profile
@@ -307,9 +589,9 @@ struct NotePatchTests {
         model.selectedNotesSection = .review
         model.ensureContentForSelectedTabLoaded()
         try await Self.waitUntil { !model.isLearningLoading && !model.isHomeworkLoading }
-        #expect(paths.filter { $0 == "/api/v1/workspaces/ws-1/learning-units" }.count == 2)
+        #expect(paths.filter { $0 == "/api/v1/workspaces/ws-1/learning-units" }.count == 1)
         #expect(paths.filter { $0 == "/api/v1/workspaces/ws-1/homeworks" }.count == 1)
-        #expect(paths.filter { $0 == "/api/v1/workspaces/ws-1/documents" }.count == 2)
+        #expect(paths.filter { $0 == "/api/v1/workspaces/ws-1/documents" }.count == 1)
 
         model.ensureContentForSelectedTabLoaded()
         try await Task.sleep(nanoseconds: 50_000_000)
@@ -540,6 +822,146 @@ struct NotePatchTests {
         #expect(cache.image(forKey: uploadThumbnailCacheKey(for: imageFile)) == nil)
     }
 
+    @Test @MainActor func documentThumbnail_downloadsOnceDownsamplesAndUsesIsolatedDiskCache() async throws {
+        let suiteName = "NotePatchDocumentThumbnailTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("notepatch-document-thumbnail-tests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let sourceImage = UIGraphicsImageRenderer(size: CGSize(width: 1800, height: 1200)).image { context in
+            UIColor.systemGreen.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 1800, height: 1200))
+        }
+        let sourceData = try #require(sourceImage.pngData())
+        var downloadURLRequests = 0
+        var imageRequests = 0
+        let networkSession = Self.mockSession { request in
+            switch request.url?.path {
+            case "/api/v1/workspaces/ws-1/documents/image-1/download-url":
+                downloadURLRequests += 1
+                return Self.response(
+                    request,
+                    status: 200,
+                    body: #"{"document_id":"image-1","filename":"same.png","mime_type":"image/png","download_url":"https://files.test/image-1"}"#
+                )
+            case "/image-1":
+                imageRequests += 1
+                let response = HTTPURLResponse(
+                    url: try #require(request.url),
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "image/png"]
+                )!
+                return (response, sourceData)
+            default:
+                return Self.response(request, status: 500, body: #"{"detail":"unexpected request"}"#)
+            }
+        }
+        let model = NotePatchViewModel(
+            settings: SettingsStore(defaults: defaults, keychain: KeychainStore(service: suiteName)),
+            backendSession: networkSession,
+            tusSession: networkSession,
+            cacheDirectory: root,
+            taskEventStreamingEnabled: false
+        )
+        model.session = SavedSession(
+            baseURL: "https://api.test",
+            tusBaseURL: "https://tus.test/",
+            accessToken: "a",
+            refreshToken: "r",
+            expiresAt: "x",
+            userId: "u-1",
+            email: "u@test",
+            fullName: nil,
+            selectedWorkspaceId: "ws-1",
+            aiHistoryEnabled: true
+        )
+        model.selectedWorkspaceId = "ws-1"
+        let first = LearningDocumentItem(
+            id: "image-1",
+            workspaceId: "ws-1",
+            originalFilename: "same.png",
+            mimeType: "image/png",
+            fileType: "image",
+            documentKind: "note",
+            status: "ready",
+            updatedAt: "2026-08-17T12:00:00Z"
+        )
+        let second = LearningDocumentItem(
+            id: "image-2",
+            workspaceId: "ws-1",
+            originalFilename: "same.png",
+            mimeType: "image/png",
+            fileType: "image",
+            documentKind: "note",
+            status: "ready",
+            updatedAt: "2026-08-17T12:00:00Z"
+        )
+        let pdf = LearningDocumentItem(
+            id: "pdf-1",
+            workspaceId: "ws-1",
+            originalFilename: "notes.pdf",
+            mimeType: "application/pdf",
+            fileType: "pdf",
+            documentKind: "note",
+            status: "ready"
+        )
+
+        #expect(documentSupportsImageThumbnail(first))
+        #expect(!documentSupportsImageThumbnail(pdf))
+        let firstCacheURL = documentThumbnailCacheURL(
+            cacheDirectory: root,
+            baseURL: "https://api.test",
+            userId: "u-1",
+            workspaceId: "ws-1",
+            document: first
+        )
+        let secondCacheURL = documentThumbnailCacheURL(
+            cacheDirectory: root,
+            baseURL: "https://api.test",
+            userId: "u-1",
+            workspaceId: "ws-1",
+            document: second
+        )
+        #expect(firstCacheURL != secondCacheURL)
+
+        let firstResult = try #require(await model.generateDocumentThumbnail(for: first, maxPixelSize: 160))
+        #expect(max(firstResult.size.width * firstResult.scale, firstResult.size.height * firstResult.scale) <= 160)
+        #expect(FileManager.default.fileExists(atPath: firstCacheURL.path))
+        let cachedResult = try #require(await model.generateDocumentThumbnail(for: first, maxPixelSize: 160))
+        #expect(cachedResult.size == firstResult.size)
+        #expect(downloadURLRequests == 1)
+        #expect(imageRequests == 1)
+    }
+
+    @Test @MainActor func documentThumbnailPipeline_deduplicatesConcurrentConsumers() async throws {
+        DocumentThumbnailPipeline.shared.removeAll()
+        let key = "thumbnail-dedupe-\(UUID().uuidString)"
+        let counter = ThumbnailTestCounter()
+        let expected = UIGraphicsImageRenderer(size: CGSize(width: 32, height: 32)).image { context in
+            UIColor.systemMint.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 32, height: 32))
+        }
+        let load: () async -> UIImage? = {
+            await counter.increment()
+            try? await Task.sleep(nanoseconds: 80_000_000)
+            return Task.isCancelled ? nil : expected
+        }
+
+        let first = Task { await DocumentThumbnailPipeline.shared.image(forKey: key, loader: load) }
+        let second = Task { await DocumentThumbnailPipeline.shared.image(forKey: key, loader: load) }
+        let firstResult = await first.value
+        let secondResult = await second.value
+
+        #expect(firstResult != nil)
+        #expect(secondResult != nil)
+        #expect(await counter.value == 1)
+        DocumentThumbnailPipeline.shared.removeAll()
+    }
+
     @Test @MainActor func pendingUpload_previewClassificationAndCacheCleanup() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("notepatch-preview-tests-\(UUID().uuidString)", isDirectory: true)
         let cache = root.appendingPathComponent("cache", isDirectory: true)
@@ -556,6 +978,17 @@ struct NotePatchTests {
         let pdfFile = LocalUploadFile(url: pdfURL, filename: "notes.pdf", mimeType: "application/pdf")
         #expect(pdfFile.previewKind(canQuickLookPreview: true) == .quickLook)
         #expect(pdfFile.previewKind(canQuickLookPreview: false) == .unsupported)
+
+        let imagePreview = DownloadedPreview(
+            url: imageURL,
+            mimeType: "image/jpeg",
+            filename: "selected.jpg",
+            fileSize: 3
+        )
+        #expect(imagePreview.previewKind(canQuickLookPreview: false) == .image)
+        let documentPreview = DownloadedPreview(url: pdfURL, mimeType: "application/pdf")
+        #expect(documentPreview.previewKind(canQuickLookPreview: true) == .quickLook)
+        #expect(documentPreview.previewKind(canQuickLookPreview: false) == .unsupported)
 
         let suiteName = "NotePatchTests.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suiteName))
@@ -629,17 +1062,17 @@ struct NotePatchTests {
         let relative = try TusUploader.resolveUploadURL(endpoint: "http://192.168.100.123:1080/files/", location: "abc")
         let absolutePath = try TusUploader.resolveUploadURL(endpoint: "http://192.168.100.123:1080/files/", location: "/files/abc")
         let proxiedPath = try TusUploader.resolveUploadURL(
-            endpoint: "https://api.ls-jl.cn:8443/notepatch/2/files/",
+            endpoint: defaultTUSDBaseURL,
             location: "/files/abc"
         )
         let otherHost = try TusUploader.resolveUploadURL(endpoint: "http://192.168.100.123:1080/files/", location: "http://other.test/upload/xyz")
         #expect(relative == "http://192.168.100.123:1080/files/abc")
         #expect(absolutePath == "http://192.168.100.123:1080/files/abc")
-        #expect(proxiedPath == "https://api.ls-jl.cn:8443/notepatch/2/files/abc")
+        #expect(proxiedPath == "\(defaultTUSDBaseURL)abc")
         #expect(otherHost == "http://other.test/upload/xyz")
         #expect(
             TusUploader.preferredEndpoint(
-                configuredEndpoint: "https://api.ls-jl.cn:8443/notepatch/2/files/",
+                configuredEndpoint: defaultTUSDBaseURL,
                 serverEndpoint: "http://192.168.100.123:1080/files/"
             ) == defaultTUSDBaseURL
         )
@@ -1336,7 +1769,7 @@ struct NotePatchTests {
                 }
                 return Self.response(request, status: 200, body: #"{"id":"c-1","workspace_id":"ws-1","title":"新标题","created_at":"","updated_at":""}"#)
             case "/api/v1/workspaces/ws-1/ai/conversations/c-1/messages":
-                return Self.response(request, status: 200, body: #"{"items":[{"id":"m-1","conversation_id":"c-1","role":"assistant","content":"完成","status":"succeeded","model_id":"openai/gpt-4.1-mini","created_at":"","citations":[{"chunk_id":"chunk-1","document_id":"doc-1","score":0.72,"metadata":{"page":2}}],"source_status":"partially_unavailable"}],"page":1,"page_size":100,"total":1}"#)
+                return Self.response(request, status: 200, body: #"{"items":[{"id":"m-1","conversation_id":"c-1","role":"assistant","content":"完成","status":"succeeded","model_id":"openai/gpt-4.1-mini","created_at":"","attachments":[{"document_id":"image-1","filename":"question.png","title":"Question","mime_type":"image/png","file_type":"image","file_size":128,"status":"ready","availability":"available"}],"citations":[{"chunk_id":"chunk-1","document_id":"doc-1","score":0.72,"metadata":{"page":2}}],"source_status":"partially_unavailable"}],"page":1,"page_size":100,"total":1}"#)
             case "/api/v1/workspaces/ws-1/learning-units":
                 return Self.response(request, status: 200, body: #"[{"id":"u-1","title":"分数","subject":"数学","grade_level":"七年级","topic":"比例"}]"#)
             case "/api/v1/workspaces/ws-1/learning-units/u-1/notes":
@@ -1359,6 +1792,8 @@ struct NotePatchTests {
         #expect(messages.items.first?.citations?.first?.metadata?["page"] == .number(2))
         #expect(messages.items.first?.sourceStatus == "partially_unavailable")
         #expect(messages.items.first?.modelId == "openai/gpt-4.1-mini")
+        #expect(messages.items.first?.attachments?.first?.documentId == "image-1")
+        #expect(messages.items.first?.attachments?.first?.isImage == true)
         #expect(units.first?.gradeLevel == "七年级")
         #expect(notes.first?.preferredDownloadURL == "https://download.test/highlighted.html")
         #expect(requests.contains { $0.url?.query == "include_download_url=true" })
@@ -1885,6 +2320,156 @@ struct NotePatchTests {
         #expect(model.openClawMessages.map(\.content) == ["current"])
     }
 
+    @Test @MainActor func restoredConversationDownloadsPersistedImageAttachments() async throws {
+        let suiteName = "NotePatchTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let cacheDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("NotePatchRestoredChatAttachments-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: cacheDirectory) }
+        let image = UIGraphicsImageRenderer(size: CGSize(width: 12, height: 8)).image { context in
+            UIColor.systemGreen.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 12, height: 8))
+        }
+        let imageData = try #require(image.pngData())
+        var requestedPaths: [String] = []
+        let backendSession = Self.mockSession { request in
+            requestedPaths.append(request.url?.path ?? "")
+            switch request.url?.path {
+            case "/api/v1/workspaces/ws-1/ai/conversations/c-1/messages":
+                return Self.response(
+                    request,
+                    status: 200,
+                    body: #"{"items":[{"id":"message-1","conversation_id":"c-1","role":"user","content":"这是什么图片？","status":"succeeded","created_at":"","attachments":[{"document_id":"089c9496-df42-4e92-bc4f-a493a3b711f8","filename":"question.png","mime_type":"image/png","file_type":"image","file_size":128,"status":"ready","availability":"available"}]}],"page":1,"page_size":100,"total":1}"#
+                )
+            case "/api/v1/workspaces/ws-1/documents/089c9496-df42-4e92-bc4f-a493a3b711f8/download-url":
+                return Self.response(
+                    request,
+                    status: 200,
+                    body: #"{"document_id":"089c9496-df42-4e92-bc4f-a493a3b711f8","filename":"question.png","expires_in":900,"download_url":"https://download.test/question.png"}"#
+                )
+            case "/question.png":
+                let response = HTTPURLResponse(
+                    url: try #require(request.url),
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "image/png"]
+                )!
+                return (response, imageData)
+            default:
+                return Self.response(request, status: 500, body: #"{"detail":"unexpected request"}"#)
+            }
+        }
+        let model = NotePatchViewModel(
+            settings: SettingsStore(defaults: defaults, keychain: KeychainStore(service: suiteName)),
+            backendSession: backendSession,
+            tusSession: backendSession,
+            cacheDirectory: cacheDirectory,
+            taskEventStreamingEnabled: false
+        )
+        model.session = SavedSession(baseURL: "https://api.test", tusBaseURL: "https://tus.test/", accessToken: "a", refreshToken: "r", expiresAt: "x", userId: "u", email: "u@test", fullName: nil, selectedWorkspaceId: "ws-1", aiHistoryEnabled: true)
+        model.selectedWorkspaceId = "ws-1"
+
+        model.selectConversation("c-1")
+        try await Self.waitUntil {
+            !model.isChatHistoryLoading && model.openClawMessages.first?.attachments.first?.status == .ready
+        }
+
+        let restored = try #require(model.openClawMessages.first?.attachments.first)
+        #expect(restored.documentId == "089c9496-df42-4e92-bc4f-a493a3b711f8")
+        #expect(restored.file.filename == "question.png")
+        #expect(FileManager.default.fileExists(atPath: restored.file.url.path))
+        #expect((try Data(contentsOf: restored.file.url)) == imageData)
+        #expect(requestedPaths.contains("/api/v1/workspaces/ws-1/documents/089c9496-df42-4e92-bc4f-a493a3b711f8/download-url"))
+        #expect(requestedPaths.contains("/question.png"))
+    }
+
+    @Test @MainActor func documentPreviewRetriesExpiredURLOnceAndIsolatesSameNamedFiles() async throws {
+        let suiteName = "NotePatchDocumentPreview.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let cacheDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("NotePatchDocumentPreview-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: cacheDirectory) }
+
+        var downloadURLRequests: [String: Int] = [:]
+        var expiredDownloadCount = 0
+        let session = Self.mockSession { request in
+            let path = request.url?.path ?? ""
+            if path.hasSuffix("/download-url") {
+                let documentId = path.components(separatedBy: "/documents/").last?
+                    .components(separatedBy: "/").first ?? ""
+                downloadURLRequests[documentId, default: 0] += 1
+                let url = documentId == "doc-1" && downloadURLRequests[documentId] == 1
+                    ? "https://download.test/expired"
+                    : "https://download.test/\(documentId)"
+                return Self.response(request, status: 200, body: #"{"download_url":"\#(url)","expires_in":900}"#)
+            }
+            if path == "/expired" {
+                expiredDownloadCount += 1
+                return Self.response(request, status: 403, body: #"{"detail":"expired"}"#)
+            }
+            if path == "/doc-1" || path == "/doc-2" {
+                let data = Data("preview-\(path)".utf8)
+                let response = HTTPURLResponse(
+                    url: try #require(request.url),
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "application/pdf"]
+                )!
+                return (response, data)
+            }
+            return Self.response(request, status: 500, body: #"{"detail":"unexpected request"}"#)
+        }
+        let model = NotePatchViewModel(
+            settings: SettingsStore(defaults: defaults, keychain: KeychainStore(service: suiteName)),
+            backendSession: session,
+            tusSession: session,
+            cacheDirectory: cacheDirectory,
+            taskEventStreamingEnabled: false
+        )
+        model.session = SavedSession(
+            baseURL: "https://api.test",
+            tusBaseURL: "https://tus.test/",
+            accessToken: "a",
+            refreshToken: "r",
+            expiresAt: "x",
+            userId: "u",
+            email: "u@test",
+            fullName: nil,
+            selectedWorkspaceId: "ws-1",
+            aiHistoryEnabled: true
+        )
+        model.selectedWorkspaceId = "ws-1"
+        let first = LearningDocumentItem(
+            id: "doc-1", workspaceId: "ws-1", originalFilename: "same.pdf",
+            mimeType: "application/pdf", fileType: "pdf", documentKind: "courseware", status: "scanning"
+        )
+        let second = LearningDocumentItem(
+            id: "doc-2", workspaceId: "ws-1", originalFilename: "same.pdf",
+            mimeType: "application/pdf", fileType: "pdf", documentKind: "courseware", status: "ready"
+        )
+
+        model.downloadAndPreview(first)
+        model.downloadAndPreview(first)
+        try await Self.waitUntil { model.downloadedPreview?.url.path.contains("/doc-1/") == true }
+        let firstURL = try #require(model.downloadedPreview?.url)
+        model.downloadedPreview = nil
+        model.downloadAndPreview(second)
+        try await Self.waitUntil { model.downloadedPreview?.url.path.contains("/doc-2/") == true }
+        let secondURL = try #require(model.downloadedPreview?.url)
+
+        #expect(expiredDownloadCount == 1)
+        #expect(downloadURLRequests["doc-1"] == 2)
+        #expect(downloadURLRequests["doc-2"] == 1)
+        #expect(firstURL != secondURL)
+        #expect(firstURL.lastPathComponent == secondURL.lastPathComponent)
+        #expect(!model.isDocumentPreviewLoading("doc-1"))
+        #expect(!model.isDocumentPreviewLoading("doc-2"))
+    }
+
     @Test @MainActor func homeworkSelection_ignoresLateReferencesFromPreviousHomework() async throws {
         let suiteName = "NotePatchTests.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suiteName))
@@ -1975,8 +2560,9 @@ struct NotePatchTests {
         #expect(model.documents.isEmpty)
         #expect(model.gradingDocuments.isEmpty)
         #expect(model.homeworkReferences.isEmpty)
-        #expect(model.selectedTab == .documents)
+        #expect(model.selectedTab == .home)
         #expect(model.selectedDocumentsSection == .tasks)
+        #expect(model.selectedHomeDestination == .tasks)
         #expect(model.activeTask?.taskType == "purge_document")
         #expect(model.activeTask?.status == "succeeded")
         #expect(model.errorMessage == nil)
@@ -2036,7 +2622,7 @@ struct NotePatchTests {
         #expect(model.activeTask?.id == "purge-2")
         #expect(model.activeTask?.status == "succeeded")
         #expect(!model.canRetryDocumentPurge)
-        #expect(model.statusMessage == localized("Document and derivative data cleanup complete."))
+        #expect(model.statusMessage == localized("document.cleanup_complete"))
     }
 
     @Test @MainActor func processingValidationAndCancellation_stopResultReads() async throws {
@@ -2293,6 +2879,83 @@ struct NotePatchTests {
         #expect(restored.tusBaseURLText == "https://tus.example.test/files/")
     }
 
+    @Test @MainActor func serverURLDraft_survivesUnrelatedSessionUpdates() async throws {
+        let suiteName = "NotePatchTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        let settings = SettingsStore(defaults: defaults, keychain: KeychainStore(service: suiteName))
+        defer {
+            settings.clearSession()
+            defaults.removePersistentDomain(forName: suiteName)
+        }
+        let activeSession = SavedSession(
+            baseURL: "https://api.old.test",
+            tusBaseURL: "https://files.old.test/files/",
+            accessToken: "a",
+            refreshToken: "r",
+            expiresAt: "x",
+            userId: "u",
+            email: "u@test",
+            fullName: nil,
+            selectedWorkspaceId: "ws-1",
+            aiHistoryEnabled: true
+        )
+        settings.saveSession(activeSession)
+        let networkSession = Self.mockSession { request in
+            #expect(request.url?.path == "/api/v1/auth/preferences")
+            return Self.response(
+                request,
+                status: 200,
+                body: #"{"id":"u","email":"u@test","is_active":true,"ai_history_enabled":false,"created_at":""}"#
+            )
+        }
+        let model = NotePatchViewModel(settings: settings, backendSession: networkSession, tusSession: networkSession)
+        model.apiBaseURLText = "https://api.draft.test/custom"
+        model.tusBaseURLText = "https://files.draft.test/uploads"
+
+        model.updateAIHistoryEnabled(false)
+        try await Self.waitUntil { !model.isAIPreferenceUpdating }
+
+        #expect(model.apiBaseURLText == "https://api.draft.test/custom")
+        #expect(model.tusBaseURLText == "https://files.draft.test/uploads")
+        #expect(model.session?.aiHistoryEnabled == false)
+    }
+
+    @Test @MainActor func authenticatedServerURLs_saveAndRestoreFromNewModel() throws {
+        let suiteName = "NotePatchTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        let settings = SettingsStore(defaults: defaults, keychain: KeychainStore(service: suiteName))
+        defer {
+            settings.clearSession()
+            defaults.removePersistentDomain(forName: suiteName)
+        }
+        settings.saveSession(
+            SavedSession(
+                baseURL: "https://api.old.test",
+                tusBaseURL: "https://files.old.test/files/",
+                accessToken: "a",
+                refreshToken: "r",
+                expiresAt: "x",
+                userId: "u",
+                email: "u@test",
+                fullName: nil,
+                selectedWorkspaceId: "ws-1",
+                aiHistoryEnabled: true
+            )
+        )
+        let model = NotePatchViewModel(settings: settings)
+        model.apiBaseURLText = "https://api.new.test/root/"
+        model.tusBaseURLText = "https://files.new.test/uploads"
+        model.saveServerURLs()
+
+        let restored = NotePatchViewModel(
+            settings: SettingsStore(defaults: defaults, keychain: KeychainStore(service: suiteName))
+        )
+        #expect(restored.apiBaseURLText == "https://api.new.test/root")
+        #expect(restored.tusBaseURLText == "https://files.new.test/uploads/")
+        #expect(restored.session?.baseURL == "https://api.new.test/root")
+        #expect(restored.session?.tusBaseURL == "https://files.new.test/uploads/")
+    }
+
     @Test @MainActor func gradingViewModel_validatesAndFiltersCandidates() throws {
         let suiteName = "NotePatchTests.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suiteName))
@@ -2301,7 +2964,7 @@ struct NotePatchTests {
         model.session = SavedSession(baseURL: "https://api.test", tusBaseURL: "https://tus.test/", accessToken: "a", refreshToken: "r", expiresAt: "x", userId: "u", email: "u@test", fullName: nil, selectedWorkspaceId: "ws-1", aiHistoryEnabled: true)
         model.selectedWorkspaceId = "ws-1"
         model.searchKnowledge()
-        #expect(model.errorMessage == localized("Please enter a knowledge search query."))
+        #expect(model.errorMessage == localized("knowledge.error.query_required"))
 
         let documents = try JSONDecoder.notepatch.decode(
             [LearningDocumentItem].self,
@@ -2469,6 +3132,89 @@ struct NotePatchTests {
         #expect(HTMLNoteSecurity.hasVisibleContent("<p>Visible</p>"))
     }
 
+    @Test func latexMathRendererConvertsCommonNoteFormulasToMathML() throws {
+        let context = try #require(JSContext())
+        context.exceptionHandler = { _, exception in
+            Issue.record("LaTeX renderer JavaScript failed: \(exception?.toString() ?? "unknown error")")
+        }
+        context.evaluateScript(LatexMathSupport.renderingScript)
+        let renderer = try #require(context.objectForKeyedSubscript("__notePatchLatexToMathMLString"))
+
+        let inline = try #require(renderer.call(withArguments: [#"\frac{a_1}{b^2}=\sqrt{x}+\alpha"#, false])?.toString())
+        #expect(inline.contains("<math"))
+        #expect(inline.contains("display=\"inline\""))
+        #expect(inline.contains("<mfrac>"))
+        #expect(inline.contains("<msub>"))
+        #expect(inline.contains("<msup>"))
+        #expect(inline.contains("<msqrt>"))
+        #expect(inline.contains("&#x03B1;"))
+
+        let display = try #require(renderer.call(withArguments: [#"\sum_{i=1}^{n} i"#, true])?.toString())
+        #expect(display.contains("display=\"block\""))
+        #expect(display.contains("<munderover>"))
+
+        let matrix = try #require(renderer.call(withArguments: [#"\begin{pmatrix}a & b \\ c & d\end{pmatrix}"#, true])?.toString())
+        #expect(matrix.contains("<mtable>"))
+        #expect(matrix.contains("<mtr>"))
+        #expect(matrix.contains("<mtd>"))
+
+        #expect(!LatexMathSupport.renderingScript.contains("https://"))
+        #expect(!LatexMathSupport.renderingScript.contains("fetch("))
+        #expect(!LatexMathSupport.renderingScript.contains("XMLHttpRequest"))
+        #expect(!LatexMathSupport.renderingScript.contains("script.src"))
+    }
+
+    @Test @MainActor func noteWebViewRendersLatexWithPageJavaScriptDisabled() async throws {
+        let configuration = WKWebViewConfiguration()
+        configuration.websiteDataStore = .nonPersistent()
+        configuration.defaultWebpagePreferences.allowsContentJavaScript = false
+        LatexMathSupport.install(into: configuration)
+
+        let webView = WKWebView(frame: CGRect(x: 0, y: 0, width: 390, height: 700), configuration: configuration)
+        let probe = TestWebViewNavigationProbe()
+        let document = HTMLNoteSecurity.readerDocument(
+            bodyHTML: #"<p>Inline: \(\frac{a}{b}=x^2\)</p><p>$$\sum_{i=1}^{n} i$$</p>"#
+        )
+        try await probe.load(document, in: webView)
+
+        let mathCount = try #require(try await evaluateJavaScript("document.querySelectorAll('math').length", in: webView) as? Int)
+        let fractionCount = try #require(try await evaluateJavaScript("document.querySelectorAll('mfrac').length", in: webView) as? Int)
+        let displayCount = try #require(try await evaluateJavaScript("document.querySelectorAll('math[display=block]').length", in: webView) as? Int)
+        let externalResourceCount = try #require(try await evaluateJavaScript("performance.getEntriesByType('resource').length", in: webView) as? Int)
+
+        #expect(mathCount == 2)
+        #expect(fractionCount == 1)
+        #expect(displayCount == 1)
+        #expect(externalResourceCount == 0)
+    }
+
+    @Test @MainActor func noteWebViewRendersBackendFormulaContainersAsMathML() async throws {
+        let configuration = WKWebViewConfiguration()
+        configuration.websiteDataStore = .nonPersistent()
+        configuration.defaultWebpagePreferences.allowsContentJavaScript = false
+        LatexMathSupport.install(into: configuration)
+
+        let webView = WKWebView(frame: CGRect(x: 0, y: 0, width: 390, height: 700), configuration: configuration)
+        let probe = TestWebViewNavigationProbe()
+        let document = HTMLNoteSecurity.readerDocument(
+            bodyHTML: #"""
+            <p class="np-formula">V = π(1.5)<sup>2</sup>(4) + (1/3)π(1.5)<sup>2</sup>(2) = 10.5π m<sup>3</sup></p>
+            <p class="np-formula">l = sqrt(1.5² + 2²) = 2.5 m</p>
+            """#
+        )
+        try await probe.load(document, in: webView)
+
+        let mathCount = try #require(try await evaluateJavaScript("document.querySelectorAll('.np-formula > math').length", in: webView) as? Int)
+        let superscriptCount = try #require(try await evaluateJavaScript("document.querySelectorAll('.np-formula msup').length", in: webView) as? Int)
+        let squareRootCount = try #require(try await evaluateJavaScript("document.querySelectorAll('.np-formula msqrt').length", in: webView) as? Int)
+        let rawSuperscriptCount = try #require(try await evaluateJavaScript("document.querySelectorAll('.np-formula sup').length", in: webView) as? Int)
+
+        #expect(mathCount == 2)
+        #expect(superscriptCount >= 4)
+        #expect(squareRootCount == 1)
+        #expect(rawSuperscriptCount == 0)
+    }
+
     @Test @MainActor func offlineFlashcardsFlipAndNavigateWithoutNetwork() async throws {
         let suiteName = "NotePatchTests.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suiteName))
@@ -2499,7 +3245,7 @@ struct NotePatchTests {
         #expect(requestCount == 0)
     }
 
-    @Test func productionModelsDecodeScanningMergeRenderedAndSequenceFields() throws {
+    @Test func productionModelsIgnoreScanningMetadataAndDecodeCurrentFields() throws {
         let document = try JSONDecoder.notepatch.decode(
             LearningDocumentItem.self,
             from: Data(#"{"id":"doc-1","workspace_id":"ws-1","uploaded_by":"user-1","original_filename":"a.docx","file_type":"docx","document_kind":"courseware","storage_backend":"s3","bucket":"notepatch","object_key":"documents/a.docx","status":"scanning","scan_status":"pending","scan_message":"queued","scanned_at":null,"detected_mime_type":"application/vnd.openxmlformats-officedocument.wordprocessingml.document","created_at":"","updated_at":"","artifacts":[]}"#.utf8)
@@ -2517,8 +3263,7 @@ struct NotePatchTests {
             from: Data(#"{"id":"event-1","task_id":"task-1","sequence_no":7,"event_type":"progress","level":"info","message":"running","progress":40,"created_at":""}"#.utf8)
         )
 
-        #expect(document.scanStatus == "pending")
-        #expect(document.detectedMimeType?.contains("wordprocessingml") == true)
+        #expect(document.status == "scanning")
         #expect(unit.mergeStatus == "rebuilding")
         #expect(note.preferredDownloadURL == "/api/v1/assets/study-notes/render?token=x")
         #expect(event.sequenceNo == 7)
@@ -2592,26 +3337,20 @@ struct NotePatchTests {
         #expect(json["source_learning_unit_ids"] as? [String] == ["source-1", "source-2"])
     }
 
-    @Test @MainActor func scanRulesBlockUnsafeFilesButAllowCleanRetry() throws {
+    @Test @MainActor func legacyScanMetadataDoesNotGateFrontendActions() throws {
         let suiteName = "NotePatchScanRules.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
         let model = NotePatchViewModel(
             settings: SettingsStore(defaults: defaults, keychain: KeychainStore(service: suiteName))
         )
-        let infected = LearningDocumentItem(
-            id: "infected", workspaceId: "ws", originalFilename: "bad.pdf", fileType: "pdf",
-            documentKind: "homework", scanStatus: "infected", scanMessage: "malware", status: "failed"
-        )
-        let processingFailed = LearningDocumentItem(
-            id: "retry", workspaceId: "ws", originalFilename: "good.pdf", fileType: "pdf",
-            documentKind: "homework", scanStatus: "clean", status: "failed"
+        let legacyDocument = try JSONDecoder.notepatch.decode(
+            LearningDocumentItem.self,
+            from: Data(#"{"id":"legacy","workspace_id":"ws","uploaded_by":"u","original_filename":"bad.pdf","file_type":"pdf","document_kind":"homework","storage_backend":"s3","bucket":"files","object_key":"bad.pdf","status":"failed","scan_status":"infected","scan_message":"malware","created_at":"","updated_at":"","artifacts":[]}"#.utf8)
         )
 
-        #expect(!model.canProcessDocument(infected))
-        #expect(!model.canDownloadDocument(infected))
-        #expect(model.canProcessDocument(processingFailed))
-        #expect(model.canDownloadDocument(processingFailed))
+        #expect(model.canProcessDocument(legacyDocument))
+        #expect(model.canDownloadDocument(legacyDocument))
     }
 
     @Test @MainActor func learningUnitMergeValidatesSourcesAndPreservesSelectionOnFailure() async throws {
@@ -2850,6 +3589,47 @@ private extension NotePatchTests {
             data.append(buffer, count: read)
         }
         return data
+    }
+
+    @MainActor
+    private func evaluateJavaScript(_ source: String, in webView: WKWebView) async throws -> Any? {
+        try await withCheckedThrowingContinuation { continuation in
+            webView.evaluateJavaScript(source) { value, error in
+                if let error {
+                    continuation.resume(throwing: error)
+                } else {
+                    continuation.resume(returning: value)
+                }
+            }
+        }
+    }
+}
+
+@MainActor
+private final class TestWebViewNavigationProbe: NSObject, WKNavigationDelegate {
+    private var continuation: CheckedContinuation<Void, Error>?
+
+    func load(_ html: String, in webView: WKWebView) async throws {
+        try await withCheckedThrowingContinuation { continuation in
+            self.continuation = continuation
+            webView.navigationDelegate = self
+            webView.loadHTMLString(html, baseURL: nil)
+        }
+    }
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        continuation?.resume()
+        continuation = nil
+    }
+
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        continuation?.resume(throwing: error)
+        continuation = nil
+    }
+
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        continuation?.resume(throwing: error)
+        continuation = nil
     }
 }
 

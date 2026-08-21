@@ -8,6 +8,12 @@ enum UploadPreviewKind: Equatable {
     case unsupported
 }
 
+enum DownloadPreviewKind: Equatable {
+    case image
+    case quickLook
+    case unsupported
+}
+
 struct LocalUploadFile: Equatable, Identifiable, Sendable {
     let id: UUID
     let url: URL
@@ -43,7 +49,7 @@ struct LocalUploadFile: Equatable, Identifiable, Sendable {
 enum QueuedUploadState: Equatable {
     case pending
     case uploading
-    case failed(String)
+    case failed(AppDisplayText)
 }
 
 struct QueuedUploadItem: Identifiable, Equatable {
@@ -74,9 +80,26 @@ struct DownloadedPreview: Identifiable, Equatable {
     let id = UUID()
     let url: URL
     let mimeType: String?
+    let filename: String
+    let fileSize: Int64?
+
+    init(url: URL, mimeType: String?, filename: String? = nil, fileSize: Int64? = nil) {
+        self.url = url
+        self.mimeType = mimeType
+        let trimmedFilename = filename?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        self.filename = trimmedFilename.isEmpty ? url.lastPathComponent : trimmedFilename
+        self.fileSize = fileSize
+    }
 
     var isImage: Bool {
         mimeType?.hasPrefix("image/") == true || ["jpg", "jpeg", "png", "webp", "heic"].contains(url.pathExtension.lowercased())
+    }
+
+    func previewKind(canQuickLookPreview: Bool) -> DownloadPreviewKind {
+        if isImage {
+            return .image
+        }
+        return canQuickLookPreview ? .quickLook : .unsupported
     }
 }
 
@@ -106,7 +129,7 @@ nonisolated func normalizeImageOrientation(_ sourceURL: URL, cacheDirectory: URL
         image.draw(in: CGRect(origin: .zero, size: image.size))
     }
     guard let data = rendered.jpegData(compressionQuality: 0.95) else {
-        throw LearningBackendError("Unable to read image; cannot correct photo orientation.")
+        throw LearningBackendError(localizedKey: "error.image.orientation")
     }
     let directory = cacheDirectory.appendingPathComponent("normalized", isDirectory: true)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -141,7 +164,7 @@ nonisolated func copyFileToUploadCache(
 
 nonisolated func writeImageToUploadCache(_ image: UIImage, cacheDirectory: URL) throws -> LocalUploadFile {
     guard let data = image.jpegData(compressionQuality: 0.95) else {
-        throw LearningBackendError("Unable to read image; cannot correct photo orientation.")
+        throw LearningBackendError(localizedKey: "error.image.orientation")
     }
     let directory = cacheDirectory.appendingPathComponent("camera", isDirectory: true)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -205,36 +228,45 @@ nonisolated func contentTypeForFilename(_ filename: String) -> String? {
     }
 }
 
-func friendlyError(_ error: Error) -> String {
+@MainActor
+func friendlyDisplayText(_ error: Error) -> AppDisplayText {
     if let backendError = error as? LearningBackendError {
-        return backendError.message
+        if let key = backendError.localizationKey {
+            return .localized(key, backendError.localizationArguments)
+        }
+        return .raw(backendError.message)
     }
     if let urlError = error as? URLError {
         switch urlError.code {
         case .badURL, .unsupportedURL:
-            return "The server address format is incorrect. Please check the API or TUS URL."
+            return .localized("error.network.invalid_address")
         case .cannotFindHost, .dnsLookupFailed:
-            return "Could not resolve the server address. Please check the server address or network."
+            return .localized("error.network.dns")
         case .cannotConnectToHost, .networkConnectionLost, .notConnectedToInternet:
-            return "Could not connect to the server. Please make sure the device and server are on the same local network."
+            return .localized("error.network.unreachable")
         case .timedOut:
-            return "Connection timed out. If the server is reachable from a browser, please check whether the system allows NotePatch to access the network."
+            return .localized("error.network.timeout")
         default:
             break
         }
     }
     let nsError = error as NSError
     if nsError.domain == NSCocoaErrorDomain {
-        return AppLocalization.shared.string("Network or file I/O error: %@", nsError.localizedDescription)
+        return .localized("error.network.io", [nsError.localizedDescription])
     }
-    return error.localizedDescription
+    return .raw(error.localizedDescription)
+}
+
+@MainActor
+func friendlyError(_ error: Error) -> String {
+    friendlyDisplayText(error).resolved()
 }
 
 func activeFilterSummary(status: String, documentKind: String, fileType: String) -> String {
     let filters = [
-        status.isEmpty ? nil : AppLocalization.shared.string("Status %@", statusLabel(status)),
-        documentKind.isEmpty ? nil : AppLocalization.shared.string("Type %@", documentKindLabel(documentKind)),
-        fileType.isEmpty ? nil : AppLocalization.shared.string("File %@", fileTypeLabel(fileType))
+        status.isEmpty ? nil : AppLocalization.shared.string("filter.summary.status", statusLabel(status)),
+        documentKind.isEmpty ? nil : AppLocalization.shared.string("filter.summary.type", documentKindLabel(documentKind)),
+        fileType.isEmpty ? nil : AppLocalization.shared.string("filter.summary.file", fileTypeLabel(fileType))
     ].compactMap { $0 }
     return filters.isEmpty ? localized("filter.all_documents") : filters.joined(separator: " · ")
 }
@@ -243,13 +275,17 @@ func filterChoiceLabel(_ value: String) -> String {
     if value.isEmpty {
         return localized("filter.all")
     }
-    let status = statusLabel(value)
-    if status != value {
-        return status
+    if [
+        "created", "uploading", "scanning", "uploaded", "processing", "ready", "failed",
+        "deleted", "queued", "running", "succeeded", "cancelled", "completed", "draft",
+        "pending", "rebuilding", "infected"
+    ].contains(value) {
+        return statusLabel(value)
     }
-    let kind = documentKindLabel(value)
-    if kind != value {
-        return kind
+    if [
+        "homework", "corrected_homework", "courseware", "note", "exam", "answer_key", "rubric", "other"
+    ].contains(value) {
+        return documentKindLabel(value)
     }
     return fileTypeLabel(value)
 }
@@ -258,7 +294,8 @@ func statusLabel(_ value: String) -> String {
     switch value {
     case "created": return localized("status.created")
     case "uploading": return localized("status.uploading")
-    case "scanning": return localized("status.scanning")
+    case "scanning": return localized("status.preparing")
+    case "pending": return localized("status.pending")
     case "uploaded": return localized("status.uploaded")
     case "processing": return localized("status.processing")
     case "ready": return localized("status.ready")
@@ -270,19 +307,9 @@ func statusLabel(_ value: String) -> String {
     case "cancelled": return localized("status.cancelled")
     case "completed": return localized("status.completed")
     case "draft": return localized("status.draft")
-    default: return value
-    }
-}
-
-func scanStatusLabel(_ value: String) -> String {
-    switch value {
-    case "pending": return localized("scan.pending")
-    case "scanning": return localized("scan.scanning")
-    case "clean": return localized("scan.clean")
-    case "infected": return localized("scan.infected")
-    case "failed": return localized("scan.failed")
-    case "skipped": return localized("scan.skipped")
-    default: return value
+    case "rebuilding": return localized("status.rebuilding")
+    case "infected": return localized("status.unavailable")
+    default: return localized("status.unknown")
     }
 }
 
@@ -292,7 +319,7 @@ func mergeStatusLabel(_ value: String) -> String {
     case "rebuilding": return localized("merge.status.rebuilding")
     case "completed": return localized("merge.status.completed")
     case "failed": return localized("merge.status.failed")
-    default: return value
+    default: return localized("merge.status.unknown")
     }
 }
 
@@ -310,7 +337,7 @@ func documentKindLabel(_ value: String) -> String {
     case "answer_key": return localized("document_kind.answer_key")
     case "rubric": return localized("document_kind.rubric")
     case "other": return localized("common.other")
-    default: return value
+    default: return localized("document_kind.unknown")
     }
 }
 
@@ -323,7 +350,7 @@ func fileTypeLabel(_ value: String) -> String {
     case "audio": return localized("file_type.audio")
     case "video": return localized("file_type.video")
     case "other": return localized("common.other")
-    default: return value
+    default: return localized("file_type.unknown")
     }
 }
 
@@ -340,7 +367,7 @@ func artifactTypeLabel(_ value: String) -> String {
     case "flashcards": return localized("artifact.flashcards")
     case "converted_pdf": return localized("artifact.converted_pdf")
     case "other": return localized("common.other")
-    default: return value
+    default: return localized("artifact.unknown")
     }
 }
 
@@ -378,6 +405,21 @@ func keyboardAvoidanceOffset(contentFrame: CGRect, keyboardFrame: CGRect) -> CGF
         return 0
     }
     return max(0, contentFrame.maxY - keyboardFrame.minY)
+}
+
+func workbenchBottomObstruction(
+    containerHeight: CGFloat,
+    bottomBarFrame: CGRect,
+    isVisible: Bool
+) -> CGFloat {
+    guard isVisible,
+          containerHeight > 0,
+          !bottomBarFrame.isNull,
+          !bottomBarFrame.isInfinite,
+          bottomBarFrame.height > 0 else {
+        return 0
+    }
+    return max(0, containerHeight - bottomBarFrame.minY)
 }
 
 func workbenchBottomBarAdditionalPadding(safeAreaBottom: CGFloat) -> CGFloat {

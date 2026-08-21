@@ -21,7 +21,7 @@ final class TusUploader {
         onProgress: @escaping (Int64, Int64) async -> Void
     ) async throws -> TusUploadResult {
         guard FileManager.default.fileExists(atPath: fileURL.path) else {
-            throw LearningBackendError("Upload file does not exist.")
+            throw LearningBackendError(localizedKey: "error.upload.file_missing")
         }
         let sizeBytes = try fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize.map(Int64.init) ?? 0
         let uploadURL = try await createUpload(endpoint: endpoint, sizeBytes: sizeBytes, metadataHeader: metadataHeader)
@@ -31,7 +31,7 @@ final class TusUploader {
 
     private func createUpload(endpoint: String, sizeBytes: Int64, metadataHeader: String) async throws -> String {
         guard let url = URL(string: endpoint) else {
-            throw LearningBackendError("Server address format is invalid. Please check the API or TUS address.")
+            throw LearningBackendError(localizedKey: "error.server.invalid_address")
         }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
@@ -45,7 +45,7 @@ final class TusUploader {
         let (data, response) = try await session.upload(for: request, from: Data())
         try validate(response: response, data: data)
         guard let location = (response as? HTTPURLResponse)?.value(forHTTPHeaderField: "Location") else {
-            throw LearningBackendError("TUSD did not return a Location header.")
+            throw LearningBackendError(localizedKey: "error.tus.location_missing")
         }
         return try Self.resolveUploadURL(endpoint: endpoint, location: location)
     }
@@ -88,14 +88,15 @@ final class TusUploader {
             }
         }
         throw LearningBackendError(
-            "TUS chunk upload failed: \(lastError?.localizedDescription ?? "Unknown error")",
+            localizedKey: "error.tus.chunk_failed",
+            arguments: [lastError.map(friendlyError) ?? localized("common.unknown")],
             cause: lastError
         )
     }
 
     private func patchChunk(uploadURL: String, offset: Int64, chunk: Data) async throws -> Int64 {
         guard let url = URL(string: uploadURL) else {
-            throw LearningBackendError("Server address format is invalid. Please check the API or TUS address.")
+            throw LearningBackendError(localizedKey: "error.server.invalid_address")
         }
         var request = URLRequest(url: url)
         request.httpMethod = "PATCH"
@@ -114,7 +115,7 @@ final class TusUploader {
 
     static func checkEndpoint(_ endpoint: String, session: URLSession = .shared) async throws {
         guard let url = URL(string: endpoint) else {
-            throw LearningBackendError("Server address format is invalid. Please check the API or TUS address.")
+            throw LearningBackendError(localizedKey: "error.server.invalid_address")
         }
         var request = URLRequest(url: url)
         request.httpMethod = "OPTIONS"
@@ -123,7 +124,7 @@ final class TusUploader {
         try validate(response: response, data: data)
         let tusVersion = (response as? HTTPURLResponse)?.value(forHTTPHeaderField: "Tus-Resumable") ?? ""
         if tusVersion.isEmpty {
-            throw LearningBackendError("TUSD did not return Tus-Resumable header.")
+            throw LearningBackendError(localizedKey: "error.tus.version_missing")
         }
     }
 
@@ -137,18 +138,18 @@ final class TusUploader {
 
     static func resolveUploadURL(endpoint: String, location: String) throws -> String {
         guard let endpointURL = URL(string: endpoint) else {
-            throw LearningBackendError("TUSD returned an invalid Location.")
+            throw LearningBackendError(localizedKey: "error.tus.location_invalid")
         }
         if location.hasPrefix("http://") || location.hasPrefix("https://") {
             guard let absolute = URL(string: location) else {
-                throw LearningBackendError("TUSD returned an invalid Location.")
+                throw LearningBackendError(localizedKey: "error.tus.location_invalid")
             }
             return absolute.absoluteString
         }
         if location.hasPrefix("/") {
             guard var components = URLComponents(url: endpointURL, resolvingAgainstBaseURL: false),
                   let locationComponents = URLComponents(string: location) else {
-                throw LearningBackendError("TUSD returned an invalid Location.")
+                throw LearningBackendError(localizedKey: "error.tus.location_invalid")
             }
             let endpointPath = components.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
             let locationPath = locationComponents.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
@@ -167,12 +168,12 @@ final class TusUploader {
             components.query = locationComponents.query
             components.fragment = locationComponents.fragment
             guard let resolved = components.url else {
-                throw LearningBackendError("TUSD returned an invalid Location.")
+                throw LearningBackendError(localizedKey: "error.tus.location_invalid")
             }
             return resolved.absoluteString
         }
         guard let resolved = URL(string: location, relativeTo: endpointURL)?.absoluteURL else {
-            throw LearningBackendError("TUSD returned an invalid Location.")
+            throw LearningBackendError(localizedKey: "error.tus.location_invalid")
         }
         return resolved.absoluteString
     }
@@ -187,7 +188,7 @@ final class TusUploader {
 
     private static func validate(response: URLResponse, data: Data) throws {
         guard let httpResponse = response as? HTTPURLResponse else {
-            throw LearningBackendError("Server response is invalid.")
+            throw LearningBackendError(localizedKey: "error.server.invalid_response")
         }
         guard (200...299).contains(httpResponse.statusCode) else {
             throw LearningBackendError(

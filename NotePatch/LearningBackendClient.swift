@@ -279,13 +279,35 @@ final class LearningBackendClient {
     }
 
     func download(downloadURL: String, targetURL: URL) async throws -> URL {
-        let (data, response) = try await data(for: request(method: "GET", pathOrURL: downloadURL))
-        try validate(response: response, data: data)
+        let (temporaryURL, response) = try await session.download(
+            for: request(method: "GET", pathOrURL: downloadURL)
+        )
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw LearningBackendError(localizedKey: "error.server.invalid_response")
+        }
+        guard (200...299).contains(httpResponse.statusCode) else {
+            let errorData = (try? Data(contentsOf: temporaryURL)) ?? Data()
+            throw LearningBackendError(
+                Self.parseErrorMessage(
+                    String(data: errorData.prefix(64 * 1024), encoding: .utf8) ?? "",
+                    status: httpResponse.statusCode
+                ),
+                statusCode: httpResponse.statusCode,
+                shouldClearSession: httpResponse.statusCode == 401
+            )
+        }
         try FileManager.default.createDirectory(
             at: targetURL.deletingLastPathComponent(),
             withIntermediateDirectories: true
         )
-        try data.write(to: targetURL, options: .atomic)
+        if FileManager.default.fileExists(atPath: targetURL.path) {
+            try FileManager.default.removeItem(at: targetURL)
+        }
+        do {
+            try FileManager.default.moveItem(at: temporaryURL, to: targetURL)
+        } catch {
+            try FileManager.default.copyItem(at: temporaryURL, to: targetURL)
+        }
         return targetURL
     }
 
@@ -648,7 +670,7 @@ final class LearningBackendClient {
     func resolveServiceURL(_ pathOrURL: String) throws -> URL {
         if pathOrURL.hasPrefix("http://") || pathOrURL.hasPrefix("https://") {
             guard let url = URL(string: pathOrURL) else {
-                throw LearningBackendError("Server returned an invalid download URL.")
+                throw LearningBackendError(localizedKey: "error.download.invalid_url")
             }
             return url
         }
@@ -660,7 +682,7 @@ final class LearningBackendClient {
             base = normalizedBaseURL
         }
         guard let url = URL(string: "\(base)\(path)") else {
-            throw LearningBackendError("Server returned an invalid download URL.")
+            throw LearningBackendError(localizedKey: "error.download.invalid_url")
         }
         return url
     }
@@ -710,19 +732,21 @@ final class LearningBackendClient {
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         if status == 401, allowRefresh {
             guard let refreshToken else {
-                throw LearningBackendError("Session expired. Please sign in again.", statusCode: status, shouldClearSession: true)
+                throw LearningBackendError(
+                    localizedKey: "error.session.expired",
+                    statusCode: status,
+                    shouldClearSession: true
+                )
             }
             let attemptedRefreshToken = refreshToken
             let refreshed: TokenResponse
             do {
                 refreshed = try await refreshTokenSingleFlight(attemptedRefreshToken)
             } catch let error as LearningBackendError {
-                throw LearningBackendError(
-                    error.message,
+                throw error.withContext(
                     statusCode: error.statusCode ?? status,
                     shouldClearSession: true,
-                    refreshTokenAttempt: attemptedRefreshToken,
-                    cause: error
+                    refreshTokenAttempt: attemptedRefreshToken
                 )
             }
             self.accessToken = refreshed.accessToken
@@ -731,12 +755,10 @@ final class LearningBackendClient {
             do {
                 return try await authedData(method, path, payload: payload, allowRefresh: false)
             } catch let error as LearningBackendError where error.shouldClearSession {
-                throw LearningBackendError(
-                    error.message,
+                throw error.withContext(
                     statusCode: error.statusCode,
                     shouldClearSession: true,
-                    refreshTokenAttempt: attemptedRefreshToken,
-                    cause: error
+                    refreshTokenAttempt: attemptedRefreshToken
                 )
             }
         }
@@ -764,12 +786,12 @@ final class LearningBackendClient {
             throw error
         }
         guard let httpResponse = response as? HTTPURLResponse else {
-            throw LearningBackendError("Server response is invalid.")
+            throw LearningBackendError(localizedKey: "error.server.invalid_response")
         }
         if httpResponse.statusCode == 401, allowRefresh {
             guard let refreshToken else {
                 throw LearningBackendError(
-                    "Session expired. Please sign in again.",
+                    localizedKey: "error.session.expired",
                     statusCode: 401,
                     shouldClearSession: true
                 )
@@ -779,12 +801,10 @@ final class LearningBackendClient {
             do {
                 refreshed = try await refreshTokenSingleFlight(attemptedRefreshToken)
             } catch let error as LearningBackendError {
-                throw LearningBackendError(
-                    error.message,
+                throw error.withContext(
                     statusCode: error.statusCode ?? 401,
                     shouldClearSession: true,
-                    refreshTokenAttempt: attemptedRefreshToken,
-                    cause: error
+                    refreshTokenAttempt: attemptedRefreshToken
                 )
             }
             accessToken = refreshed.accessToken
@@ -823,7 +843,7 @@ final class LearningBackendClient {
         )
         return try await RefreshSingleFlight.shared.value(for: key) { [weak self] in
             guard let self else {
-                throw LearningBackendError("Session refresh was cancelled.")
+                throw LearningBackendError(localizedKey: "error.session.refresh_cancelled")
             }
             return try await self.refreshTokenInternal(token)
         }
@@ -831,7 +851,11 @@ final class LearningBackendClient {
 
     private func bearerHeader() throws -> String {
         guard let accessToken, !accessToken.isEmpty else {
-            throw LearningBackendError("Please sign in first.", statusCode: 401, shouldClearSession: true)
+            throw LearningBackendError(
+                localizedKey: "error.auth.required",
+                statusCode: 401,
+                shouldClearSession: true
+            )
         }
         return "Bearer \(accessToken)"
     }
@@ -844,7 +868,7 @@ final class LearningBackendClient {
         let url: URL
         if pathOrURL.hasPrefix("http://") || pathOrURL.hasPrefix("https://") {
             guard let absoluteURL = URL(string: pathOrURL) else {
-                throw LearningBackendError("Server address format is invalid. Please check the API or TUS address.")
+                throw LearningBackendError(localizedKey: "error.server.invalid_address")
             }
             url = absoluteURL
         } else {
@@ -855,7 +879,7 @@ final class LearningBackendClient {
             case .api: prefix = "/api/v1"
             }
             guard let absoluteURL = URL(string: "\(normalizedBaseURL)\(prefix)\(path)") else {
-                throw LearningBackendError("Server address format is invalid. Please check the API or TUS address.")
+                throw LearningBackendError(localizedKey: "error.server.invalid_address")
             }
             url = absoluteURL
         }
@@ -875,7 +899,7 @@ final class LearningBackendClient {
 
     private func validate(response: URLResponse, data: Data) throws {
         guard let httpResponse = response as? HTTPURLResponse else {
-            throw LearningBackendError("Server response is invalid.")
+            throw LearningBackendError(localizedKey: "error.server.invalid_response")
         }
         guard (200...299).contains(httpResponse.statusCode) else {
             throw LearningBackendError(
