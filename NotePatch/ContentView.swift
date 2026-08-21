@@ -668,10 +668,7 @@ private struct HomeTab: View {
             LazyVStack(alignment: .leading, spacing: 24) {
                 CompactPageHeader(
                     title: localized("home.title"),
-                    subtitle: currentWorkspaceName,
-                    actionSystemImage: "arrow.clockwise",
-                    actionAccessibilityLabel: localized("home.refresh"),
-                    action: model.refreshHomeDashboard
+                    subtitle: currentWorkspaceName
                 )
 
                 summary
@@ -688,7 +685,19 @@ private struct HomeTab: View {
             .padding(.top, 12)
             .workbenchContentBottomPadding()
         }
+        .refreshable {
+            await refreshHomeContent()
+        }
         .background(NPColors.background)
+    }
+
+    private func refreshHomeContent() async {
+        model.refreshHomeDashboard()
+        await Task.yield()
+        while !Task.isCancelled,
+              model.isBusy || state.isLoadingSupplementaryContent {
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
     }
 
     private var summary: some View {
@@ -893,9 +902,6 @@ private struct HomeTab: View {
 private struct CompactPageHeader: View {
     let title: String
     let subtitle: String?
-    let actionSystemImage: String?
-    let actionAccessibilityLabel: String?
-    let action: (() -> Void)?
 
     var body: some View {
         HStack(spacing: 12) {
@@ -911,14 +917,6 @@ private struct CompactPageHeader: View {
                 }
             }
             Spacer(minLength: 8)
-            if let actionSystemImage, let action {
-                Button(action: action) {
-                    Image(systemName: actionSystemImage)
-                        .frame(width: 44, height: 44)
-                }
-                .buttonStyle(NPToolbarIconButtonStyle())
-                .accessibilityLabel(actionAccessibilityLabel ?? title)
-            }
             CompactPageLogo()
         }
         .frame(minHeight: 56)
@@ -927,8 +925,8 @@ private struct CompactPageHeader: View {
 
 private struct CompactPageLogo: View {
     var body: some View {
-        NotePatchLogoImage(height: 20)
-            .frame(width: 48, height: 32, alignment: .trailing)
+        NotePatchLogoImage(height: 24)
+            .frame(width: 58, height: 36, alignment: .trailing)
             .accessibilityHidden(true)
     }
 }
@@ -1113,16 +1111,7 @@ private struct NotesTab: View {
         VStack(spacing: 0) {
             CompactPageHeader(
                 title: localized("notes.title"),
-                subtitle: nil,
-                actionSystemImage: "arrow.clockwise",
-                actionAccessibilityLabel: localized("notes.refresh"),
-                action: {
-                    if model.selectedNotesSection == .notes {
-                        model.loadNotesOverview(allowOfflineNetwork: true)
-                    } else {
-                        model.loadLearningDashboard(allowOfflineNetwork: true)
-                    }
-                }
+                subtitle: nil
             )
             .padding(.horizontal, 16)
             .padding(.top, 12)
@@ -1147,6 +1136,9 @@ private struct NotesTab: View {
                     }
                 }
             }
+            .refreshable {
+                await refreshNotesContent()
+            }
         }
         .sheet(item: $readerItem) { _ in
             NavigationView {
@@ -1168,6 +1160,19 @@ private struct NotesTab: View {
         }
         .onChange(of: model.selectedNotesSection) { _ in
             model.ensureContentForSelectedTabLoaded()
+        }
+    }
+
+    private func refreshNotesContent() async {
+        if model.selectedNotesSection == .notes {
+            model.loadNotesOverview(allowOfflineNetwork: true)
+        } else {
+            model.loadLearningDashboard(allowOfflineNetwork: true)
+        }
+        await Task.yield()
+        while !Task.isCancelled,
+              model.isNotesLoading || model.isLearningLoading || model.isHomeworkLoading {
+            try? await Task.sleep(nanoseconds: 50_000_000)
         }
     }
 
@@ -3899,10 +3904,7 @@ private struct ProfileTab: View {
             VStack(spacing: 16) {
                 CompactPageHeader(
                     title: localized("profile.title"),
-                    subtitle: nil,
-                    actionSystemImage: nil,
-                    actionAccessibilityLabel: nil,
-                    action: nil
+                    subtitle: nil
                 )
 
                 // ——— Profile Card ———
