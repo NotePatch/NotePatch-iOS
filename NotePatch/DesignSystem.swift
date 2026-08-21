@@ -75,14 +75,14 @@ private extension UIColor {
 
 struct NPColors {
     // ── 4-layer background hierarchy ──
-    /// Page canvas — warm paper tone, never cold white.
-    static let background    = Color.adaptive(light: "#F2F4F1", dark: "#0E110F")
+    /// Page canvas — almost off-white, barely perceptible warm sage tint.
+    static let background    = Color.adaptive(light: "#FAFBF8", dark: "#0E110F")
     /// Primary surface — layering surface, slightly warm.
     static let surface       = Color.adaptive(light: "#F8F9F6", dark: "#151A17")
     /// Card surface — pure white, like a premium notebook page.
     static let surfaceCard   = Color.adaptive(light: "#FFFFFF", dark: "#1B211D")
     /// Interactive surface — barely perceptible warmth for tappable elements.
-    static let interactive   = Color.adaptive(light: "#F6F8F5", dark: "#232A25")
+    static let interactive   = Color.adaptive(light: "#FCFDFB", dark: "#232A25")
     /// Top-edge highlight used by cards and glass fallbacks.
     static let surfaceHighlight = Color.adaptive(light: "#B3FFFFFF", dark: "#24FFFFFF")
 
@@ -108,8 +108,8 @@ struct NPColors {
     static let aiUserBubble  = Color.adaptive(light: "#EFF5F1", dark: "#1C2B22")
     static let destructive   = Color.adaptive(light: "#D15A5A", dark: "#FF8A8A")
     static let warning       = Color.adaptive(light: "#C9861C", dark: "#F3C263")
-    static let successBg     = Color.adaptive(light: "#E7F3EA", dark: "#203629")
-    static let successText   = Color.adaptive(light: "#4F8E66", dark: "#8FD1A1")
+    static let successBg     = Color.adaptive(light: "#DDEEDF", dark: "#203629")
+    static let successText   = Color.adaptive(light: "#4A7B60", dark: "#8FD1A1")
 }
 
 // MARK: - Shadow Tokens (Single overhead light source)
@@ -331,32 +331,37 @@ struct NPUploadButtonStyle: ButtonStyle {
     }
 }
 
-// MARK: - Reprocess Button Style (Card action, no glow)
+// MARK: - Reprocess Button Style (Card primary action)
 
 struct NPDocumentPrimaryButtonStyle: ButtonStyle {
     @Environment(\.isEnabled) private var isEnabled
     @State private var isHovering = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+    // Reprocess-specific tokens — darker and more prominent than neutral buttons
+    private static let reprocessBg   = Color(hex: "#EAF5EB")
+    private static let reprocessText = Color(hex: "#2E6B4C")
+    private static let reprocessBorder = Color(hex: "#C9DDCA")
+
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.system(size: 13, weight: .medium, design: .default))
-            .foregroundStyle(NPColors.brandDark)
+            .foregroundStyle(Self.reprocessText)
             .frame(height: 38)
             .frame(maxWidth: .infinity)
             .background {
                 Capsule(style: .continuous)
-                    .fill(isHovering ? NPColors.surfaceCard : NPColors.interactive)
+                    .fill(isHovering ? NPColors.surfaceCard : Self.reprocessBg)
             }
             .overlay {
                 Capsule(style: .continuous)
-                    .stroke(NPColors.border, lineWidth: 0.5)
+                    .stroke(Self.reprocessBorder, lineWidth: 1)
             }
             .shadow(
-                color: isHovering ? .black.opacity(0.08) : .black.opacity(0.05),
-                radius: isHovering ? 18 : 8,
+                color: Self.reprocessText.opacity(isHovering ? 0.12 : 0.08),
+                radius: isHovering ? 16 : 8,
                 x: 0,
-                y: isHovering ? 8 : 3
+                y: isHovering ? 6 : 3
             )
             .scaleEffect(configuration.isPressed ? 0.98 : 1.0)
             .offset(y: isHovering && !configuration.isPressed ? -2 : 0)
@@ -452,7 +457,7 @@ struct NPStatusChip: View {
 
     var body: some View {
         Text(localized(text))
-            .font(.system(size: 11, weight: .medium))
+            .font(.system(size: 11, weight: .semibold))
             .foregroundStyle(variant.fg)
             .padding(.horizontal, 8)
             .padding(.vertical, 3)
@@ -547,7 +552,7 @@ extension View {
 // MARK: - Segmented Control Styling
 
 enum NPSegmentedControl {
-    static let background    = Color.adaptive(light: "#E7EAE5", dark: "#121613")
+    static let background    = Color.adaptive(light: "#F0F3EE", dark: "#121613")
     static let selectedBg    = NPColors.surfaceCard
     static let selectedShadow: (color: Color, radius: CGFloat, y: CGFloat) = (.black.opacity(0.04), 6, 2)
 }

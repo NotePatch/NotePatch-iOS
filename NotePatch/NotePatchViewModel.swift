@@ -41,7 +41,7 @@ enum WorkbenchTab: Int, CaseIterable, Identifiable {
         switch self {
         case .home: return "house"
         case .notes: return "note.text"
-        case .openClaw: return "sparkles"
+        case .openClaw: return "sparkles.rectangle.stack.fill"
         case .profile: return "person.crop.circle"
         }
     }
