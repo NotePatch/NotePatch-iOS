@@ -292,6 +292,9 @@ private struct WorkbenchScreen: View {
                 bottomSafeAreaInset: geometry.safeAreaInsets.bottom
             )
         }
+        .modifier(WorkbenchKeyboardSafeAreaModifier(
+            keepsBottomBarFixed: navigationState.selectedTab == .openClaw
+        ))
     }
 
     private func workbenchLayout(
@@ -309,7 +312,6 @@ private struct WorkbenchScreen: View {
             selectedContent
                 .environment(\.workbenchBottomObstruction, bottomObstruction)
                 .background(NPColors.background, ignoresSafeAreaEdges: .all)
-                .modifier(WorkbenchKeyboardSafeAreaModifier(keepsBottomBarFixed: navigationState.selectedTab == .openClaw))
                 .allowsHitTesting(!navigationState.isUploadPresented)
 
             KeyboardAwareWorkbenchBottomBar(
@@ -318,6 +320,7 @@ private struct WorkbenchScreen: View {
             ) {
                 navigationState.isUploadPresented = true
             }
+            .ignoresSafeArea(.keyboard, edges: .bottom)
             .padding(.horizontal, 16)
             .padding(.top, 8)
             .padding(
@@ -1175,7 +1178,7 @@ private struct NotesTab: View {
                             .font(.subheadline.weight(model.selectedLearningSection == section ? .semibold : .regular))
                             .foregroundStyle(model.selectedLearningSection == section ? NPColors.surfaceCard : NPColors.textSecondary)
                             .padding(.horizontal, 14)
-                            .frame(minHeight: 36)
+                            .frame(minHeight: 44)
                             .background(model.selectedLearningSection == section ? NPColors.brand : NPColors.surface)
                             .clipShape(Capsule())
                     }
@@ -1509,7 +1512,7 @@ private struct StudyNoteEditor: View {
                 editorButton(.orderedList, systemImage: "list.number", label: "note.editor.numbered_list")
             }
         }
-        .frame(height: 40)
+        .frame(height: 44)
     }
 
     private func editorButton(_ command: HTMLNoteCommand, systemImage: String, label: String) -> some View {
@@ -1518,7 +1521,7 @@ private struct StudyNoteEditor: View {
             editorCommandToken += 1
         } label: {
             Image(systemName: systemImage)
-                .frame(width: 34, height: 34)
+                .frame(width: 44, height: 44)
         }
         .buttonStyle(.plain)
         .background(NPColors.surface)
@@ -1629,6 +1632,7 @@ private struct UploadScreen: View {
             ZStack {
                 Text(localized("upload.title"))
                     .font(.headline)
+                    .accessibilityIdentifier("uploadScreen")
 
                 HStack {
                     Button(localized("common.close")) {
@@ -1649,7 +1653,6 @@ private struct UploadScreen: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .background(NPColors.background)
-        .accessibilityIdentifier("uploadScreen")
     }
 }
 
@@ -1855,10 +1858,16 @@ private struct QueuedUploadRow: View {
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
             Button(action: onToggle) {
-                Image(systemName: item.isSelected ? "checkmark.circle.fill" : "circle")
-                    .npHeading()
-                    .foregroundStyle(item.isSelected ? NPColors.brand : NPColors.textSecondary)
+                ZStack {
+                    Color.clear
+                    Image(systemName: item.isSelected ? "checkmark.circle.fill" : "circle")
+                        .npHeading()
+                        .foregroundStyle(item.isSelected ? NPColors.brand : NPColors.textSecondary)
+                }
+                .frame(width: 44, height: 44)
             }
+            .frame(width: 44, height: 44)
+            .contentShape(Rectangle())
             .buttonStyle(.plain)
             .disabled(isBusy)
             .accessibilityLabel(localizedFormat(
@@ -1882,17 +1891,27 @@ private struct QueuedUploadRow: View {
             Spacer(minLength: 0)
 
             Button(action: onPreview) {
-                Image(systemName: "eye")
-                    .frame(width: 28, height: 28)
+                ZStack {
+                    Color.clear
+                    Image(systemName: "eye")
+                }
+                .frame(width: 44, height: 44)
             }
+            .frame(width: 44, height: 44)
+            .contentShape(Rectangle())
             .buttonStyle(.plain)
             .disabled(isBusy)
             .accessibilityLabel(localizedFormat("accessibility.preview_file", item.file.filename))
 
             Button(role: .destructive, action: onRemove) {
-                Image(systemName: "trash")
-                    .frame(width: 28, height: 28)
+                ZStack {
+                    Color.clear
+                    Image(systemName: "trash")
+                }
+                .frame(width: 44, height: 44)
             }
+            .frame(width: 44, height: 44)
+            .contentShape(Rectangle())
             .buttonStyle(.plain)
             .disabled(isBusy)
             .accessibilityLabel(localizedFormat("accessibility.remove_file", item.file.filename))
@@ -2456,6 +2475,7 @@ private struct OpenClawChatTab: View {
     @State private var titleDraft = ""
     @State private var messageRevisionDraft = ""
     @State private var isConversationDrawerOpen = false
+    @State private var composerViewGeneration = 0
     @State private var isComposerFocused = false
     @State private var isShowingAIPhotoLibrary = false
     @State private var isShowingAIFileImporter = false
@@ -2495,13 +2515,18 @@ private struct OpenClawChatTab: View {
                             isConversationDrawerOpen = true
                         }
                     } label: {
-                        Image(systemName: "sidebar.left")
-                            .font(.system(size: 15, weight: .medium))
-                            .foregroundStyle(NPColors.textSecondary)
-                            .frame(width: 32, height: 32)
-                            .background(NPColors.interactive.opacity(0.4))
-                            .clipShape(Circle())
+                        ZStack {
+                            Circle()
+                                .fill(NPColors.interactive.opacity(0.4))
+                                .frame(width: 32, height: 32)
+                            Image(systemName: "sidebar.left")
+                                .font(.system(size: 15, weight: .medium))
+                                .foregroundStyle(NPColors.textSecondary)
+                        }
+                        .frame(width: 44, height: 44)
                     }
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
                     .buttonStyle(.plain)
                     .disabled(chatState.isHistoryLoading || chatState.isConversationMutating)
                     .accessibilityLabel(localized("chat.drawer.open_accessibility"))
@@ -2509,13 +2534,18 @@ private struct OpenClawChatTab: View {
                     Button {
                         model.copyOpenClawConversation()
                     } label: {
-                        Image(systemName: "doc.on.doc")
-                            .font(.system(size: 14, weight: .medium))
-                            .foregroundStyle(NPColors.textSecondary)
-                            .frame(width: 32, height: 32)
-                            .background(NPColors.interactive.opacity(0.4))
-                            .clipShape(Circle())
+                        ZStack {
+                            Circle()
+                                .fill(NPColors.interactive.opacity(0.4))
+                                .frame(width: 32, height: 32)
+                            Image(systemName: "doc.on.doc")
+                                .font(.system(size: 14, weight: .medium))
+                                .foregroundStyle(NPColors.textSecondary)
+                        }
+                        .frame(width: 44, height: 44)
                     }
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
                     .buttonStyle(.plain)
                     .disabled(!chatState.messages.contains(where: { $0.role == .user || $0.role == .assistant }))
                     .accessibilityLabel(localized("chat.copy.conversation"))
@@ -2736,6 +2766,7 @@ private struct OpenClawChatTab: View {
         withAnimation(.npInteractive) {
             isConversationDrawerOpen = false
         }
+        composerViewGeneration += 1
     }
 
     private var drawerEdgeHotZone: some View {
@@ -2813,7 +2844,7 @@ private struct OpenClawChatTab: View {
                     Image(systemName: "square.and.pencil")
                         .font(.system(size: 16, weight: .semibold))
                         .foregroundStyle(NPColors.brandDark)
-                        .frame(width: 40, height: 40)
+                        .frame(width: 44, height: 44)
                         .background(NPColors.interactive.opacity(0.4))
                         .clipShape(Circle())
                 }
@@ -2977,6 +3008,7 @@ private struct OpenClawChatTab: View {
                         horizontalInset: textHorizontalInset,
                         maximumLines: expanded ? 7 : 1
                     )
+                    .id(composerViewGeneration)
                     .frame(
                         width: textViewWidth,
                         height: expanded ? composerState.measuredTextHeight : 44
@@ -3066,6 +3098,8 @@ private struct OpenClawChatTab: View {
                 .frame(width: 38, height: 38)
         }
         .foregroundStyle(NPColors.textSecondary)
+        .frame(width: 44, height: 44)
+        .contentShape(Rectangle())
         .accessibilityLabel(localized("chat.add_attachment"))
         .accessibilityIdentifier("openClawAttachmentButton")
         .disabled(chatState.isSending)
@@ -3152,7 +3186,7 @@ private struct OpenClawChatTab: View {
                         .fill(NPColors.destructive)
                 }
                 .clipShape(Circle())
-                .frame(width: 38, height: 38)
+                .frame(width: 44, height: 44)
                 .contentShape(Circle())
                 .disabled(isStopping)
                 .accessibilityLabel(localized("chat.stop_generation"))
@@ -3179,7 +3213,7 @@ private struct OpenClawChatTab: View {
                     .fill(canSend ? NPColors.brand : NPColors.textSecondary.opacity(0.18))
             }
             .clipShape(Circle())
-            .frame(width: 38, height: 38)
+            .frame(width: 44, height: 44)
             .contentShape(Circle())
             .disabled(!canSend)
             .accessibilityLabel(localized("chat.send"))
@@ -3263,7 +3297,7 @@ private struct AIComposerAttachmentChip: View {
             Button(action: onRemove) {
                 Image(systemName: "xmark")
                     .font(.caption2.weight(.bold))
-                    .frame(width: 24, height: 24)
+                    .frame(width: 44, height: 44)
             }
             .buttonStyle(.plain)
             .foregroundStyle(NPColors.textSecondary)
@@ -3271,7 +3305,7 @@ private struct AIComposerAttachmentChip: View {
         }
         .padding(.leading, 7)
         .padding(.trailing, 4)
-        .frame(height: 40)
+        .frame(height: 44)
         .background(NPColors.surface)
         .clipShape(Capsule())
         .overlay {
@@ -3645,7 +3679,7 @@ private struct FlashcardsSection: View {
             HStack(spacing: NPSpacing.item) {
                 Button { model.showPreviousFlashcard() } label: {
                     Image(systemName: "chevron.left")
-                        .frame(width: 36, height: 36)
+                        .frame(width: 44, height: 44)
                 }
                 .buttonStyle(NPSecondaryButtonStyle())
                 .disabled(model.flashcardIndex == 0)
@@ -3664,7 +3698,7 @@ private struct FlashcardsSection: View {
 
                 Button { model.showNextFlashcard() } label: {
                     Image(systemName: "chevron.right")
-                        .frame(width: 36, height: 36)
+                        .frame(width: 44, height: 44)
                 }
                 .buttonStyle(NPSecondaryButtonStyle())
                 .disabled(model.flashcardIndex + 1 >= detail.cards.count)
@@ -3966,7 +4000,10 @@ private struct HomeworkGradingSection: View {
                                 Text(documentKindLabel(reference.referenceType)).npCaption()
                             }
                             Spacer()
-                            Button(role: .destructive) { model.deleteHomeworkReference(reference) } label: { Image(systemName: "trash") }
+                            Button(role: .destructive) { model.deleteHomeworkReference(reference) } label: {
+                                Image(systemName: "trash")
+                                    .frame(width: 44, height: 44)
+                            }
                                 .disabled(model.isHomeworkLoading)
                                 .accessibilityLabel(localized("accessibility.remove_reference"))
                         }
@@ -4245,7 +4282,6 @@ private struct OpenClawMessageBubble: View {
                 }
             }
             .accessibilityAction(named: Text(localized("chat.copy.message")), onCopy)
-            .accessibilityIdentifier("chatMessage.\(message.id)")
             if message.role != .user {
                 Spacer(minLength: 28)
             }
@@ -4356,9 +4392,14 @@ private struct ProfileTab: View {
                                 Button {
                                     isEditingProfile = true
                                 } label: {
-                                    Image(systemName: "pencil")
-                                        .frame(width: 36, height: 36)
+                                    ZStack {
+                                        Color.clear
+                                        Image(systemName: "pencil")
+                                    }
+                                    .frame(width: 44, height: 44)
                                 }
+                                .frame(width: 44, height: 44)
+                                .contentShape(Rectangle())
                                 .buttonStyle(.plain)
                                 .foregroundStyle(NPColors.brandDark)
                                 .disabled(profileState.snapshot == nil)
@@ -4593,7 +4634,7 @@ private struct ProfileTab: View {
                         model.loadAIModels(force: true)
                     } label: {
                         Image(systemName: "arrow.clockwise")
-                            .frame(width: 36, height: 36)
+                            .frame(width: 44, height: 44)
                     }
                     .buttonStyle(.plain)
                     .foregroundStyle(NPColors.brandDark)
@@ -5032,7 +5073,7 @@ private struct IconButton: View {
         Button(action: action) {
             Image(systemName: systemImage)
                 .font(.system(size: 17))
-                .frame(width: 28, height: 28)
+                .frame(width: 44, height: 44)
         }
         .buttonStyle(.plain)
         .foregroundStyle(NPColors.brand)
@@ -5954,6 +5995,7 @@ private struct ImagePreview: View {
                     .foregroundStyle(Color.white)
                     .padding(18)
             }
+            .accessibilityIdentifier("imagePreviewCloseButton")
         }
     }
 }

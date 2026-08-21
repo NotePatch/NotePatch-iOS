@@ -186,7 +186,7 @@ struct AppFeedbackOverlay: View {
     }
 
     var body: some View {
-        ZStack {
+        ZStack(alignment: .topLeading) {
             AppActivityBar(presentation: activity)
                 .padding(.top, safeAreaInsets.top)
                 .frame(maxHeight: .infinity, alignment: .top)
@@ -217,7 +217,7 @@ struct AppFeedbackOverlay: View {
                 onOutsideTap: presentation.dismissFromOutsideTap
             )
             .frame(width: 0, height: 0)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .accessibilityHidden(true)
         }
         .animation(.spring(response: 0.28, dampingFraction: 0.86), value: presentation.isVisible)
         .animation(.easeInOut(duration: 0.18), value: item)
@@ -230,7 +230,6 @@ struct AppFeedbackOverlay: View {
         }
         .onPreferenceChange(AppFeedbackFramePreferenceKey.self) { toastFrame = $0 }
         .onDisappear { presentation.hide() }
-        .accessibilityElement(children: .contain)
     }
 
     private var bottomOffset: CGFloat {

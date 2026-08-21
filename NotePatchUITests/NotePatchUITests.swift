@@ -17,6 +17,174 @@ final class NotePatchUITests: XCTestCase {
         return app
     }
 
+    private func keepScreenshot(_ app: XCUIApplication, name: String) {
+        XCTContext.runActivity(named: name) { activity in
+            let attachment = XCTAttachment(screenshot: app.screenshot())
+            attachment.name = name
+            attachment.lifetime = .keepAlways
+            activity.add(attachment)
+        }
+    }
+
+    private func assertInsideScreen(
+        _ element: XCUIElement,
+        app: XCUIApplication,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        XCTAssertTrue(element.exists, "Missing element", file: file, line: line)
+        let frame = element.frame
+        XCTAssertGreaterThanOrEqual(frame.minX, app.frame.minX - 1, file: file, line: line)
+        XCTAssertGreaterThanOrEqual(frame.minY, app.frame.minY - 1, file: file, line: line)
+        XCTAssertLessThanOrEqual(frame.maxX, app.frame.maxX + 1, file: file, line: line)
+        XCTAssertLessThanOrEqual(frame.maxY, app.frame.maxY + 1, file: file, line: line)
+    }
+
+    private func assertMinimumHitSize(
+        _ element: XCUIElement,
+        width: CGFloat = 44,
+        height: CGFloat = 44,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        XCTAssertTrue(element.exists, "Missing interactive element", file: file, line: line)
+        XCTAssertGreaterThanOrEqual(element.frame.width, width - 0.5, file: file, line: line)
+        XCTAssertGreaterThanOrEqual(element.frame.height, height - 0.5, file: file, line: line)
+    }
+
+    @MainActor
+    func testVisualAuditCorePages() throws {
+        let app = makeApp(["-NotePatchUITestWorkbench", "-NotePatchUITestLongChat"])
+        app.launch()
+
+        let navigation = app.otherElements["workbenchTabs"]
+        XCTAssertTrue(navigation.waitForExistence(timeout: 5))
+        assertInsideScreen(navigation, app: app)
+        assertMinimumHitSize(app.buttons["uploadFAB"])
+        keepScreenshot(app, name: "audit-home-top")
+
+        app.buttons["homeMetricDocuments"].tap()
+        XCTAssertTrue(app.descendants(matching: .any)["documentsList"].waitForExistence(timeout: 3))
+        keepScreenshot(app, name: "audit-documents")
+        app.navigationBars.buttons.firstMatch.tap()
+
+        app.buttons["tab.notes"].tap()
+        let subsectionPicker = app.scrollViews["notesSubsectionPicker"]
+        XCTAssertTrue(subsectionPicker.waitForExistence(timeout: 3))
+        for identifier in [
+            "notesSubsection.notes", "notesSubsection.units", "notesSubsection.search",
+            "notesSubsection.homework", "notesSubsection.flashcards"
+        ] {
+            assertMinimumHitSize(app.buttons[identifier], width: 44, height: 44)
+        }
+        keepScreenshot(app, name: "audit-notes")
+
+        app.buttons["notesSubsection.units"].tap()
+        XCTAssertTrue(app.descendants(matching: .any)["learningUnitsSection"].waitForExistence(timeout: 3))
+        keepScreenshot(app, name: "audit-units")
+
+        app.buttons["notesSubsection.search"].tap()
+        XCTAssertTrue(app.textFields["knowledgeQueryField"].waitForExistence(timeout: 3))
+        keepScreenshot(app, name: "audit-search")
+
+        app.buttons["notesSubsection.homework"].tap()
+        XCTAssertTrue(app.descendants(matching: .any)["homeworkGradingSection"].waitForExistence(timeout: 3))
+        keepScreenshot(app, name: "audit-homework")
+
+        app.buttons["notesSubsection.flashcards"].tap()
+        XCTAssertTrue(app.descendants(matching: .any)["flashcardsSection"].waitForExistence(timeout: 3))
+        assertMinimumHitSize(app.buttons["flashcardCard"])
+        keepScreenshot(app, name: "audit-flashcards")
+
+        app.buttons["tab.ai"].tap()
+        XCTAssertTrue(app.textViews["openClawComposerTextView"].waitForExistence(timeout: 3))
+        assertMinimumHitSize(app.buttons["chatHistoryButton"])
+        assertMinimumHitSize(app.buttons["copyConversationButton"])
+        assertMinimumHitSize(app.buttons["openClawAttachmentButton"])
+        assertMinimumHitSize(app.buttons["openClawSendButton"])
+        keepScreenshot(app, name: "audit-ai-chat")
+
+        app.buttons["tab.me"].tap()
+        XCTAssertTrue(app.buttons["profileEditButton"].waitForExistence(timeout: 3))
+        assertMinimumHitSize(app.buttons["profileEditButton"])
+        keepScreenshot(app, name: "audit-profile-top")
+        let signOut = app.buttons["profileSignOut"]
+        for _ in 0..<8 where signOut.frame.maxY > navigation.frame.minY - 20 {
+            app.swipeUp()
+        }
+        XCTAssertTrue(signOut.isHittable)
+        XCTAssertLessThanOrEqual(signOut.frame.maxY, navigation.frame.minY - 20)
+        keepScreenshot(app, name: "audit-profile-bottom")
+    }
+
+    @MainActor
+    func testVisualAuditInteractiveLayers() throws {
+        let app = makeApp([
+            "-NotePatchUITestWorkbench", "-NotePatchUITestPendingImage",
+            "-NotePatchUITestConversations", "-NotePatchUITestPurgeFailure"
+        ])
+        app.launch()
+        XCTAssertTrue(app.otherElements["workbenchTabs"].waitForExistence(timeout: 5))
+
+        app.buttons["homeActiveTask"].tap()
+        XCTAssertTrue(app.descendants(matching: .any)["taskScreen"].waitForExistence(timeout: 3))
+        keepScreenshot(app, name: "audit-task")
+        app.navigationBars.buttons.firstMatch.tap()
+
+        app.buttons["uploadFAB"].tap()
+        XCTAssertTrue(app.descendants(matching: .any)["uploadScreen"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.buttons["uploadQueueThumbnail"].waitForExistence(timeout: 3))
+        let previewButton = app.buttons.matching(NSPredicate(format: "label BEGINSWITH '预览 '")).firstMatch
+        let removeButton = app.buttons.matching(NSPredicate(format: "label BEGINSWITH '移除 '")).firstMatch
+        assertMinimumHitSize(previewButton)
+        assertMinimumHitSize(removeButton)
+        keepScreenshot(app, name: "audit-upload-queue")
+        app.buttons["uploadQueueThumbnail"].tap()
+        XCTAssertTrue(app.buttons["imagePreviewCloseButton"].waitForExistence(timeout: 3))
+        keepScreenshot(app, name: "audit-local-image-preview")
+        app.buttons["imagePreviewCloseButton"].tap()
+        app.buttons["closeUploadScreenButton"].tap()
+
+        app.buttons["tab.ai"].tap()
+        XCTAssertTrue(app.buttons["chatHistoryButton"].waitForExistence(timeout: 3))
+        app.buttons["chatHistoryButton"].tap()
+        XCTAssertTrue(app.descendants(matching: .any)["chatConversationDrawer"].waitForExistence(timeout: 3))
+        assertMinimumHitSize(app.buttons["chatNewConversationButton"])
+        keepScreenshot(app, name: "audit-conversation-drawer")
+        app.descendants(matching: .any)["chatConversationBackdrop"].tap()
+        sleep(1)
+        keepScreenshot(app, name: "audit-conversation-drawer-closed")
+
+        let navigation = app.otherElements["workbenchTabs"]
+        let navigationFrame = navigation.frame
+        let editor = app.textViews["openClawComposerTextView"]
+        XCTAssertTrue(editor.exists)
+        XCTAssertTrue(editor.isEnabled)
+        editor.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 3))
+        XCTAssertEqual(navigation.frame.minY, navigationFrame.minY, accuracy: 1)
+        XCTAssertLessThanOrEqual(editor.frame.maxY, app.keyboards.firstMatch.frame.minY + 1)
+        keepScreenshot(app, name: "audit-ai-keyboard")
+        app.swipeDown()
+
+        app.buttons["tab.me"].tap()
+        XCTAssertTrue(app.buttons["profileEditButton"].waitForExistence(timeout: 3))
+        app.buttons["profileEditButton"].tap()
+        XCTAssertTrue(app.descendants(matching: .any)["profileEditSheet"].waitForExistence(timeout: 3))
+        keepScreenshot(app, name: "audit-profile-editor")
+        app.buttons["取消"].tap()
+
+        app.buttons["tab.notes"].tap()
+        XCTAssertTrue(app.buttons["studyNoteRow-note-1"].waitForExistence(timeout: 3))
+        app.buttons["studyNoteRow-note-1"].tap()
+        XCTAssertTrue(app.webViews.firstMatch.waitForExistence(timeout: 5))
+        keepScreenshot(app, name: "audit-note-reader")
+        app.buttons["editStudyNoteButton"].tap()
+        XCTAssertTrue(app.textFields["studyNoteEditorTitle"].waitForExistence(timeout: 3))
+        keepScreenshot(app, name: "audit-note-editor")
+        app.buttons["取消"].tap()
+    }
+
     @MainActor
     func testGlobalFeedbackPinsDismissesWithoutSwallowingTapAndCanBeDisabled() throws {
         let app = makeApp(["-NotePatchUITestWorkbench", "-NotePatchUITestFeedbackSuccess"])
@@ -66,6 +234,24 @@ final class NotePatchUITests: XCTestCase {
         XCTAssertTrue(newConversation.exists)
         XCTAssertGreaterThanOrEqual(newConversation.frame.minY, 50)
         XCTAssertLessThanOrEqual(newConversation.frame.maxY, app.frame.maxY)
+    }
+
+    @MainActor
+    func testConversationDrawerCloseRestoresComposerInteraction() throws {
+        let app = makeApp(["-NotePatchUITestWorkbench", "-NotePatchUITestConversations"])
+        app.launch()
+        XCTAssertTrue(app.otherElements["workbenchTabs"].waitForExistence(timeout: 5))
+        app.buttons["tab.ai"].tap()
+        XCTAssertTrue(app.buttons["chatHistoryButton"].waitForExistence(timeout: 3))
+        app.buttons["chatHistoryButton"].tap()
+        XCTAssertTrue(app.descendants(matching: .any)["chatConversationDrawer"].waitForExistence(timeout: 3))
+        app.descendants(matching: .any)["chatConversationBackdrop"].tap()
+        sleep(1)
+
+        let editor = app.textViews["openClawComposerTextView"]
+        XCTAssertTrue(editor.exists)
+        editor.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 3))
     }
 
     @MainActor
@@ -314,7 +500,7 @@ final class NotePatchUITests: XCTestCase {
             XCTAssertTrue(uploadButton.isHittable, "Upload button is not hittable on \(tabIdentifier)")
             uploadButton.tap()
 
-            let closeButton = app.buttons["uploadScreen"]
+            let closeButton = app.buttons["closeUploadScreenButton"]
             XCTAssertTrue(closeButton.waitForExistence(timeout: 3), "Upload screen did not open from \(tabIdentifier)")
             closeButton.tap()
             XCTAssertFalse(closeButton.exists, "Upload screen did not close on \(tabIdentifier)")
