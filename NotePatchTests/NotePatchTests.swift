@@ -18,6 +18,13 @@ private actor ThumbnailTestCounter {
 
 @Suite(.serialized)
 struct NotePatchTests {
+    // Hosted tests share the app container, so force the shared localization to
+    // simplified Chinese instead of depending on the simulator's ambient defaults.
+    init() {
+        // The shared AppLocalization singleton reads this on first access.
+        UserDefaults.standard.set(AppLanguage.simplifiedChinese.rawValue, forKey: "app_language")
+    }
+
     @MainActor
     private static func makeComposerTextView() -> UITextView {
         let textView = UITextView()
@@ -113,12 +120,19 @@ struct NotePatchTests {
         #expect(store.loadBaseURL() == defaultLearningBackendBaseURL)
         #expect(store.loadTUSBaseURL() == defaultTUSDBaseURL)
 
+        defaults.set("https://api.ls-jl.cn:8443/notepatch/1", forKey: "learning_base_url")
+        defaults.set(4, forKey: "api_base_url_contract_version")
+        defaults.set("https://api.ls-jl.cn:8443/notepatch/2/files/", forKey: "tusd_base_url")
+        #expect(store.loadBaseURL() == defaultLearningBackendBaseURL)
+        #expect(store.loadTUSBaseURL() == defaultTUSDBaseURL)
+        #expect(defaults.string(forKey: "learning_base_url") == defaultLearningBackendBaseURL)
+
         defaults.set("https://custom.example.test/root", forKey: "learning_base_url")
         defaults.set(3, forKey: "api_base_url_contract_version")
         defaults.set("https://uploads.example.test/custom/", forKey: "tusd_base_url")
         #expect(store.loadBaseURL() == "https://custom.example.test/root")
         #expect(store.loadTUSBaseURL() == "https://uploads.example.test/custom/")
-        #expect(defaults.integer(forKey: "api_base_url_contract_version") == 4)
+        #expect(defaults.integer(forKey: "api_base_url_contract_version") == 5)
 
         defaults.set("https://api.example.test/notepatch/api/v1", forKey: "learning_base_url")
         defaults.removeObject(forKey: "api_base_url_contract_version")
@@ -3739,6 +3753,71 @@ private final class TestWebViewNavigationProbe: NSObject, WKNavigationDelegate {
         continuation = nil
     }
 }
+
+    @Test @MainActor func openClawChatAttachment_sendsDocumentIdOnly() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("NotePatchChatAttachmentContractTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let fileURL = root.appendingPathComponent("question.png")
+        try Data().write(to: fileURL)
+        let file = LocalUploadFile(url: fileURL, filename: "question.png", mimeType: "image/png")
+
+        var chatBody: [String: Any]?
+        let session = Self.mockSession { request in
+            let path = request.url?.path ?? ""
+            switch (request.httpMethod, path) {
+            case ("POST", "/api/v1/workspaces/ws-1/documents/upload-session"):
+                return Self.response(request, status: 201, body: Self.uploadSessionJSON)
+            case ("POST", "/api/v1/workspaces/ws-1/documents/complete-upload"):
+                return Self.response(request, status: 200, body: Self.completedDocumentJSON)
+            case ("POST", "/api/v1/workspaces/ws-1/ai/chat"):
+                if let body = Self.requestBodyData(request) {
+                    chatBody = try? JSONSerialization.jsonObject(with: body) as? [String: Any]
+                }
+                return Self.response(request, status: 201, body: Self.taskJSON)
+            case ("GET", "/api/v1/workspaces/ws-1/tasks/task-1"):
+                return Self.response(
+                    request,
+                    status: 200,
+                    body: #"{"id":"task-1","workspace_id":"ws-1","task_type":"chat","status":"succeeded","resource_type":"conversation","resource_id":null,"payload":{},"result":{"answer":"done"},"error_message":null,"progress":100,"created_at":"","updated_at":""}"#
+                )
+            case ("GET", "/api/v1/workspaces/ws-1/tasks/task-1/events"):
+                return Self.response(request, status: 200, body: "[]")
+            default:
+                if request.httpMethod == "POST", request.url?.host == "192.168.100.123", path.hasPrefix("/files") {
+                    let response = HTTPURLResponse(
+                        url: try #require(request.url),
+                        statusCode: 201,
+                        httpVersion: nil,
+                        headerFields: ["Location": "upload-1", "Tus-Resumable": "1.0.0"]
+                    )!
+                    return (response, Data())
+                }
+                return Self.response(request, status: 500, body: #"{"detail":"unexpected request"}"#)
+            }
+        }
+        let suiteName = "NotePatchChatAttachmentContractTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let model = NotePatchViewModel(
+            settings: SettingsStore(defaults: defaults, keychain: KeychainStore(service: suiteName)),
+            backendSession: session,
+            tusSession: session,
+            cacheDirectory: root,
+            taskEventStreamingEnabled: false
+        )
+        model.session = SavedSession(baseURL: "https://api.test", tusBaseURL: "http://192.168.100.123:1080/files/", accessToken: "a", refreshToken: "r", expiresAt: "x", userId: "u", email: "u@test", fullName: nil, selectedWorkspaceId: "ws-1", aiHistoryEnabled: true)
+        model.selectedWorkspaceId = "ws-1"
+        model.openClawComposerState.attachments = [file]
+
+        #expect(model.startOpenClawChat(prompt: "这是什么？", attachments: [file]))
+        try await Self.waitUntil { !model.isOpenClawSending }
+
+        let input = try #require(chatBody?["input"] as? [String: Any])
+        let attachments = try #require(input["attachments"] as? [[String: Any]])
+        #expect(attachments == [["document_id": "doc-completed"]])
+    }
 
 private final class MockURLProtocol: URLProtocol {
     static var handler: ((URLRequest) throws -> (HTTPURLResponse, Data))?

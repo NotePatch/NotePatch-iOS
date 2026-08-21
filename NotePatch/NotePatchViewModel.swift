@@ -1301,16 +1301,10 @@ final class NotePatchViewModel: ObservableObject {
                     }
                 }
 
+                // Per backend contract, chat attachments are referenced by document_id only;
+                // filename/MIME are resolved server-side and must not be treated as trusted input.
                 let attachmentInput: [[String: Any]] = uploadedDocuments.map { document in
-                    var value: [String: Any] = [
-                        "document_id": document.id,
-                        "filename": document.originalFilename,
-                        "file_type": document.fileType
-                    ]
-                    if let mimeType = document.mimeType, !mimeType.isEmpty {
-                        value["mime_type"] = mimeType
-                    }
-                    return value
+                    ["document_id": document.id]
                 }
                 let input: [String: Any] = attachmentInput.isEmpty ? [:] : ["attachments": attachmentInput]
                 let chatSession = session ?? activeSession

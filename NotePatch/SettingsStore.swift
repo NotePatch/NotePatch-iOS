@@ -13,7 +13,7 @@ final class SettingsStore {
         "https://5mbps.me:8443/notepatch/2/files/",
         "https://api.ls-jl.cn:8443/notepatch/2/files/"
     ]
-    private static let apiBaseURLContractVersion = 4
+    private static let apiBaseURLContractVersion = 5
 
     private enum Keys {
         static let learningBaseURL = "learning_base_url"

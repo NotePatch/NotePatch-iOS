@@ -589,11 +589,13 @@ async function sendChat(
   prompt: string,
   conversationId?: string,
   attachmentDocumentIds: string[] = [],
+  clientLocale = Intl.DateTimeFormat().resolvedOptions().locale,
 ) {
   return apiFetch<Task>(`/workspaces/${workspaceId}/ai/chat`, {
     method: "POST",
     body: JSON.stringify({
       prompt,
+      client_locale: clientLocale,
       conversation_id: conversationId,
       input: { attachments: attachmentDocumentIds.map((document_id) => ({ document_id })) },
       options: {},
@@ -639,6 +641,32 @@ PATCH  /auth/preferences
 ```
 
 `GET /auth/me`、登录和 refresh 响应都会给出 `user.ai_history_enabled`。前端用 `PATCH /auth/preferences` 传 `{ "ai_history_enabled": false }` 关闭全局上下文注入；关闭后历史仍保留并可查看，但后续 OpenClaw 调用只发送当前 prompt。重新开启后，后端会自动传入该会话最近 `AI_CHAT_HISTORY_MESSAGE_LIMIT`（默认 20）条成功消息。删除会话是软删除，删除后不可继续发送或读取，关联的 queued/running OpenClaw task 会被协作取消。
+
+### 聊天流与停止
+
+`POST /api/v1/workspaces/{workspace_id}/ai/chat` 仍返回异步 task。每条消息可携带：
+
+```json
+{"prompt":"解释这道题","options":{"thinking":{"enabled":true,"effort":"low"}}}
+```
+
+未传时思考默认关闭。`effort` 可为 `minimal`、`low`、`medium`、`high` 或 `adaptive`。随后连接 `GET /api/v1/workspaces/{workspace_id}/tasks/{task_id}/events/stream`，逐条处理 `event: task_event`：`chat_answer_delta.data.delta` 追加回答草稿，`chat_reasoning_delta.data.delta` 追加可展示的推理摘要。两类事件都包含 `stream`、`chunk_index`、`attempt`、`characters`；用 SSE `id` 作为 `Last-Event-ID` 重连游标。收到 `chat_stream_started` 时清空当前 attempt 的草稿，收到 `done` 后刷新 task 与会话消息。
+
+流式增量的 `data` 固定为：
+
+```json
+{
+  "stream": "answer",
+  "delta": "本次增量文本",
+  "chunk_index": 3,
+  "attempt": 1,
+  "characters": 2048
+}
+```
+
+`stream` 可为 `answer` 或 `reasoning`。reasoning 是后端规范化后的安全进度摘要，不能当作模型原始思维链，也不写入下一轮聊天历史。客户端应接受 `chat_reasoning_unavailable`，此时继续展示回答即可；遇到 `chat_stream_truncated` 则保留已收到的片段，并在 task 完成后以 assistant message / `task.result.answer` 为最终正文。
+
+停止按钮调用 `POST /api/v1/workspaces/{workspace_id}/tasks/{task_id}/cancel`。响应为 `202 TaskRead`；queued 会立即取消，running 则等待 SSE 的 `cancelled`/`done`。保留当前已经显示的正文，不把 reasoning summary 写入聊天历史。
 
 新会话先以首条 prompt 作为临时标题（`title_source="prompt"`）。首轮回答成功后，后端让 OpenClaw 根据最早几条成功消息生成短标题并更新为 `title_source="ai"`；前端只需刷新会话列表，不应自行生成标题。用户通过 conversation PATCH 手动改名后会变为 `title_source="manual"`，后端不会再自动覆盖。标题生成失败不会影响聊天 task 或 assistant 回答，仍保留临时标题并在后续对话中重试。
 
@@ -784,7 +812,11 @@ UI 建议：
 
 后端内部区分 `default`、`ocr`、`chat` 和 `ai` 四个 worker queue：文档处理进入 `ocr`，扫描、purge、merge 等编排任务进入 `default`，交互聊天进入低延迟 `chat`，题目提取、知识库、笔记、批改、高亮和闪卡进入后台 `ai`。这个拆分不改变前端 API；学习 Skill 默认允许最多 300 秒执行，客户端应持续依据 task/events 展示进度。
 
-`POST /workspaces/{workspace_id}/ai/chat` 是唯一的 AI 对话入口。它创建后端异步 OpenClaw 任务，前端不直接调用 OpenClaw Gateway，也不要启动/停止容器。请求体使用 `{ "prompt": string, "conversation_id"?: string, "input": object, "options": object }`，响应是 `TaskRead`；随后轮询 task 与 events 获取 `task.result.answer` 或失败原因。会话历史由后端保存，是否注入 OpenClaw 由用户全局 `ai_history_enabled` 控制。后端会为每个用户维护独立 OpenClaw gateway 配置和用户数据目录；用户在线时 supervisor 保持 gateway 运行，worker 在任务前把该用户 personal workspace 的文档镜像到 OpenClaw workspace，再把 OpenClaw 输出上传回 SeaweedFS。
+`POST /workspaces/{workspace_id}/ai/chat` 是唯一的 AI 对话入口。它创建后端异步 OpenClaw 任务，前端不直接调用 OpenClaw Gateway，也不要启动/停止容器。请求体使用 `{ "prompt": string, "client_locale"?: string, "conversation_id"?: string, "input": object, "options": object }`，其中 `client_locale` 必须是 BCP 47 language tag；Web 可用浏览器 locale，Android 使用当前应用语言或 `Locale.getDefault().toLanguageTag()`。响应是 `TaskRead`；随后轮询 task 与 events 获取 `task.result.answer` 或失败原因。会话历史由后端保存，是否注入 OpenClaw 由用户全局 `ai_history_enabled` 控制。后端会为每个用户维护独立 OpenClaw gateway 配置和用户数据目录；用户在线时 supervisor 保持 gateway 运行，worker 在任务前创建 task-local 文档快照，再把 OpenClaw 输出上传回 SeaweedFS。
+
+镜像范围取决于附件：当前消息或启用历史后的消息显式引用附件时，worker 为该 task 创建仅包含这些附件的资料快照；无附件的普通聊天则在 task-local 目录镜像 personal workspace 全部 `uploaded/ready` 文档和可用 artifact。`openclaw_prepare.data.mirror_scope` 为 `attachments` 或 `workspace`；不可用对象会列在 `skipped_documents/skipped_artifacts`，而不是让 `documents/index.json` 静默为空。前端不需要、也不能直接访问该快照路径。
+
+新会话的首条 prompt 是临时标题。回答成功后，后端使用固定低成本标题模型且关闭思考：用户消息存在明确主要语言时标题跟随该语言；内容过短、混合或难以判断时使用 `client_locale`。未显式提交 locale 时后端读取 `Accept-Language`，再回退到部署默认值。客户端只需在 task 终态后刷新会话列表；用户手动标题不会被自动覆盖。
 
 OpenClaw 模型凭据和 provider base URL 由后端部署级 `.env` 管理。前端不提交、不保存、不展示 provider key 或 base URL，只使用以下 workspace 隔离接口：
 
