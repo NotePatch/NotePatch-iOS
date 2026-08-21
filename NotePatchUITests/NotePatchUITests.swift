@@ -40,6 +40,17 @@ final class NotePatchUITests: XCTestCase {
         XCTAssertLessThanOrEqual(frame.maxY, app.frame.maxY + 1, file: file, line: line)
     }
 
+    private func assertHorizontallyInsideScreen(
+        _ element: XCUIElement,
+        app: XCUIApplication,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        XCTAssertTrue(element.exists, "Missing element", file: file, line: line)
+        XCTAssertGreaterThanOrEqual(element.frame.minX, app.frame.minX - 1, file: file, line: line)
+        XCTAssertLessThanOrEqual(element.frame.maxX, app.frame.maxX + 1, file: file, line: line)
+    }
+
     private func assertMinimumHitSize(
         _ element: XCUIElement,
         width: CGFloat = 44,
@@ -50,6 +61,41 @@ final class NotePatchUITests: XCTestCase {
         XCTAssertTrue(element.exists, "Missing interactive element", file: file, line: line)
         XCTAssertGreaterThanOrEqual(element.frame.width, width - 0.5, file: file, line: line)
         XCTAssertGreaterThanOrEqual(element.frame.height, height - 0.5, file: file, line: line)
+    }
+
+    private func dismissKeyboardForAudit(_ app: XCUIApplication, editor: XCUIElement) {
+        let keyboard = app.keyboards.firstMatch
+        guard keyboard.exists else { return }
+
+        let startY = max(0.1, (editor.frame.minY - 80) / app.frame.height)
+        let belowTextFieldY = min(0.95, (editor.frame.maxY + 28) / app.frame.height)
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: startY))
+            .press(
+                forDuration: 0.05,
+                thenDragTo: app.coordinate(
+                    withNormalizedOffset: CGVector(dx: 0.5, dy: belowTextFieldY)
+                )
+            )
+
+        let dismissed = expectation(
+            for: NSPredicate(format: "exists == false"),
+            evaluatedWith: keyboard
+        )
+        wait(for: [dismissed], timeout: 3)
+    }
+
+    @discardableResult
+    private func assertAppearsQuickly(
+        _ element: XCUIElement,
+        timeout: TimeInterval = 1.5,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) -> TimeInterval {
+        let startedAt = Date()
+        XCTAssertTrue(element.waitForExistence(timeout: timeout), file: file, line: line)
+        let elapsed = Date().timeIntervalSince(startedAt)
+        XCTAssertLessThan(elapsed, timeout, file: file, line: line)
+        return elapsed
     }
 
     @MainActor
@@ -94,6 +140,11 @@ final class NotePatchUITests: XCTestCase {
         app.buttons["notesSubsection.flashcards"].tap()
         XCTAssertTrue(app.descendants(matching: .any)["flashcardsSection"].waitForExistence(timeout: 3))
         assertMinimumHitSize(app.buttons["flashcardCard"])
+        let flashcardSubtitle = app.staticTexts["按复习优先级巩固知识点"]
+        let flashcardUnitPicker = app.descendants(matching: .any)["flashcardLearningUnitPicker"]
+        XCTAssertTrue(flashcardSubtitle.exists)
+        XCTAssertTrue(flashcardUnitPicker.exists)
+        XCTAssertLessThanOrEqual(flashcardSubtitle.frame.maxY, flashcardUnitPicker.frame.minY - 4)
         keepScreenshot(app, name: "audit-flashcards")
 
         app.buttons["tab.ai"].tap()
@@ -165,7 +216,7 @@ final class NotePatchUITests: XCTestCase {
         XCTAssertEqual(navigation.frame.minY, navigationFrame.minY, accuracy: 1)
         XCTAssertLessThanOrEqual(editor.frame.maxY, app.keyboards.firstMatch.frame.minY + 1)
         keepScreenshot(app, name: "audit-ai-keyboard")
-        app.swipeDown()
+        dismissKeyboardForAudit(app, editor: editor)
 
         app.buttons["tab.me"].tap()
         XCTAssertTrue(app.buttons["profileEditButton"].waitForExistence(timeout: 3))
@@ -183,6 +234,73 @@ final class NotePatchUITests: XCTestCase {
         XCTAssertTrue(app.textFields["studyNoteEditorTitle"].waitForExistence(timeout: 3))
         keepScreenshot(app, name: "audit-note-editor")
         app.buttons["取消"].tap()
+    }
+
+    @MainActor
+    func testLandscapePrimaryPagesKeepControlsVisible() throws {
+        let app = makeApp(["-NotePatchUITestWorkbench", "-NotePatchUITestLongChat"])
+        XCUIDevice.shared.orientation = .landscapeLeft
+        app.launch()
+        XCTAssertTrue(app.otherElements["workbenchTabs"].waitForExistence(timeout: 5))
+        XCTAssertGreaterThan(app.frame.width, app.frame.height)
+
+        let navigation = app.otherElements["workbenchTabs"]
+        assertInsideScreen(navigation, app: app)
+        assertMinimumHitSize(app.buttons["uploadFAB"])
+
+        app.buttons["tab.notes"].tap()
+        assertAppearsQuickly(app.scrollViews["notesSubsectionPicker"])
+        app.buttons["notesSubsection.flashcards"].tap()
+        assertAppearsQuickly(app.descendants(matching: .any)["flashcardsSection"])
+        let flashcard = app.buttons["flashcardCard"]
+        for _ in 0..<4 where !flashcard.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(flashcard.isHittable)
+        assertHorizontallyInsideScreen(flashcard, app: app)
+
+        app.buttons["tab.ai"].tap()
+        assertAppearsQuickly(app.textViews["openClawComposerTextView"])
+        assertInsideScreen(app.buttons["chatHistoryButton"], app: app)
+        assertInsideScreen(app.buttons["openClawAttachmentButton"], app: app)
+        assertInsideScreen(app.buttons["openClawSendButton"], app: app)
+
+        app.buttons["tab.me"].tap()
+        assertAppearsQuickly(app.buttons["profileEditButton"])
+        assertInsideScreen(app.buttons["profileEditButton"], app: app)
+        keepScreenshot(app, name: "audit-landscape-profile")
+    }
+
+    @MainActor
+    func testOfflinePrimaryInteractionsRemainResponsive() throws {
+        let app = makeApp(["-NotePatchUITestWorkbench", "-NotePatchUITestLongChat"])
+        app.launch()
+        XCTAssertTrue(app.otherElements["workbenchTabs"].waitForExistence(timeout: 5))
+
+        let destinations: [(String, XCUIElement)] = [
+            ("tab.notes", app.scrollViews["notesSubsectionPicker"]),
+            ("tab.ai", app.textViews["openClawComposerTextView"]),
+            ("tab.me", app.buttons["profileEditButton"]),
+            ("tab.home", app.descendants(matching: .any)["homeDashboard"])
+        ]
+        for _ in 0..<2 {
+            for (tab, destination) in destinations {
+                app.buttons[tab].tap()
+                assertAppearsQuickly(destination)
+            }
+        }
+
+        app.buttons["uploadFAB"].tap()
+        assertAppearsQuickly(app.buttons["closeUploadScreenButton"])
+        app.buttons["closeUploadScreenButton"].tap()
+        XCTAssertFalse(app.buttons["closeUploadScreenButton"].isHittable)
+
+        app.buttons["tab.ai"].tap()
+        assertAppearsQuickly(app.buttons["chatHistoryButton"])
+        app.buttons["chatHistoryButton"].tap()
+        assertAppearsQuickly(app.descendants(matching: .any)["chatConversationDrawer"])
+        app.descendants(matching: .any)["chatConversationBackdrop"].tap()
+        assertAppearsQuickly(app.textViews["openClawComposerTextView"])
     }
 
     @MainActor

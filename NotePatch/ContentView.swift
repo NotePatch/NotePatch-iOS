@@ -3482,6 +3482,7 @@ private struct LearningTab: View {
                 .padding(.horizontal, 16)
                 .workbenchContentBottomPadding()
             }
+            .accessibilityIdentifier("learningContentScroll")
         }
         .onChange(of: model.selectedLearningSection) { section in
             if section == .flashcards {
@@ -3711,7 +3712,7 @@ private struct FlashcardsSection: View {
                             }
                         }
                         .pickerStyle(.menu)
-                        .opacity(0.02)
+                        .opacity(0.001)
                         .accessibilityIdentifier("flashcardLearningUnitPicker")
                     }
 
@@ -3733,7 +3734,7 @@ private struct FlashcardsSection: View {
                             }
                         }
                         .pickerStyle(.menu)
-                        .opacity(0.02)
+                        .opacity(0.001)
                         .accessibilityIdentifier("flashcardDeckPicker")
                     }
                 }
@@ -3809,6 +3810,7 @@ private struct FlashcardsSection: View {
                 .buttonStyle(NPSecondaryButtonStyle())
                 .disabled(model.flashcardIndex == 0)
                 .accessibilityLabel(localized("flashcards.previous"))
+                .accessibilityIdentifier("flashcardPreviousButton")
 
                 Spacer()
                 Text(localizedFormat(
@@ -3828,6 +3830,7 @@ private struct FlashcardsSection: View {
                 .buttonStyle(NPSecondaryButtonStyle())
                 .disabled(model.flashcardIndex + 1 >= detail.cards.count)
                 .accessibilityLabel(localized("flashcards.next"))
+                .accessibilityIdentifier("flashcardNextButton")
             }
         }
     }
@@ -3915,19 +3918,38 @@ private struct LearningSectionHeader: View {
     let subtitle: String
     let isLoading: Bool
     let onRefresh: () -> Void
+    @Environment(\.sizeCategory) private var sizeCategory
 
+    @ViewBuilder
     var body: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(localized(title)).npHeading()
-                Text(localized(subtitle)).npCaption()
+        if sizeCategory.isAccessibilityCategory {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(alignment: .center) {
+                    Text(localized(title)).npHeading()
+                    Spacer(minLength: 12)
+                    refreshButton
+                }
+                Text(localized(subtitle))
+                    .npCaption()
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            Spacer()
-            Button(action: onRefresh) { Image(systemName: "arrow.clockwise") }
-                .buttonStyle(NPToolbarIconButtonStyle())
-                .disabled(isLoading)
-                .accessibilityLabel(localizedFormat("accessibility.refresh_named", localized(title)))
+        } else {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(localized(title)).npHeading()
+                    Text(localized(subtitle)).npCaption()
+                }
+                Spacer()
+                refreshButton
+            }
         }
+    }
+
+    private var refreshButton: some View {
+        Button(action: onRefresh) { Image(systemName: "arrow.clockwise") }
+            .buttonStyle(NPToolbarIconButtonStyle())
+            .disabled(isLoading)
+            .accessibilityLabel(localizedFormat("accessibility.refresh_named", localized(title)))
     }
 }
 
