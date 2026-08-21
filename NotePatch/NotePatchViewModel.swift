@@ -208,6 +208,7 @@ final class NotePatchViewModel: ObservableObject {
     @Published var passwordText = ""
     @Published var fullNameText: String
     @Published var isBusy = false
+    @Published private(set) var isGlobalFeedbackEnabled: Bool
     @Published private var statusDisplayText: AppDisplayText = .raw("")
     @Published private var errorDisplayText: AppDisplayText?
     @Published var selectedDocumentsSection: DocumentsSection = .documents
@@ -472,6 +473,9 @@ final class NotePatchViewModel: ObservableObject {
         cacheDirectory: URL = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first ?? FileManager.default.temporaryDirectory,
         taskEventStreamingEnabled: Bool = true
     ) {
+        if ProcessInfo.processInfo.arguments.contains("-NotePatchUITestResetGlobalFeedback") {
+            settings.saveGlobalFeedbackEnabled(true)
+        }
         if ProcessInfo.processInfo.arguments.contains("-NotePatchUITestNoSession") {
             settings.clearSession()
         }
@@ -491,6 +495,7 @@ final class NotePatchViewModel: ObservableObject {
         self.tusBaseURLText = loadedSession?.tusBaseURL ?? settings.loadTUSBaseURL()
         self.emailText = loadedSession?.email ?? ""
         self.fullNameText = loadedSession?.fullName ?? ""
+        self.isGlobalFeedbackEnabled = settings.loadGlobalFeedbackEnabled()
         self.selectedWorkspaceId = loadedSession?.selectedWorkspaceId
         self.aiHistoryEnabled = loadedSession?.aiHistoryEnabled ?? true
         self.openClawState.messages = [welcomeChatMessage]
@@ -500,6 +505,27 @@ final class NotePatchViewModel: ObservableObject {
         if ProcessInfo.processInfo.arguments.contains("-NotePatchUITestPendingImage") {
             if let file = makeUITestPendingImage(in: cacheDirectory) {
                 queuedUploadItems = [QueuedUploadItem(file: file, documentKind: uploadDocumentKind, learningMetadata: uploadLearningMetadata)]
+            }
+        }
+        installFeedbackUITestFixtureIfNeeded()
+    }
+
+    private func installFeedbackUITestFixtureIfNeeded() {
+        let arguments = ProcessInfo.processInfo.arguments
+        guard arguments.contains(where: { $0.hasPrefix("-NotePatchUITestFeedback") }) else { return }
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 350_000_000)
+            guard let self else { return }
+            if arguments.contains("-NotePatchUITestFeedbackBusy") {
+                self.isBusy = true
+                self.setStatus("common.processing")
+            } else if arguments.contains("-NotePatchUITestFeedbackUploadError") {
+                self.workbenchNavigationState.isUploadPresented = true
+                self.setRawError("Upload failed")
+            } else if arguments.contains("-NotePatchUITestFeedbackError") {
+                self.setRawError("Connection failed")
+            } else {
+                self.presentStatus("operation.api_connected")
             }
         }
     }
@@ -634,11 +660,16 @@ final class NotePatchViewModel: ObservableObject {
         loadHomeDashboard(force: true)
     }
 
-    func dismissStatusBanner() {
+    func dismissGlobalFeedback() {
         errorMessage = nil
-        if !isBusy {
-            statusMessage = ""
-        }
+        statusMessage = ""
+    }
+
+    func updateGlobalFeedbackEnabled(_ enabled: Bool) {
+        guard enabled != isGlobalFeedbackEnabled else { return }
+        isGlobalFeedbackEnabled = enabled
+        settings.saveGlobalFeedbackEnabled(enabled)
+        dismissGlobalFeedback()
     }
 
     func checkAPIConnection() {
@@ -4065,7 +4096,8 @@ final class NotePatchViewModel: ObservableObject {
             ]
         }
         if ProcessInfo.processInfo.arguments.contains("-NotePatchUITestLongChat") {
-            openClawMessages = (0..<100).map { index in
+            let messageCount = ProcessInfo.processInfo.arguments.contains("-NotePatchUITestKeyboardBoundary") ? 12 : 100
+            openClawMessages = (0..<messageCount).map { index in
                 OpenClawChatMessage(
                     id: "ui-chat-\(index)",
                     role: index.isMultiple(of: 2) ? .user : .assistant,

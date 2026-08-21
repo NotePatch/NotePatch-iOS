@@ -426,18 +426,16 @@ func workbenchBottomObstruction(
     return max(0, containerHeight - bottomBarFrame.minY)
 }
 
-func workbenchStatusCenterY(
-    containerHeight: CGFloat,
-    topSafeArea: CGFloat,
-    bottomObstruction: CGFloat
-) -> CGFloat {
-    guard containerHeight > 0 else { return 0 }
-    let preferred = containerHeight * 0.66
-    let minimum = topSafeArea + 56
-    let maximum = max(minimum, containerHeight - bottomObstruction - 56)
-    return min(max(preferred, minimum), maximum)
-}
-
 func workbenchBottomBarAdditionalPadding(safeAreaBottom: CGFloat) -> CGFloat {
     safeAreaBottom > 0.5 ? 0 : 8
+}
+
+@MainActor
+func currentAppWindowSafeAreaInsets() -> UIEdgeInsets {
+    let windows = UIApplication.shared.connectedScenes
+        .compactMap { $0 as? UIWindowScene }
+        .flatMap(\.windows)
+    return windows.first(where: \.isKeyWindow)?.safeAreaInsets
+        ?? windows.first?.safeAreaInsets
+        ?? .zero
 }

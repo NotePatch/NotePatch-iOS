@@ -44,14 +44,41 @@ private extension View {
 
 struct ContentView: View {
     @StateObject private var model = NotePatchViewModel()
+    @StateObject private var feedbackPresentation: AppFeedbackPresentationState
     @Environment(\.scenePhase) private var scenePhase
 
-    var body: some View {
-        AuthenticationGate(
-            model: model,
-            session: model.session
+    init() {
+        let isFeedbackUITest = ProcessInfo.processInfo.arguments.contains {
+            $0.hasPrefix("-NotePatchUITestFeedback")
+        }
+        _feedbackPresentation = StateObject(
+            wrappedValue: AppFeedbackPresentationState(
+                autoDismissNanoseconds: isFeedbackUITest ? 5_000_000_000 : 2_000_000_000
+            )
         )
-        .equatable()
+    }
+
+    var body: some View {
+        GeometryReader { geometry in
+            ZStack {
+                AuthenticationGate(
+                    model: model,
+                    session: model.session
+                )
+                .equatable()
+
+                AppFeedbackOverlay(
+                    model: model,
+                    profileState: model.userProfileState,
+                    navigationState: model.workbenchNavigationState,
+                    presentation: feedbackPresentation,
+                    containerSize: geometry.size,
+                    safeAreaInsets: geometry.safeAreaInsets
+                )
+                .zIndex(100)
+            }
+            .coordinateSpace(name: AppFeedbackCoordinateSpace.name)
+        }
         .task {
             await model.restoreIfNeeded()
         }
@@ -207,7 +234,12 @@ private struct AuthScreen: View {
                         .disabled(model.isBusy)
                     }
 
-                    StatusPanel(isBusy: model.isBusy, statusMessage: model.statusMessage, errorMessage: model.errorMessage)
+                    if !model.isGlobalFeedbackEnabled {
+                        AuthInlineFeedback(
+                            statusMessage: model.statusMessage,
+                            errorMessage: model.errorMessage
+                        )
+                    }
                 }
                 .frame(maxWidth: 520)
                 .opacity(appear ? 1 : 0)
@@ -280,13 +312,6 @@ private struct WorkbenchScreen: View {
                 .modifier(WorkbenchKeyboardSafeAreaModifier(keepsBottomBarFixed: navigationState.selectedTab == .openClaw))
                 .allowsHitTesting(!navigationState.isUploadPresented)
 
-            WorkbenchStatusOverlayHost(
-                model: model,
-                topSafeAreaInset: topSafeAreaInset,
-                bottomOffset: bottomObstruction + 12
-            )
-            .zIndex(12)
-
             KeyboardAwareWorkbenchBottomBar(
                 selection: $navigationState.selectedTab,
                 isKeyboardVisible: $navigationState.isBottomBarHiddenForKeyboard
@@ -351,23 +376,6 @@ private struct WorkbenchScreen: View {
         }
     }
 
-}
-
-private struct WorkbenchStatusOverlayHost: View {
-    @ObservedObject var model: NotePatchViewModel
-    let topSafeAreaInset: CGFloat
-    let bottomOffset: CGFloat
-
-    var body: some View {
-        WorkbenchStatusOverlay(
-            isBusy: model.isBusy || model.isConversationMutating || model.isAIPreferenceUpdating || model.isHomeworkLoading || model.isStudyNoteSaving,
-            statusMessage: model.statusMessage,
-            errorMessage: model.errorMessage,
-            topSafeAreaInset: topSafeAreaInset,
-            bottomOffset: bottomOffset,
-            onDismiss: model.dismissStatusBanner
-        )
-    }
 }
 
 private struct KeyboardAwareWorkbenchBottomBar: View {
@@ -2584,9 +2592,9 @@ private struct OpenClawChatTab: View {
                             }
                         }
                     }
-                    .accessibilityIdentifier("openClawMessages")
                     }
                 }
+                .accessibilityIdentifier("openClawMessages")
                 // ——— Composer bar ———
                 VStack(spacing: 0) {
                     composer
@@ -2606,9 +2614,9 @@ private struct OpenClawChatTab: View {
                     .opacity(isKeyboardPresented ? 0 : 1)
                 }
                 .padding(.bottom, isKeyboardPresented ? NPSpacing.small : bottomObstruction)
-                .offset(y: -keyboardOffset)
-                .animation(.easeOut(duration: 0.22), value: keyboardOffset)
             }
+            .padding(.bottom, keyboardOffset)
+            .animation(.easeOut(duration: 0.22), value: keyboardOffset)
             }
 
             if !isConversationDrawerOpen {
@@ -2756,6 +2764,9 @@ private struct OpenClawChatTab: View {
     private var conversationDrawer: some View {
         GeometryReader { proxy in
             let drawerWidth = min(320, proxy.size.width * 0.82)
+            let windowInsets = currentAppWindowSafeAreaInsets()
+            let topSafeAreaInset = max(proxy.safeAreaInsets.top, windowInsets.top)
+            let bottomSafeAreaInset = max(proxy.safeAreaInsets.bottom, windowInsets.bottom)
             ZStack(alignment: .leading) {
                 Color.black.opacity(0.32)
                     .ignoresSafeArea()
@@ -2763,7 +2774,10 @@ private struct OpenClawChatTab: View {
                     .onTapGesture {
                         closeConversationDrawer()
                     }
-                conversationDrawerPanel
+                conversationDrawerPanel(
+                    topSafeAreaInset: topSafeAreaInset,
+                    bottomSafeAreaInset: bottomSafeAreaInset
+                )
                     .frame(width: drawerWidth)
                     .frame(maxHeight: .infinity)
                     .simultaneousGesture(
@@ -2781,12 +2795,16 @@ private struct OpenClawChatTab: View {
         .accessibilityIdentifier("chatConversationDrawer")
     }
 
-    private var conversationDrawerPanel: some View {
+    private func conversationDrawerPanel(
+        topSafeAreaInset: CGFloat,
+        bottomSafeAreaInset: CGFloat
+    ) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 10) {
                 Text(localized("chat.drawer.title"))
                     .font(.system(size: 17, weight: .semibold))
                     .foregroundStyle(NPColors.textPrimary)
+                    .accessibilityIdentifier("chatConversationDrawerHeader")
                 Spacer()
                 Button {
                     closeConversationDrawer()
@@ -2804,7 +2822,7 @@ private struct OpenClawChatTab: View {
                 .accessibilityIdentifier("chatNewConversationButton")
             }
             .padding(.horizontal, NPSpacing.outer)
-            .padding(.top, 18)
+            .padding(.top, topSafeAreaInset + 12)
             .padding(.bottom, 10)
 
             if chatState.conversations.isEmpty {
@@ -2822,11 +2840,11 @@ private struct OpenClawChatTab: View {
                         }
                     }
                     .padding(.horizontal, 10)
-                    .padding(.bottom, 16)
+                    .padding(.bottom, bottomSafeAreaInset + 16)
                 }
             }
         }
-        .background { conversationDrawerBackground }
+        .background { conversationDrawerBackground.ignoresSafeArea() }
         .shadow(color: .black.opacity(0.12), radius: 24, x: 8, y: 0)
     }
 
@@ -4368,6 +4386,7 @@ private struct ProfileTab: View {
 
                 // ——— Preferences ———
                 languageSection
+                feedbackSection
 
                 // ——— AI ———
                 aiSection
@@ -4532,6 +4551,20 @@ private struct ProfileTab: View {
                 .tint(NPColors.brandDark)
                 .accessibilityIdentifier("appLanguagePicker")
                 Text(localized("profile.language_help"))
+                    .npCaption()
+            }
+        }
+    }
+
+    private var feedbackSection: some View {
+        NPSection {
+            VStack(alignment: .leading, spacing: NPSpacing.small) {
+                Toggle(localized("profile.global_feedback"), isOn: Binding(
+                    get: { model.isGlobalFeedbackEnabled },
+                    set: { model.updateGlobalFeedbackEnabled($0) }
+                ))
+                .accessibilityIdentifier("globalFeedbackToggle")
+                Text(localized("profile.global_feedback_help"))
                     .npCaption()
             }
         }
@@ -5095,164 +5128,16 @@ private struct DetailText: View {
     }
 }
 
-// MARK: - Status Banner
+// MARK: - Inline Feedback
 
-private struct WorkbenchStatusOverlay: View {
-    let isBusy: Bool
-    let statusMessage: String
-    let errorMessage: String?
-    let topSafeAreaInset: CGFloat
-    let bottomOffset: CGFloat
-    let onDismiss: () -> Void
-    @State private var dismissTask: Task<Void, Never>?
-
-    var body: some View {
-        GeometryReader { proxy in
-            ZStack {
-                if isBusy || errorMessage != nil || !statusMessage.isEmpty {
-                    StatusBanner(
-                        isBusy: isBusy,
-                        statusMessage: statusMessage,
-                        errorMessage: errorMessage,
-                        onDismiss: onDismiss
-                    )
-                    .padding(.horizontal, 16)
-                    .position(
-                        x: proxy.size.width / 2,
-                        y: workbenchStatusCenterY(
-                            containerHeight: proxy.size.height,
-                            topSafeArea: topSafeAreaInset,
-                            bottomObstruction: bottomOffset
-                        )
-                    )
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-                }
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .animation(.easeOut(duration: 0.24), value: statusMessage)
-        .animation(.easeOut(duration: 0.24), value: errorMessage)
-        .onAppear(perform: scheduleDismiss)
-        .onChange(of: statusMessage) { _ in scheduleDismiss() }
-        .onChange(of: errorMessage) { _ in scheduleDismiss() }
-        .onChange(of: isBusy) { _ in scheduleDismiss() }
-        .onDisappear { dismissTask?.cancel() }
-    }
-
-    private func scheduleDismiss() {
-        dismissTask?.cancel()
-        let expectedStatus = statusMessage
-        let expectedError = errorMessage
-        guard expectedError != nil || (!expectedStatus.isEmpty && !isBusy) else { return }
-        dismissTask = Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 5_000_000_000)
-            guard !Task.isCancelled,
-                  statusMessage == expectedStatus,
-                  errorMessage == expectedError else { return }
-            onDismiss()
-        }
-    }
-}
-
-private struct StatusBanner: View {
-    let isBusy: Bool
-    let statusMessage: String
-    let errorMessage: String?
-    let onDismiss: () -> Void
-
-    var body: some View {
-        if shouldShowStatus || errorMessage != nil {
-            HStack(alignment: .top, spacing: 10) {
-                if isBusy {
-                    ProgressView()
-                        .controlSize(.small)
-                        .padding(.top, 1)
-                } else {
-                    Image(systemName: bannerIcon)
-                        .foregroundStyle(bannerColor)
-                }
-                VStack(alignment: .leading, spacing: 3) {
-                    if shouldShowStatus {
-                        Text(statusMessage)
-                            .npCaption()
-                            .lineLimit(2)
-                    }
-                    if let errorMessage {
-                        Text(errorMessage)
-                            .npCaption()
-                            .lineLimit(3)
-                    }
-                }
-                Spacer(minLength: 0)
-                if errorMessage != nil || (!isBusy && shouldShowStatus) {
-                    Button(action: onDismiss) {
-                        Image(systemName: "xmark")
-                            .font(.caption.weight(.bold))
-                            .frame(width: 28, height: 28)
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(NPColors.textSecondary)
-                    .accessibilityLabel(localized("common.dismiss"))
-                    .accessibilityIdentifier("globalStatusDismissButton")
-                }
-            }
-            .foregroundStyle(NPColors.textPrimary)
-            .padding(.horizontal, NPSpacing.medium)
-            .padding(.vertical, NPSpacing.small)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(bannerBg)
-            .clipShape(RoundedRectangle(cornerRadius: NPRadius.button, style: .continuous))
-            .shadow(color: NPShadow.small.color, radius: NPShadow.small.radius, x: 0, y: NPShadow.small.y)
-            .padding(.horizontal, NPSpacing.outer)
-            .padding(.top, NPSpacing.small)
-            .accessibilityIdentifier("globalStatusBanner")
-        }
-    }
-
-    private var shouldShowStatus: Bool {
-        !statusMessage.isEmpty
-    }
-
-    private var isWarning: Bool {
-        errorMessage != nil
-    }
-
-    private var bannerIcon: String {
-        isWarning ? "exclamationmark.triangle.fill" : "checkmark.circle.fill"
-    }
-
-    private var bannerColor: Color {
-        if errorMessage != nil {
-            return NPColors.destructive
-        }
-        return isWarning ? NPColors.warning : NPColors.brand
-    }
-
-    private var bannerBg: Color {
-        if errorMessage != nil {
-            return NPColors.destructive.opacity(0.12)
-        }
-        return isWarning ? NPColors.warning.opacity(0.15) : NPColors.brandLight.opacity(0.5)
-    }
-}
-
-private struct StatusPanel: View {
-    let isBusy: Bool
+private struct AuthInlineFeedback: View {
     let statusMessage: String
     let errorMessage: String?
 
     var body: some View {
-        if hasContent {
+        if errorMessage != nil || !statusMessage.isEmpty {
             VStack(alignment: .leading, spacing: 7) {
-                if isBusy {
-                    HStack(spacing: NPSpacing.small) {
-                        ProgressView()
-                        Text(localized("common.processing"))
-                            .npBody()
-                            .foregroundStyle(NPColors.textSecondary)
-                    }
-                }
-                if !statusMessage.isEmpty && !isBusy {
+                if !statusMessage.isEmpty {
                     Text(statusMessage)
                         .npCaption()
                 }
@@ -5263,15 +5148,8 @@ private struct StatusPanel: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(NPSpacing.medium)
-            .background(errorMessage != nil ? NPColors.destructive.opacity(0.1) : NPColors.brandLight.opacity(0.5))
-            .clipShape(RoundedRectangle(cornerRadius: NPRadius.medium, style: .continuous))
-            .shadow(color: NPShadow.small.color, radius: NPShadow.small.radius, x: 0, y: NPShadow.small.y)
+            .accessibilityIdentifier("authInlineFeedback")
         }
-    }
-
-    private var hasContent: Bool {
-        isBusy || !statusMessage.isEmpty || errorMessage != nil
     }
 }
 

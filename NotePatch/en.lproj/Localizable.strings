@@ -633,6 +633,11 @@
 "preview.open_external" = "Open with another app";
 "profile.language" = "Language";
 "profile.language_help" = "Changes apply immediately throughout NotePatch.";
+"profile.global_feedback" = "Global notifications";
+"profile.global_feedback_help" = "Show compact success, error, and progress notifications across the app.";
+"feedback.accessibility.keep" = "Double-tap to keep this notification on screen.";
+"feedback.accessibility.pinned" = "Pinned";
+"feedback.accessibility.dismiss_outside" = "Tap elsewhere in the app to dismiss this notification.";
 "profile.ai" = "AI";
 "profile.ai_history_help" = "Session records remain available, but future requests will not include history context.";
 "profile.server" = "Server";

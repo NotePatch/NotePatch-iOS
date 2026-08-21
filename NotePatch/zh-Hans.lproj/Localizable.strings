@@ -633,6 +633,11 @@
 "preview.open_external" = "用其他 App 打开";
 "profile.language" = "语言";
 "profile.language_help" = "更改会立即应用到整个 NotePatch。";
+"profile.global_feedback" = "全局浮动提示";
+"profile.global_feedback_help" = "在 App 中显示紧凑的成功、错误和进度提示。关闭后不再弹出。";
+"feedback.accessibility.keep" = "轻点两下可将此提示保留在屏幕上。";
+"feedback.accessibility.pinned" = "已固定";
+"feedback.accessibility.dismiss_outside" = "轻点 App 内其他区域可关闭此提示。";
 "profile.ai" = "AI";
 "profile.ai_history_help" = "会话记录仍会保留，但后续请求不会携带历史上下文。";
 "profile.server" = "服务器";

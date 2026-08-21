@@ -12,8 +12,60 @@ final class NotePatchUITests: XCTestCase {
     ) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments.append(contentsOf: ["-NotePatchUITestLanguage", language])
+        app.launchArguments.append("-NotePatchUITestResetGlobalFeedback")
         app.launchArguments.append(contentsOf: arguments)
         return app
+    }
+
+    @MainActor
+    func testGlobalFeedbackPinsDismissesWithoutSwallowingTapAndCanBeDisabled() throws {
+        let app = makeApp(["-NotePatchUITestWorkbench", "-NotePatchUITestFeedbackSuccess"])
+        app.launch()
+
+        let toast = app.descendants(matching: .any)["globalFeedbackToast"]
+        XCTAssertTrue(toast.waitForExistence(timeout: 3))
+        XCTAssertFalse(app.buttons["globalStatusDismissButton"].exists)
+        toast.tap()
+        sleep(6)
+        XCTAssertTrue(toast.exists)
+
+        app.buttons["tab.me"].tap()
+        XCTAssertTrue(app.switches["globalFeedbackToggle"].waitForExistence(timeout: 3))
+        XCTAssertFalse(toast.exists)
+        app.switches["globalFeedbackToggle"].tap()
+        XCTAssertEqual(app.switches["globalFeedbackToggle"].value as? String, "0")
+    }
+
+    @MainActor
+    func testUploadErrorUsesRootFeedbackLayerAndBusyUsesTopBar() throws {
+        let uploadApp = makeApp(["-NotePatchUITestWorkbench", "-NotePatchUITestFeedbackUploadError"])
+        uploadApp.launch()
+        XCTAssertTrue(uploadApp.descendants(matching: .any)["uploadScreen"].waitForExistence(timeout: 3))
+        XCTAssertTrue(uploadApp.descendants(matching: .any)["globalFeedbackToast"].waitForExistence(timeout: 3))
+        uploadApp.terminate()
+
+        let busyApp = makeApp(["-NotePatchUITestWorkbench", "-NotePatchUITestFeedbackBusy"])
+        busyApp.launch()
+        XCTAssertTrue(busyApp.descendants(matching: .any)["globalActivityBar"].waitForExistence(timeout: 3))
+        XCTAssertFalse(busyApp.descendants(matching: .any)["globalFeedbackToast"].exists)
+    }
+
+    @MainActor
+    func testConversationDrawerHeaderStaysBelowFullScreenSafeArea() throws {
+        let app = makeApp(["-NotePatchUITestWorkbench", "-NotePatchUITestConversations"])
+        app.launch()
+        XCTAssertTrue(app.otherElements["workbenchTabs"].waitForExistence(timeout: 5))
+        app.buttons["tab.ai"].tap()
+        XCTAssertTrue(app.buttons["chatHistoryButton"].waitForExistence(timeout: 3))
+        app.buttons["chatHistoryButton"].tap()
+
+        let header = app.staticTexts["chatConversationDrawerHeader"]
+        XCTAssertTrue(header.waitForExistence(timeout: 3))
+        XCTAssertGreaterThanOrEqual(header.frame.minY, 50)
+        let newConversation = app.buttons["chatNewConversationButton"]
+        XCTAssertTrue(newConversation.exists)
+        XCTAssertGreaterThanOrEqual(newConversation.frame.minY, 50)
+        XCTAssertLessThanOrEqual(newConversation.frame.maxY, app.frame.maxY)
     }
 
     @MainActor
@@ -368,6 +420,31 @@ final class NotePatchUITests: XCTestCase {
         wait(for: [keyboardDismissed], timeout: 3)
         XCTAssertEqual(bottomNavigation.frame.minY, bottomNavigationFrameBeforeKeyboard.minY, accuracy: 1)
         XCTAssertEqual(bottomNavigation.frame.maxY, bottomNavigationFrameBeforeKeyboard.maxY, accuracy: 1)
+    }
+
+    @MainActor
+    func testOpenClawMessagesScrollToComposerBoundaryWithKeyboard() throws {
+        let app = makeApp(["-NotePatchUITestWorkbench", "-NotePatchUITestLongChat", "-NotePatchUITestKeyboardBoundary"])
+        app.launch()
+        XCTAssertTrue(app.otherElements["workbenchTabs"].waitForExistence(timeout: 5))
+        app.buttons["tab.ai"].tap()
+
+        let editor = app.textViews["openClawComposerTextView"]
+        XCTAssertTrue(editor.waitForExistence(timeout: 3))
+        editor.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 3))
+
+        let messages = app.scrollViews["openClawMessages"]
+        XCTAssertTrue(messages.exists)
+        XCTAssertLessThanOrEqual(messages.frame.maxY, editor.frame.minY + 1)
+        let startY = min(messages.frame.maxY - 36, editor.frame.minY - 36) / app.frame.height
+        let endY = max(messages.frame.minY + 36, messages.frame.midY - 80) / app.frame.height
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: startY))
+            .press(
+                forDuration: 0.05,
+                thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: endY))
+            )
+        XCTAssertLessThanOrEqual(messages.frame.maxY, editor.frame.minY + 1)
     }
 
     @MainActor

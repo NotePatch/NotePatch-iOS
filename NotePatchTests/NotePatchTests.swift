@@ -189,6 +189,66 @@ struct NotePatchTests {
         #expect(store.loadAppLanguage() == .traditionalChinese)
     }
 
+    @Test @MainActor func globalFeedbackPreferenceDefaultsOnPersistsAndClearsCurrentMessage() throws {
+        let suiteName = "NotePatchFeedbackPreferenceTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let keychain = KeychainStore(service: "\(suiteName).keychain")
+        let store = SettingsStore(defaults: defaults, keychain: keychain)
+
+        #expect(store.loadGlobalFeedbackEnabled())
+        let model = NotePatchViewModel(settings: store)
+        model.presentStatus("operation.api_connected")
+        model.updateGlobalFeedbackEnabled(false)
+
+        #expect(!model.isGlobalFeedbackEnabled)
+        #expect(model.statusMessage.isEmpty)
+        #expect(model.errorMessage == nil)
+        #expect(!store.loadGlobalFeedbackEnabled())
+
+        let restored = NotePatchViewModel(settings: SettingsStore(defaults: defaults, keychain: keychain))
+        #expect(!restored.isGlobalFeedbackEnabled)
+    }
+
+    @Test func globalFeedbackPrioritizesErrorsAndUsesExclusiveActivityStates() {
+        #expect(appFeedbackItem(statusMessage: "Saved", errorMessage: nil, isBusy: false) == .init(kind: .success, text: "Saved"))
+        #expect(appFeedbackItem(statusMessage: "Saving", errorMessage: nil, isBusy: true) == nil)
+        #expect(appFeedbackItem(statusMessage: "Saving", errorMessage: "Failed", isBusy: true) == .init(kind: .error, text: "Failed"))
+        #expect(appActivityPresentation(isBusy: false, progressPercent: 42, label: "Upload") == .hidden)
+        #expect(appActivityPresentation(isBusy: true, progressPercent: nil, label: "Saving") == .indeterminate("Saving"))
+        #expect(appActivityPresentation(isBusy: true, progressPercent: 142, label: "Upload") == .determinate(100, "Upload"))
+    }
+
+    @Test @MainActor func globalFeedbackAutoDismissesAndReplacementRestartsTimer() async throws {
+        let state = AppFeedbackPresentationState(autoDismissNanoseconds: 60_000_000)
+        var dismissed: [String] = []
+        state.present(identity: "first") { dismissed.append("first") }
+        try await Task.sleep(nanoseconds: 20_000_000)
+        state.present(identity: "second") { dismissed.append("second") }
+        try await Task.sleep(nanoseconds: 45_000_000)
+        #expect(state.isVisible)
+        #expect(dismissed.isEmpty)
+        try await Task.sleep(nanoseconds: 35_000_000)
+        #expect(!state.isVisible)
+        #expect(dismissed == ["second"])
+    }
+
+    @Test @MainActor func pinnedFeedbackIgnoresTimerAndOutsideTapDismissesIt() async throws {
+        let state = AppFeedbackPresentationState(autoDismissNanoseconds: 20_000_000)
+        var dismissCount = 0
+        state.present(identity: "pinned") { dismissCount += 1 }
+        state.pin()
+        try await Task.sleep(nanoseconds: 50_000_000)
+        #expect(state.isVisible)
+        #expect(state.isPinned)
+        #expect(dismissCount == 0)
+
+        state.dismissFromOutsideTap()
+        #expect(!state.isVisible)
+        #expect(!state.isPinned)
+        #expect(dismissCount == 1)
+    }
+
     @Test @MainActor func appLocalization_updatesImmediatelyAndKeepsNetworkSettingsUntouched() throws {
         let suiteName = "NotePatchLocalizationTests.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suiteName))
@@ -467,14 +527,34 @@ struct NotePatchTests {
         #expect(workbenchBottomObstruction(containerHeight: 700, bottomBarFrame: bar, isVisible: true) == 0)
     }
 
-    @Test func statusOverlayPositionStaysInLowerViewportAndAboveBottomObstruction() {
-        let fullScreen = workbenchStatusCenterY(containerHeight: 844, topSafeArea: 59, bottomObstruction: 122)
-        #expect(fullScreen > 844 * 0.5)
-        #expect(fullScreen <= 844 - 122 - 56)
+    @Test func feedbackToastUsesBottomBarOrSafeAreaAsItsBoundary() {
+        let fullScreenBar = CGRect(x: 16, y: 722, width: 358, height: 66)
+        #expect(appFeedbackBottomOffset(
+            containerHeight: 844,
+            bottomBarFrame: fullScreenBar,
+            isAuthenticated: true,
+            isUploadPresented: false,
+            isBottomBarVisible: true,
+            safeAreaBottom: 34
+        ) == 136)
 
-        let smallScreen = workbenchStatusCenterY(containerHeight: 667, topSafeArea: 20, bottomObstruction: 98)
-        #expect(smallScreen > 667 * 0.5)
-        #expect(smallScreen <= 667 - 98 - 56)
+        #expect(appFeedbackBottomOffset(
+            containerHeight: 844,
+            bottomBarFrame: fullScreenBar,
+            isAuthenticated: true,
+            isUploadPresented: true,
+            isBottomBarVisible: true,
+            safeAreaBottom: 34
+        ) == 54)
+
+        #expect(appFeedbackBottomOffset(
+            containerHeight: 667,
+            bottomBarFrame: .null,
+            isAuthenticated: false,
+            isUploadPresented: false,
+            isBottomBarVisible: false,
+            safeAreaBottom: 0
+        ) == 20)
     }
 
     @Test @MainActor func workbenchTabsHaveExpectedOrderAndDefault() throws {

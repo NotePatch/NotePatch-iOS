@@ -30,6 +30,7 @@ final class SettingsStore {
         static let refreshToken = "learning_refresh_token"
         static let presenceClientId = "presence_client_id"
         static let appLanguage = "app_language"
+        static let globalFeedbackEnabled = "global_feedback_enabled"
     }
 
     private let defaults: UserDefaults
@@ -84,6 +85,15 @@ final class SettingsStore {
 
     func saveAppLanguage(_ language: AppLanguage) {
         defaults.set(language.rawValue, forKey: Keys.appLanguage)
+    }
+
+    func loadGlobalFeedbackEnabled() -> Bool {
+        guard defaults.object(forKey: Keys.globalFeedbackEnabled) != nil else { return true }
+        return defaults.bool(forKey: Keys.globalFeedbackEnabled)
+    }
+
+    func saveGlobalFeedbackEnabled(_ enabled: Bool) {
+        defaults.set(enabled, forKey: Keys.globalFeedbackEnabled)
     }
 
     func loadAIHistoryEnabled() -> Bool? {
