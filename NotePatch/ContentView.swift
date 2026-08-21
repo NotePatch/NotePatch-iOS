@@ -283,6 +283,7 @@ private struct AuthField<Field: View>: View {
 private struct WorkbenchScreen: View {
     let model: NotePatchViewModel
     @ObservedObject var navigationState: WorkbenchNavigationState
+    @State private var isUploadLayerMounted = false
 
     var body: some View {
         GeometryReader { geometry in
@@ -338,13 +339,15 @@ private struct WorkbenchScreen: View {
             .allowsHitTesting(!navigationState.isUploadPresented)
             .zIndex(10)
 
-            UploadScreen(model: model, isPresented: $navigationState.isUploadPresented)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(NPColors.background.ignoresSafeArea())
-                .opacity(navigationState.isUploadPresented ? 1 : 0)
-                .allowsHitTesting(navigationState.isUploadPresented)
-                .accessibilityHidden(!navigationState.isUploadPresented)
-                .zIndex(20)
+            if isUploadLayerMounted {
+                UploadScreen(model: model, isPresented: $navigationState.isUploadPresented)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(NPColors.background.ignoresSafeArea())
+                    .opacity(navigationState.isUploadPresented ? 1 : 0)
+                    .allowsHitTesting(navigationState.isUploadPresented)
+                    .accessibilityHidden(!navigationState.isUploadPresented)
+                    .zIndex(20)
+            }
         }
         .coordinateSpace(name: "workbench")
         .onPreferenceChange(WorkbenchBottomBarFramePreferenceKey.self) { frame in
@@ -358,7 +361,18 @@ private struct WorkbenchScreen: View {
             model.ensureContentForSelectedTabLoaded()
         }
         .onAppear {
+            isUploadLayerMounted = navigationState.isUploadPresented
             model.ensureContentForSelectedTabLoaded()
+        }
+        .onChange(of: navigationState.isUploadPresented) { isPresented in
+            if isPresented {
+                isUploadLayerMounted = true
+            } else {
+                DispatchQueue.main.async {
+                    guard !navigationState.isUploadPresented else { return }
+                    isUploadLayerMounted = false
+                }
+            }
         }
     }
 
@@ -1721,6 +1735,7 @@ private struct UploadDocumentScreen: View {
     @State private var isShowingPhotoLibrary = false
     @State private var isShowingFileImporter = false
     @State private var queuedPreview: DownloadedPreview?
+    @State private var isQueuedPreviewLayerMounted = false
     @State private var pickerUserId: String?
     @State private var pickerWorkspaceId: String?
 
@@ -1767,6 +1782,7 @@ private struct UploadDocumentScreen: View {
                                             isBusy: model.isBusy,
                                             onToggle: { model.toggleQueuedUpload(item.id) },
                                             onPreview: {
+                                                isQueuedPreviewLayerMounted = true
                                                 queuedPreview = DownloadedPreview(
                                                     url: item.file.url,
                                                     mimeType: item.file.mimeType,
@@ -1798,13 +1814,19 @@ private struct UploadDocumentScreen: View {
             }
             .allowsHitTesting(queuedPreview == nil)
 
-            UploadQueuedPreviewOverlay(preview: queuedPreview) {
-                self.queuedPreview = nil
+            if isQueuedPreviewLayerMounted {
+                UploadQueuedPreviewOverlay(preview: queuedPreview) {
+                    self.queuedPreview = nil
+                    DispatchQueue.main.async {
+                        guard self.queuedPreview == nil else { return }
+                        self.isQueuedPreviewLayerMounted = false
+                    }
+                }
+                .opacity(queuedPreview == nil ? 0 : 1)
+                .allowsHitTesting(queuedPreview != nil)
+                .accessibilityHidden(queuedPreview == nil)
+                .zIndex(10)
             }
-            .opacity(queuedPreview == nil ? 0 : 1)
-            .allowsHitTesting(queuedPreview != nil)
-            .accessibilityHidden(queuedPreview == nil)
-            .zIndex(10)
         }
         .background(NPColors.background.ignoresSafeArea())
         .fileImporter(isPresented: $isShowingFileImporter, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in

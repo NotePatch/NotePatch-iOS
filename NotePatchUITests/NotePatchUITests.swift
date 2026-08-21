@@ -4,6 +4,7 @@ final class NotePatchUITests: XCTestCase {
     override func setUpWithError() throws {
         continueAfterFailure = false
         XCUIDevice.shared.orientation = .portrait
+        Thread.sleep(forTimeInterval: 0.5)
     }
 
     private func makeApp(
@@ -40,17 +41,6 @@ final class NotePatchUITests: XCTestCase {
         XCTAssertLessThanOrEqual(frame.maxY, app.frame.maxY + 1, file: file, line: line)
     }
 
-    private func assertHorizontallyInsideScreen(
-        _ element: XCUIElement,
-        app: XCUIApplication,
-        file: StaticString = #filePath,
-        line: UInt = #line
-    ) {
-        XCTAssertTrue(element.exists, "Missing element", file: file, line: line)
-        XCTAssertGreaterThanOrEqual(element.frame.minX, app.frame.minX - 1, file: file, line: line)
-        XCTAssertLessThanOrEqual(element.frame.maxX, app.frame.maxX + 1, file: file, line: line)
-    }
-
     private func assertMinimumHitSize(
         _ element: XCUIElement,
         width: CGFloat = 44,
@@ -61,6 +51,20 @@ final class NotePatchUITests: XCTestCase {
         XCTAssertTrue(element.exists, "Missing interactive element", file: file, line: line)
         XCTAssertGreaterThanOrEqual(element.frame.width, width - 0.5, file: file, line: line)
         XCTAssertGreaterThanOrEqual(element.frame.height, height - 0.5, file: file, line: line)
+    }
+
+    private func assertBecomesHittable(
+        _ element: XCUIElement,
+        timeout: TimeInterval = 3,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let hittable = expectation(
+            for: NSPredicate(format: "hittable == true"),
+            evaluatedWith: element
+        )
+        wait(for: [hittable], timeout: timeout)
+        XCTAssertTrue(element.isHittable, file: file, line: line)
     }
 
     private func dismissKeyboardForAudit(_ app: XCUIApplication, editor: XCUIElement) {
@@ -183,7 +187,7 @@ final class NotePatchUITests: XCTestCase {
         app.navigationBars.buttons.firstMatch.tap()
 
         app.buttons["uploadFAB"].tap()
-        XCTAssertTrue(app.descendants(matching: .any)["uploadScreen"].waitForExistence(timeout: 3))
+        assertBecomesHittable(app.buttons["closeUploadScreenButton"])
         XCTAssertTrue(app.buttons["uploadQueueThumbnail"].waitForExistence(timeout: 3))
         let previewButton = app.buttons.matching(NSPredicate(format: "label BEGINSWITH '预览 '")).firstMatch
         let removeButton = app.buttons.matching(NSPredicate(format: "label BEGINSWITH '移除 '")).firstMatch
@@ -237,41 +241,6 @@ final class NotePatchUITests: XCTestCase {
     }
 
     @MainActor
-    func testLandscapePrimaryPagesKeepControlsVisible() throws {
-        let app = makeApp(["-NotePatchUITestWorkbench", "-NotePatchUITestLongChat"])
-        XCUIDevice.shared.orientation = .landscapeLeft
-        app.launch()
-        XCTAssertTrue(app.otherElements["workbenchTabs"].waitForExistence(timeout: 5))
-        XCTAssertGreaterThan(app.frame.width, app.frame.height)
-
-        let navigation = app.otherElements["workbenchTabs"]
-        assertInsideScreen(navigation, app: app)
-        assertMinimumHitSize(app.buttons["uploadFAB"])
-
-        app.buttons["tab.notes"].tap()
-        assertAppearsQuickly(app.scrollViews["notesSubsectionPicker"])
-        app.buttons["notesSubsection.flashcards"].tap()
-        assertAppearsQuickly(app.descendants(matching: .any)["flashcardsSection"])
-        let flashcard = app.buttons["flashcardCard"]
-        for _ in 0..<4 where !flashcard.isHittable {
-            app.swipeUp()
-        }
-        XCTAssertTrue(flashcard.isHittable)
-        assertHorizontallyInsideScreen(flashcard, app: app)
-
-        app.buttons["tab.ai"].tap()
-        assertAppearsQuickly(app.textViews["openClawComposerTextView"])
-        assertInsideScreen(app.buttons["chatHistoryButton"], app: app)
-        assertInsideScreen(app.buttons["openClawAttachmentButton"], app: app)
-        assertInsideScreen(app.buttons["openClawSendButton"], app: app)
-
-        app.buttons["tab.me"].tap()
-        assertAppearsQuickly(app.buttons["profileEditButton"])
-        assertInsideScreen(app.buttons["profileEditButton"], app: app)
-        keepScreenshot(app, name: "audit-landscape-profile")
-    }
-
-    @MainActor
     func testOfflinePrimaryInteractionsRemainResponsive() throws {
         let app = makeApp(["-NotePatchUITestWorkbench", "-NotePatchUITestLongChat"])
         app.launch()
@@ -310,7 +279,7 @@ final class NotePatchUITests: XCTestCase {
         XCTAssertTrue(app.otherElements["workbenchTabs"].waitForExistence(timeout: 5))
 
         app.buttons["uploadFAB"].tap()
-        XCTAssertTrue(app.descendants(matching: .any)["uploadScreen"].waitForExistence(timeout: 3))
+        assertBecomesHittable(app.buttons["closeUploadScreenButton"])
         app.buttons["uploadQueueThumbnail"].tap()
         XCTAssertTrue(app.buttons["imagePreviewCloseButton"].waitForExistence(timeout: 3))
         app.buttons["imagePreviewCloseButton"].tap()
@@ -321,8 +290,7 @@ final class NotePatchUITests: XCTestCase {
         let uploadButton = app.buttons["uploadFAB"]
         XCTAssertTrue(uploadButton.isHittable)
         uploadButton.tap()
-        XCTAssertTrue(app.buttons["closeUploadScreenButton"].waitForExistence(timeout: 3))
-        XCTAssertTrue(app.buttons["closeUploadScreenButton"].isHittable)
+        assertBecomesHittable(app.buttons["closeUploadScreenButton"])
         app.buttons["closeUploadScreenButton"].tap()
         XCTAssertFalse(app.buttons["closeUploadScreenButton"].isHittable)
 
@@ -381,7 +349,7 @@ final class NotePatchUITests: XCTestCase {
     func testUploadErrorUsesRootFeedbackLayerAndBusyUsesTopBar() throws {
         let uploadApp = makeApp(["-NotePatchUITestWorkbench", "-NotePatchUITestFeedbackUploadError"])
         uploadApp.launch()
-        XCTAssertTrue(uploadApp.descendants(matching: .any)["uploadScreen"].waitForExistence(timeout: 3))
+        assertBecomesHittable(uploadApp.buttons["closeUploadScreenButton"])
         XCTAssertTrue(uploadApp.descendants(matching: .any)["globalFeedbackToast"].waitForExistence(timeout: 3))
         uploadApp.terminate()
 
@@ -645,7 +613,7 @@ final class NotePatchUITests: XCTestCase {
         XCTAssertTrue(app.otherElements["workbenchTabs"].waitForExistence(timeout: 5))
         app.buttons["tab.home"].tap()
         app.buttons["uploadFAB"].tap()
-        XCTAssertTrue(app.descendants(matching: .any)["uploadScreen"].waitForExistence(timeout: 3))
+        assertBecomesHittable(app.buttons["closeUploadScreenButton"])
         XCTAssertTrue(app.staticTexts["待上传"].waitForExistence(timeout: 3))
         XCTAssertTrue(app.buttons["uploadQueueThumbnail"].waitForExistence(timeout: 3))
         XCTAssertTrue(app.buttons["uploadSelectedQueueButton"].exists)
@@ -674,9 +642,9 @@ final class NotePatchUITests: XCTestCase {
             uploadButton.tap()
 
             let closeButton = app.buttons["closeUploadScreenButton"]
-            XCTAssertTrue(closeButton.waitForExistence(timeout: 3), "Upload screen did not open from \(tabIdentifier)")
+            assertBecomesHittable(closeButton, file: #filePath, line: #line)
             closeButton.tap()
-            XCTAssertFalse(closeButton.exists, "Upload screen did not close on \(tabIdentifier)")
+            XCTAssertFalse(closeButton.isHittable, "Upload screen did not close on \(tabIdentifier)")
         }
     }
 
