@@ -68,13 +68,16 @@ func appActivityPresentation(
 func appActivityTopOffset(
     reportedSafeAreaTop: CGFloat,
     windowSafeAreaTop: CGFloat,
-    statusBarHeight: CGFloat = 0
+    statusBarHeight: CGFloat = 0,
+    overlayGlobalMinY: CGFloat = 0
 ) -> CGFloat {
-    resolvedTopSafeAreaInset(
+    let resolvedTop = resolvedTopSafeAreaInset(
         reportedSafeAreaTop: reportedSafeAreaTop,
         windowSafeAreaTop: windowSafeAreaTop,
         statusBarHeight: statusBarHeight
-    ) + 2
+    )
+    let origin = overlayGlobalMinY.isFinite ? overlayGlobalMinY : 0
+    return resolvedTop + 2 - origin
 }
 
 func appFeedbackBottomOffset(
@@ -208,13 +211,12 @@ struct AppFeedbackOverlay: View {
         ProcessInfo.processInfo.arguments.contains("-NotePatchUITestFeedbackUploadError")
     }
 
-
-
-    private var activityTopOffset: CGFloat {
+    private func activityTopOffset(overlayGlobalMinY: CGFloat) -> CGFloat {
         appActivityTopOffset(
             reportedSafeAreaTop: safeAreaInsets.top,
             windowSafeAreaTop: feedbackWindowSafeAreaInsets().top,
-            statusBarHeight: currentAppStatusBarHeight()
+            statusBarHeight: currentAppStatusBarHeight(),
+            overlayGlobalMinY: overlayGlobalMinY
         )
     }
 
@@ -251,48 +253,52 @@ struct AppFeedbackOverlay: View {
     }
 
     var body: some View {
-        ZStack(alignment: .topLeading) {
-            AppActivityLayer(
-                presentation: activity,
-                topOffset: activityTopOffset,
-                containerWidth: containerSize.width
-            )
+        GeometryReader { overlayProxy in
+            ZStack(alignment: .topLeading) {
+                AppActivityLayer(
+                    presentation: activity,
+                    topOffset: activityTopOffset(
+                        overlayGlobalMinY: overlayProxy.frame(in: .global).minY
+                    ),
+                    containerWidth: containerSize.width
+                )
                 .allowsHitTesting(false)
                 .zIndex(3)
 
-            if let item = visibleItem {
-                AppFeedbackToast(
-                    item: item,
-                    isPinned: presentation.isPinned,
-                    originatingTab: presentation.originatingTab,
-                    originatingDismissalRevision: presentation.originatingDismissalRevision,
-                    navigationState: navigationState
-                ) {
-                    presentation.pin()
-                }
-                .id(item.id)
-                .frame(width: appFeedbackToastWidth(text: item.text, containerWidth: containerSize.width))
-                .background {
-                    GeometryReader { proxy in
-                        Color.clear.preference(
-                            key: AppFeedbackFramePreferenceKey.self,
-                            value: proxy.frame(in: .named(AppFeedbackCoordinateSpace.name))
-                        )
+                if let item = visibleItem {
+                    AppFeedbackToast(
+                        item: item,
+                        isPinned: presentation.isPinned,
+                        originatingTab: presentation.originatingTab,
+                        originatingDismissalRevision: presentation.originatingDismissalRevision,
+                        navigationState: navigationState
+                    ) {
+                        presentation.pin()
                     }
+                    .id(item.id)
+                    .frame(width: appFeedbackToastWidth(text: item.text, containerWidth: containerSize.width))
+                    .background {
+                        GeometryReader { proxy in
+                            Color.clear.preference(
+                                key: AppFeedbackFramePreferenceKey.self,
+                                value: proxy.frame(in: .named(AppFeedbackCoordinateSpace.name))
+                            )
+                        }
+                    }
+                    .padding(.bottom, bottomOffset)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                    .zIndex(2)
                 }
-                .padding(.bottom, bottomOffset)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-                .transition(.move(edge: .bottom).combined(with: .opacity))
-                .zIndex(2)
-            }
 
-            AppInteractionTapObserver(
-                isEnabled: presentation.isPinned,
-                excludedFrame: toastFrame,
-                onOutsideTap: dismissVisibleFeedback
-            )
-            .frame(width: 0, height: 0)
-            .accessibilityHidden(true)
+                AppInteractionTapObserver(
+                    isEnabled: presentation.isPinned,
+                    excludedFrame: toastFrame,
+                    onOutsideTap: dismissVisibleFeedback
+                )
+                .frame(width: 0, height: 0)
+                .accessibilityHidden(true)
+            }
         }
         .animation(.spring(response: 0.28, dampingFraction: 0.86), value: presentation.isVisible)
         .animation(.easeInOut(duration: 0.18), value: item)

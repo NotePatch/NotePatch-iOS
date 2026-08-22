@@ -115,6 +115,13 @@ final class NotePatchUITests: XCTestCase {
 
         app.buttons["homeMetricDocuments"].tap()
         XCTAssertTrue(app.descendants(matching: .any)["documentsList"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["CPU pipeline diagram"].exists)
+        app.buttons["documentMoreActions.remark-doc"].tap()
+        XCTAssertTrue(app.buttons["editDocumentRemark.remark-doc"].waitForExistence(timeout: 2))
+        app.buttons["editDocumentRemark.remark-doc"].tap()
+        XCTAssertTrue(app.textFields["documentRemarkField"].waitForExistence(timeout: 2))
+        XCTAssertEqual(app.textFields["documentRemarkField"].value as? String, "CPU pipeline diagram")
+        app.buttons["cancelDocumentRemarkButton"].tap()
         keepScreenshot(app, name: "audit-documents")
         app.navigationBars.buttons.firstMatch.tap()
 
@@ -154,7 +161,11 @@ final class NotePatchUITests: XCTestCase {
         app.buttons["tab.ai"].tap()
         XCTAssertTrue(app.textViews["openClawComposerTextView"].waitForExistence(timeout: 3))
         assertMinimumHitSize(app.buttons["chatHistoryButton"])
-        assertMinimumHitSize(app.buttons["copyConversationButton"])
+        XCTAssertTrue(app.staticTexts["openClawTab"].exists)
+        XCTAssertFalse(app.buttons["copyConversationButton"].exists)
+        XCTAssertFalse(app.staticTexts["Saved conversation"].exists)
+        XCTAssertFalse(app.staticTexts["已保存的对话"].exists)
+        XCTAssertFalse(app.staticTexts["首条消息后自动保存"].exists)
         assertMinimumHitSize(app.buttons["openClawAttachmentButton"])
         assertMinimumHitSize(app.buttons["openClawSendButton"])
         keepScreenshot(app, name: "audit-ai-chat")
@@ -163,6 +174,11 @@ final class NotePatchUITests: XCTestCase {
         XCTAssertTrue(app.buttons["profileEditButton"].waitForExistence(timeout: 3))
         assertMinimumHitSize(app.buttons["profileEditButton"])
         keepScreenshot(app, name: "audit-profile-top")
+        let autoImageRemarkToggle = app.switches["autoImageRemarkToggle"]
+        for _ in 0..<5 where !autoImageRemarkToggle.exists {
+            app.swipeUp()
+        }
+        XCTAssertTrue(autoImageRemarkToggle.exists)
         let signOut = app.buttons["profileSignOut"]
         for _ in 0..<8 where signOut.frame.maxY > navigation.frame.minY - 20 {
             app.swipeUp()
@@ -170,6 +186,30 @@ final class NotePatchUITests: XCTestCase {
         XCTAssertTrue(signOut.isHittable)
         XCTAssertLessThanOrEqual(signOut.frame.maxY, navigation.frame.minY - 20)
         keepScreenshot(app, name: "audit-profile-bottom")
+    }
+
+    @MainActor
+    func testOfflineAIOnboardingCompletesSevenStepsWithoutNetwork() throws {
+        let app = makeApp(["-NotePatchUITestWorkbench", "-NotePatchUITestAIOnboardingRequired"])
+        app.launch()
+
+        let onboarding = app.descendants(matching: .any)["aiOnboardingScreen"]
+        XCTAssertTrue(onboarding.waitForExistence(timeout: 5))
+        let continueButton = app.buttons["aiOnboardingContinueButton"]
+        XCTAssertTrue(continueButton.waitForExistence(timeout: 3))
+        for _ in 0..<6 {
+            XCTAssertTrue(continueButton.isEnabled)
+            continueButton.tap()
+        }
+        let completeButton = app.buttons["aiOnboardingCompleteButton"]
+        XCTAssertTrue(completeButton.waitForExistence(timeout: 3))
+        XCTAssertTrue(completeButton.isEnabled)
+        completeButton.tap()
+
+        XCTAssertTrue(onboarding.waitForNonExistence(timeout: 3))
+        app.buttons["tab.ai"].tap()
+        XCTAssertTrue(app.textViews["openClawComposerTextView"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.descendants(matching: .any)["chatServerGreeting"].exists)
     }
 
     @MainActor
@@ -198,6 +238,18 @@ final class NotePatchUITests: XCTestCase {
         XCTAssertTrue(app.buttons["imagePreviewCloseButton"].waitForExistence(timeout: 3))
         keepScreenshot(app, name: "audit-local-image-preview")
         app.buttons["imagePreviewCloseButton"].tap()
+        let remarkButton = app.buttons.matching(
+            NSPredicate(format: "identifier BEGINSWITH 'queuedUploadRemarkButton.'")
+        ).firstMatch
+        XCTAssertTrue(remarkButton.waitForExistence(timeout: 3))
+        remarkButton.tap()
+        let remarkField = app.textFields["documentRemarkField"]
+        XCTAssertTrue(remarkField.waitForExistence(timeout: 3))
+        remarkField.tap()
+        remarkField.typeText("Chapter diagram")
+        app.buttons["saveDocumentRemarkButton"].tap()
+        XCTAssertTrue(remarkField.waitForNonExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["Chapter diagram"].exists)
         app.buttons["closeUploadScreenButton"].tap()
 
         app.buttons["tab.ai"].tap()
@@ -380,6 +432,25 @@ final class NotePatchUITests: XCTestCase {
         XCTAssertLessThanOrEqual(activityBar.frame.height, 4)
         XCTAssertGreaterThanOrEqual(activityBar.frame.minY, app.frame.minY)
         XCTAssertLessThan(activityBar.frame.maxY, app.frame.midY)
+        let initialMinY = activityBar.frame.minY
+
+        for tab in ["tab.notes", "tab.ai", "tab.me", "tab.home"] {
+            app.buttons[tab].tap()
+            XCTAssertTrue(activityBar.exists)
+            XCTAssertEqual(activityBar.frame.minY, initialMinY, accuracy: 1)
+        }
+
+        app.buttons["uploadFAB"].tap()
+        XCTAssertTrue(app.buttons["closeUploadScreenButton"].waitForExistence(timeout: 3))
+        XCTAssertTrue(activityBar.exists)
+        XCTAssertEqual(activityBar.frame.minY, initialMinY, accuracy: 1)
+        app.buttons["closeUploadScreenButton"].tap()
+
+        let statusBar = app.statusBars.firstMatch
+        if statusBar.exists {
+            XCTAssertGreaterThanOrEqual(activityBar.frame.minY, statusBar.frame.maxY - 1)
+            XCTAssertLessThanOrEqual(activityBar.frame.minY, statusBar.frame.maxY + 4)
+        }
     }
 
     @MainActor
@@ -528,19 +599,34 @@ final class NotePatchUITests: XCTestCase {
     }
 
     @MainActor
-    func testOfflineAICopyAndProfileEditingSurfaces() throws {
-        let app = makeApp(["-NotePatchUITestWorkbench", "-NotePatchUITestLongChat", "-NotePatchUITestLongToast"])
+    func testOfflineAIHeaderAndProfileEditingSurfaces() throws {
+        let app = makeApp([
+            "-NotePatchUITestWorkbench", "-NotePatchUITestLongChat", "-NotePatchUITestLongToast",
+            "-NotePatchUITestConversations", "-NotePatchUITestLongConversationTitle"
+        ])
         app.launch()
 
         XCTAssertTrue(app.otherElements["workbenchTabs"].waitForExistence(timeout: 5))
         app.buttons["tab.ai"].tap()
-        let copyConversation = app.buttons["copyConversationButton"]
-        XCTAssertTrue(copyConversation.waitForExistence(timeout: 3))
-        XCTAssertTrue(copyConversation.isEnabled)
-        copyConversation.tap()
-        let copiedToast = app.descendants(matching: .any)["globalFeedbackToast"]
-        XCTAssertTrue(copiedToast.waitForExistence(timeout: 3))
+        let initialTitle = app.staticTexts["openClawTab"]
+        XCTAssertTrue(initialTitle.waitForExistence(timeout: 3))
+        assertInsideScreen(initialTitle, app: app)
+        XCTAssertFalse(app.buttons["copyConversationButton"].exists)
+        XCTAssertFalse(app.staticTexts["Saved conversation"].exists)
+        XCTAssertFalse(app.staticTexts["已保存的对话"].exists)
         XCTAssertTrue(app.buttons["openClawAttachmentButton"].exists)
+
+        app.buttons["chatHistoryButton"].tap()
+        let conversation = app.buttons["chatConversationRow.ui-conv-1"]
+        XCTAssertTrue(conversation.waitForExistence(timeout: 3))
+        conversation.tap()
+        let title = app.staticTexts["数学作业讲解与本周错题复习计划详细讨论"]
+        XCTAssertTrue(title.waitForExistence(timeout: 3))
+        assertInsideScreen(title, app: app)
+        XCTAssertLessThanOrEqual(title.frame.maxX, app.buttons["chatHistoryButton"].frame.minX - 4)
+        XCTAssertFalse(app.staticTexts["Saved conversation"].exists)
+        XCTAssertFalse(app.staticTexts["已保存的对话"].exists)
+        XCTAssertFalse(app.buttons["copyConversationButton"].exists)
 
         app.buttons["tab.me"].tap()
         let editProfile = app.buttons["profileEditButton"]
@@ -593,6 +679,21 @@ final class NotePatchUITests: XCTestCase {
         keepScreenshot(app, name: "chat-user-full-screen-text-selection")
         app.tap()
         app.buttons["chatTextSelectionDoneButton"].tap()
+
+        userBubble.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            .press(forDuration: 1.1)
+        let editAction = app.buttons["修改消息"]
+        XCTAssertTrue(editAction.waitForExistence(timeout: 2))
+        editAction.tap()
+        let inlineEditor = app.textViews["openClawComposerTextView"]
+        XCTAssertTrue(inlineEditor.waitForExistence(timeout: 3))
+        XCTAssertEqual(inlineEditor.value as? String, "Test prompt 0")
+        XCTAssertTrue(app.buttons["chatRevisionCancelButton"].exists)
+        XCTAssertTrue(app.descendants(matching: .any)["chatMessageBubble.ui-chat-0"].exists)
+        XCTAssertFalse(app.descendants(matching: .any)["chatMessageBubble.ui-chat-1"].exists)
+        app.buttons["chatRevisionCancelButton"].tap()
+        XCTAssertTrue(app.descendants(matching: .any)["chatMessageBubble.ui-chat-1"].waitForExistence(timeout: 3))
+        XCTAssertFalse(app.buttons["chatRevisionCancelButton"].exists)
 
         XCTAssertFalse(app.buttons["chatCopyMessageButton.ui-chat-0"].exists)
         XCTAssertFalse(app.buttons["chatEditMessageButton.ui-chat-0"].exists)
@@ -655,16 +756,24 @@ final class NotePatchUITests: XCTestCase {
         let decreaseFontSize = app.buttons["studyNoteEditorFontSizeDecrease"]
         let fontSizeMenu = app.buttons["studyNoteEditorFontSizeMenu"]
         let increaseFontSize = app.buttons["studyNoteEditorFontSizeIncrease"]
+        let boldButton = app.buttons["studyNoteEditorBold"]
+        let italicButton = app.buttons["studyNoteEditorItalic"]
         XCTAssertTrue(decreaseFontSize.waitForExistence(timeout: 3))
         XCTAssertTrue(fontSizeMenu.exists)
         XCTAssertTrue(increaseFontSize.exists)
+        XCTAssertTrue(boldButton.exists)
+        XCTAssertTrue(italicButton.exists)
         assertMinimumHitSize(decreaseFontSize)
         assertMinimumHitSize(fontSizeMenu)
         assertMinimumHitSize(increaseFontSize)
+        assertMinimumHitSize(boldButton)
+        assertMinimumHitSize(italicButton)
         let previousFontSizeLabel = fontSizeMenu.label
         XCTAssertTrue(increaseFontSize.isEnabled)
         increaseFontSize.tap()
         XCTAssertNotEqual(fontSizeMenu.label, previousFontSizeLabel)
+        boldButton.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["studyNoteEditorHTML"].exists)
         app.buttons["取消"].tap()
     }
 
@@ -694,6 +803,9 @@ final class NotePatchUITests: XCTestCase {
 
         let card = app.buttons["flashcardCard"]
         XCTAssertTrue(card.waitForExistence(timeout: 3))
+        let reviewHint = app.descendants(matching: .any)["flashcardReviewHint"]
+        XCTAssertTrue(reviewHint.waitForExistence(timeout: 3))
+        XCTAssertTrue(reviewHint.label.contains("近 30 天错了 3 次"))
         XCTAssertTrue(app.staticTexts["What does a ratio compare?"].exists)
         XCTAssertFalse(app.staticTexts["What does a **ratio** compare?"].exists)
         card.tap()
@@ -849,6 +961,28 @@ final class NotePatchUITests: XCTestCase {
         XCTAssertTrue(gradeLabel.exists)
         XCTAssertTrue(topicLabel.exists)
         keepScreenshot(app, name: "upload-learning-fields-small-screen")
+    }
+
+    @MainActor
+    func testExtendedLearningFileRequiresConversionConfirmation() throws {
+        let app = makeApp(["-NotePatchUITestWorkbench", "-NotePatchUITestExtendedLearningConflict"])
+        app.launch()
+
+        XCTAssertTrue(app.otherElements["workbenchTabs"].waitForExistence(timeout: 5))
+        app.buttons["uploadFAB"].tap()
+        let uploadButton = app.buttons["uploadSelectedQueueButton"]
+        XCTAssertTrue(uploadButton.waitForExistence(timeout: 3))
+        for _ in 0..<5 where !uploadButton.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(uploadButton.isHittable)
+        uploadButton.tap()
+
+        XCTAssertTrue(app.alerts["文件格式不适用于学习处理"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.buttons["改为其他并上传"].exists)
+        app.buttons["取消"].tap()
+        XCTAssertFalse(app.alerts.firstMatch.exists)
+        XCTAssertTrue(app.staticTexts["workbook.xlsx"].exists)
     }
 
     @MainActor

@@ -69,13 +69,17 @@ struct LearningBackendError: Error, LocalizedError {
     let shouldClearSession: Bool
     let refreshTokenAttempt: String?
     let cause: Error?
+    let backendCode: String?
+    let backendDetails: [String: JSONValue]?
 
     nonisolated init(
         _ message: String,
         statusCode: Int? = nil,
         shouldClearSession: Bool = false,
         refreshTokenAttempt: String? = nil,
-        cause: Error? = nil
+        cause: Error? = nil,
+        backendCode: String? = nil,
+        backendDetails: [String: JSONValue]? = nil
     ) {
         self.message = message
         self.localizationKey = nil
@@ -84,6 +88,8 @@ struct LearningBackendError: Error, LocalizedError {
         self.shouldClearSession = shouldClearSession
         self.refreshTokenAttempt = refreshTokenAttempt
         self.cause = cause
+        self.backendCode = backendCode
+        self.backendDetails = backendDetails
     }
 
     nonisolated init(
@@ -92,7 +98,9 @@ struct LearningBackendError: Error, LocalizedError {
         statusCode: Int? = nil,
         shouldClearSession: Bool = false,
         refreshTokenAttempt: String? = nil,
-        cause: Error? = nil
+        cause: Error? = nil,
+        backendCode: String? = nil,
+        backendDetails: [String: JSONValue]? = nil
     ) {
         self.message = localizedKey
         self.localizationKey = localizedKey
@@ -101,6 +109,8 @@ struct LearningBackendError: Error, LocalizedError {
         self.shouldClearSession = shouldClearSession
         self.refreshTokenAttempt = refreshTokenAttempt
         self.cause = cause
+        self.backendCode = backendCode
+        self.backendDetails = backendDetails
     }
 
     nonisolated var errorDescription: String? {
@@ -120,7 +130,9 @@ struct LearningBackendError: Error, LocalizedError {
                 statusCode: statusCode,
                 shouldClearSession: shouldClearSession,
                 refreshTokenAttempt: refreshTokenAttempt,
-                cause: cause ?? self
+                cause: cause ?? self,
+                backendCode: backendCode,
+                backendDetails: backendDetails
             )
         }
         return LearningBackendError(
@@ -128,8 +140,173 @@ struct LearningBackendError: Error, LocalizedError {
             statusCode: statusCode,
             shouldClearSession: shouldClearSession,
             refreshTokenAttempt: refreshTokenAttempt,
-            cause: cause ?? self
+            cause: cause ?? self,
+            backendCode: backendCode,
+            backendDetails: backendDetails
         )
+    }
+}
+
+struct AIPreferences: Codable, Equatable {
+    var responseLanguage: String
+    var collaborationStyle: String
+    var responseDepth: String
+    var responseStructure: String
+    var clarificationPolicy: String
+    var feedbackTone: String
+    var learningGuidance: String
+    var customInstructions: String?
+
+    static let defaults = AIPreferences(
+        responseLanguage: "match_user",
+        collaborationStyle: "collaborative",
+        responseDepth: "balanced",
+        responseStructure: "adaptive",
+        clarificationPolicy: "ask_when_ambiguous",
+        feedbackTone: "neutral",
+        learningGuidance: "explain_then_answer",
+        customInstructions: nil
+    )
+
+    enum CodingKeys: String, CodingKey {
+        case responseLanguage = "response_language"
+        case collaborationStyle = "collaboration_style"
+        case responseDepth = "response_depth"
+        case responseStructure = "response_structure"
+        case clarificationPolicy = "clarification_policy"
+        case feedbackTone = "feedback_tone"
+        case learningGuidance = "learning_guidance"
+        case customInstructions = "custom_instructions"
+    }
+
+    init(
+        responseLanguage: String,
+        collaborationStyle: String,
+        responseDepth: String,
+        responseStructure: String,
+        clarificationPolicy: String,
+        feedbackTone: String,
+        learningGuidance: String,
+        customInstructions: String?
+    ) {
+        self.responseLanguage = responseLanguage
+        self.collaborationStyle = collaborationStyle
+        self.responseDepth = responseDepth
+        self.responseStructure = responseStructure
+        self.clarificationPolicy = clarificationPolicy
+        self.feedbackTone = feedbackTone
+        self.learningGuidance = learningGuidance
+        self.customInstructions = customInstructions
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let d = Self.defaults
+        responseLanguage = try c.decodeIfPresent(String.self, forKey: .responseLanguage) ?? d.responseLanguage
+        collaborationStyle = try c.decodeIfPresent(String.self, forKey: .collaborationStyle) ?? d.collaborationStyle
+        responseDepth = try c.decodeIfPresent(String.self, forKey: .responseDepth) ?? d.responseDepth
+        responseStructure = try c.decodeIfPresent(String.self, forKey: .responseStructure) ?? d.responseStructure
+        clarificationPolicy = try c.decodeIfPresent(String.self, forKey: .clarificationPolicy) ?? d.clarificationPolicy
+        feedbackTone = try c.decodeIfPresent(String.self, forKey: .feedbackTone) ?? d.feedbackTone
+        learningGuidance = try c.decodeIfPresent(String.self, forKey: .learningGuidance) ?? d.learningGuidance
+        customInstructions = try c.decodeIfPresent(String.self, forKey: .customInstructions)
+    }
+
+    var payload: [String: Any] {
+        [
+            "response_language": responseLanguage,
+            "collaboration_style": collaborationStyle,
+            "response_depth": responseDepth,
+            "response_structure": responseStructure,
+            "clarification_policy": clarificationPolicy,
+            "feedback_tone": feedbackTone,
+            "learning_guidance": learningGuidance,
+            "custom_instructions": customInstructions ?? NSNull()
+        ]
+    }
+
+    func patch(comparedTo previous: AIPreferences) -> [String: Any] {
+        var result: [String: Any] = [:]
+        if responseLanguage != previous.responseLanguage { result["response_language"] = responseLanguage }
+        if collaborationStyle != previous.collaborationStyle { result["collaboration_style"] = collaborationStyle }
+        if responseDepth != previous.responseDepth { result["response_depth"] = responseDepth }
+        if responseStructure != previous.responseStructure { result["response_structure"] = responseStructure }
+        if clarificationPolicy != previous.clarificationPolicy { result["clarification_policy"] = clarificationPolicy }
+        if feedbackTone != previous.feedbackTone { result["feedback_tone"] = feedbackTone }
+        if learningGuidance != previous.learningGuidance { result["learning_guidance"] = learningGuidance }
+        if customInstructions != previous.customInstructions {
+            result["custom_instructions"] = customInstructions ?? NSNull()
+        }
+        return result
+    }
+}
+
+struct AIOnboardingOption: Codable, Equatable, Identifiable {
+    let value: String
+    let labelKey: String
+    var id: String { value }
+    enum CodingKeys: String, CodingKey { case value; case labelKey = "label_key" }
+}
+
+struct AIOnboardingQuestion: Codable, Equatable, Identifiable {
+    let id: String
+    let messageKey: String
+    let required: Bool
+    let options: [AIOnboardingOption]
+    enum CodingKeys: String, CodingKey { case id; case messageKey = "message_key"; case required; case options }
+}
+
+struct AIOnboardingResponse: Codable, Equatable {
+    let version: Int
+    let completed: Bool
+    let completedAt: String?
+    let answers: AIPreferences
+    let questions: [AIOnboardingQuestion]
+    enum CodingKeys: String, CodingKey { case version; case completed; case completedAt = "completed_at"; case answers; case questions }
+}
+
+struct ChatGreeting: Decodable, Equatable {
+    let assistantName: String
+    let message: String
+    let messageKey: String
+    let format: String
+    let locale: String
+    let onboardingRequired: Bool
+    let onboardingVersion: Int
+    let questions: [AIOnboardingQuestion]
+    enum CodingKeys: String, CodingKey {
+        case assistantName = "assistant_name"; case message; case messageKey = "message_key"; case format; case locale
+        case onboardingRequired = "onboarding_required"; case onboardingVersion = "onboarding_version"; case questions
+    }
+    init(
+        assistantName: String,
+        message: String,
+        messageKey: String = "ai.chat.initial_greeting",
+        format: String = "markdown",
+        locale: String,
+        onboardingRequired: Bool,
+        onboardingVersion: Int,
+        questions: [AIOnboardingQuestion] = []
+    ) {
+        self.assistantName = assistantName
+        self.message = message
+        self.messageKey = messageKey
+        self.format = format
+        self.locale = locale
+        self.onboardingRequired = onboardingRequired
+        self.onboardingVersion = onboardingVersion
+        self.questions = questions
+    }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        assistantName = try c.decodeIfPresent(String.self, forKey: .assistantName) ?? "NotePatch AI"
+        message = try c.decodeIfPresent(String.self, forKey: .message) ?? ""
+        messageKey = try c.decodeIfPresent(String.self, forKey: .messageKey) ?? "ai.chat.initial_greeting"
+        format = try c.decodeIfPresent(String.self, forKey: .format) ?? "markdown"
+        locale = try c.decodeIfPresent(String.self, forKey: .locale) ?? "en-US"
+        onboardingRequired = try c.decodeIfPresent(Bool.self, forKey: .onboardingRequired) ?? false
+        onboardingVersion = try c.decodeIfPresent(Int.self, forKey: .onboardingVersion) ?? 0
+        questions = try c.decodeIfPresent([AIOnboardingQuestion].self, forKey: .questions) ?? []
     }
 }
 
@@ -203,9 +380,14 @@ struct BackendUser: Decodable, Equatable {
     let isActive: Bool
     let createdAt: String
     let aiHistoryEnabled: Bool
+    let autoImageRemarkEnabled: Bool
     let noteContentEditLevel: NoteContentEditLevel
     let noteLayoutEditLevel: NoteLayoutEditLevel
     let noteHistoryLimit: Int
+    let aiOnboardingVersion: Int
+    let aiOnboardingCompletedAt: String?
+    let aiOnboardingCompleted: Bool
+    let aiPreferences: AIPreferences
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -214,9 +396,14 @@ struct BackendUser: Decodable, Equatable {
         case isActive = "is_active"
         case createdAt = "created_at"
         case aiHistoryEnabled = "ai_history_enabled"
+        case autoImageRemarkEnabled = "auto_image_remark_enabled"
         case noteContentEditLevel = "note_content_edit_level"
         case noteLayoutEditLevel = "note_layout_edit_level"
         case noteHistoryLimit = "note_history_limit"
+        case aiOnboardingVersion = "ai_onboarding_version"
+        case aiOnboardingCompletedAt = "ai_onboarding_completed_at"
+        case aiOnboardingCompleted = "ai_onboarding_completed"
+        case aiPreferences = "ai_preferences"
     }
 
     init(from decoder: Decoder) throws {
@@ -227,9 +414,14 @@ struct BackendUser: Decodable, Equatable {
         isActive = try container.decodeIfPresent(Bool.self, forKey: .isActive) ?? true
         createdAt = try container.decodeIfPresent(String.self, forKey: .createdAt) ?? ""
         aiHistoryEnabled = try container.decodeIfPresent(Bool.self, forKey: .aiHistoryEnabled) ?? true
+        autoImageRemarkEnabled = try container.decodeIfPresent(Bool.self, forKey: .autoImageRemarkEnabled) ?? true
         noteContentEditLevel = try container.decodeIfPresent(NoteContentEditLevel.self, forKey: .noteContentEditLevel) ?? .conceptual
         noteLayoutEditLevel = try container.decodeIfPresent(NoteLayoutEditLevel.self, forKey: .noteLayoutEditLevel) ?? .minor
         noteHistoryLimit = try container.decodeIfPresent(Int.self, forKey: .noteHistoryLimit) ?? 3
+        aiOnboardingVersion = try container.decodeIfPresent(Int.self, forKey: .aiOnboardingVersion) ?? 0
+        aiOnboardingCompletedAt = try container.decodeIfPresent(String.self, forKey: .aiOnboardingCompletedAt)
+        aiOnboardingCompleted = try container.decodeIfPresent(Bool.self, forKey: .aiOnboardingCompleted) ?? false
+        aiPreferences = (try? container.decode(AIPreferences.self, forKey: .aiPreferences)) ?? .defaults
     }
 }
 
@@ -405,6 +597,8 @@ struct LearningDocumentItem: Decodable, Equatable, Identifiable {
     let workspaceId: String
     let uploadedBy: String
     let title: String?
+    let remark: String?
+    let remarkSource: String?
     let originalFilename: String
     let mimeType: String?
     let fileSize: Int64?
@@ -424,15 +618,28 @@ struct LearningDocumentItem: Decodable, Equatable, Identifiable {
     let chatConversationId: String?
     let saveToDocuments: Bool?
     let latestWorkflowRunId: String?
+    let imageRemarkStatus: String?
+    let imageRemarkTaskId: String?
     let createdAt: String
     let updatedAt: String
     let artifacts: [DocumentArtifactItem]
+
+    var displayRemark: String {
+        let value = remark?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return value.isEmpty ? originalFilename : value
+    }
+
+    var isImageRemarkActive: Bool {
+        ["waiting_upload", "waiting_ocr", "queued", "running"].contains(imageRemarkStatus ?? "")
+    }
 
     enum CodingKeys: String, CodingKey {
         case id
         case workspaceId = "workspace_id"
         case uploadedBy = "uploaded_by"
         case title
+        case remark
+        case remarkSource = "remark_source"
         case originalFilename = "original_filename"
         case mimeType = "mime_type"
         case fileSize = "file_size"
@@ -452,6 +659,8 @@ struct LearningDocumentItem: Decodable, Equatable, Identifiable {
         case chatConversationId = "chat_conversation_id"
         case saveToDocuments = "save_to_documents"
         case latestWorkflowRunId = "latest_workflow_run_id"
+        case imageRemarkStatus = "image_remark_status"
+        case imageRemarkTaskId = "image_remark_task_id"
         case createdAt = "created_at"
         case updatedAt = "updated_at"
         case artifacts
@@ -462,6 +671,8 @@ struct LearningDocumentItem: Decodable, Equatable, Identifiable {
         workspaceId: String,
         uploadedBy: String = "",
         title: String? = nil,
+        remark: String? = nil,
+        remarkSource: String? = nil,
         originalFilename: String,
         mimeType: String? = nil,
         fileSize: Int64? = nil,
@@ -481,6 +692,8 @@ struct LearningDocumentItem: Decodable, Equatable, Identifiable {
         chatConversationId: String? = nil,
         saveToDocuments: Bool? = nil,
         latestWorkflowRunId: String? = nil,
+        imageRemarkStatus: String? = nil,
+        imageRemarkTaskId: String? = nil,
         createdAt: String = "",
         updatedAt: String = "",
         artifacts: [DocumentArtifactItem] = []
@@ -489,6 +702,8 @@ struct LearningDocumentItem: Decodable, Equatable, Identifiable {
         self.workspaceId = workspaceId
         self.uploadedBy = uploadedBy
         self.title = title
+        self.remark = remark
+        self.remarkSource = remarkSource
         self.originalFilename = originalFilename
         self.mimeType = mimeType
         self.fileSize = fileSize
@@ -508,6 +723,8 @@ struct LearningDocumentItem: Decodable, Equatable, Identifiable {
         self.chatConversationId = chatConversationId
         self.saveToDocuments = saveToDocuments
         self.latestWorkflowRunId = latestWorkflowRunId
+        self.imageRemarkStatus = imageRemarkStatus
+        self.imageRemarkTaskId = imageRemarkTaskId
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.artifacts = artifacts
@@ -1174,6 +1391,22 @@ struct StudyNoteVersion: Decodable, Equatable, Identifiable {
         renderedHTMLDownloadURL ?? preferredHTMLDownloadURL ?? downloadURLs["json"]
     }
 
+    var completionCount: Int? {
+        metadata["completion_count"]?.intValue
+    }
+
+    var completionSourceDocumentIds: [String] {
+        metadata["completion_source_document_ids"]?.stringArrayValue ?? []
+    }
+
+    var completionEvidenceRevision: Int? {
+        metadata["completion_evidence_revision"]?.intValue
+    }
+
+    var completionStrategy: String? {
+        metadata["completion_strategy"]?.stringValue
+    }
+
     var renderedHTMLDownloadURL: String? {
         downloadURLs["rendered_html"]
     }
@@ -1350,6 +1583,66 @@ struct FlashcardDeck: Decodable, Equatable, Identifiable {
     }
 }
 
+struct FlashcardHintItem: Decodable, Equatable {
+    let code: String
+    let messageKey: String
+    let tone: String
+    let params: [String: JSONValue]
+
+    enum CodingKeys: String, CodingKey {
+        case code
+        case messageKey = "message_key"
+        case tone
+        case params
+    }
+
+    init(code: String, messageKey: String, tone: String, params: [String: JSONValue] = [:]) {
+        self.code = code
+        self.messageKey = messageKey
+        self.tone = tone
+        self.params = params
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        code = try container.decodeIfPresent(String.self, forKey: .code) ?? "general_review"
+        messageKey = try container.decodeIfPresent(String.self, forKey: .messageKey)
+            ?? "flashcards.hints.general_review"
+        tone = try container.decodeIfPresent(String.self, forKey: .tone) ?? "neutral"
+        params = try container.decodeIfPresent([String: JSONValue].self, forKey: .params) ?? [:]
+    }
+}
+
+struct FlashcardReviewHint: Decodable, Equatable {
+    let primary: FlashcardHintItem
+    let badges: [FlashcardHintItem]
+    let dataQuality: String
+
+    enum CodingKeys: String, CodingKey {
+        case primary
+        case badges
+        case dataQuality = "data_quality"
+    }
+
+    init(primary: FlashcardHintItem, badges: [FlashcardHintItem] = [], dataQuality: String = "complete") {
+        self.primary = primary
+        self.badges = Array(badges.prefix(3))
+        self.dataQuality = dataQuality
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        primary = try container.decodeIfPresent(FlashcardHintItem.self, forKey: .primary)
+            ?? FlashcardHintItem(
+                code: "general_review",
+                messageKey: "flashcards.hints.general_review",
+                tone: "neutral"
+            )
+        badges = Array((try container.decodeIfPresent([FlashcardHintItem].self, forKey: .badges) ?? []).prefix(3))
+        dataQuality = try container.decodeIfPresent(String.self, forKey: .dataQuality) ?? "legacy"
+    }
+}
+
 struct Flashcard: Decodable, Equatable, Identifiable {
     let id: String
     let knowledgePointId: String
@@ -1359,6 +1652,7 @@ struct Flashcard: Decodable, Equatable, Identifiable {
     let priorityFactors: [String: JSONValue]
     let sourceRefs: [JSONValue]
     let difficulty: String?
+    let reviewHint: FlashcardReviewHint?
     let rank: Int
     let createdAt: String
 
@@ -1371,6 +1665,7 @@ struct Flashcard: Decodable, Equatable, Identifiable {
         case priorityFactors = "priority_factors"
         case sourceRefs = "source_refs"
         case difficulty
+        case reviewHint = "review_hint"
         case rank
         case createdAt = "created_at"
     }
@@ -1384,6 +1679,7 @@ struct Flashcard: Decodable, Equatable, Identifiable {
         priorityFactors: [String: JSONValue] = [:],
         sourceRefs: [JSONValue] = [],
         difficulty: String? = nil,
+        reviewHint: FlashcardReviewHint? = nil,
         rank: Int,
         createdAt: String
     ) {
@@ -1395,6 +1691,7 @@ struct Flashcard: Decodable, Equatable, Identifiable {
         self.priorityFactors = priorityFactors
         self.sourceRefs = sourceRefs
         self.difficulty = difficulty
+        self.reviewHint = reviewHint
         self.rank = rank
         self.createdAt = createdAt
     }
@@ -1848,9 +2145,14 @@ struct SavedSession: Equatable {
     let fullName: String?
     let selectedWorkspaceId: String?
     let aiHistoryEnabled: Bool
+    var autoImageRemarkEnabled: Bool = true
     var noteContentEditLevel: NoteContentEditLevel = .conceptual
     var noteLayoutEditLevel: NoteLayoutEditLevel = .minor
     var noteHistoryLimit: Int = 3
+    var aiOnboardingVersion: Int = 0
+    var aiOnboardingCompletedAt: String? = nil
+    var aiOnboardingCompleted: Bool = true
+    var aiPreferences: AIPreferences = .defaults
 
     func withTokenResponse(_ tokenResponse: TokenResponse) -> SavedSession {
         SavedSession(
@@ -1864,9 +2166,14 @@ struct SavedSession: Equatable {
             fullName: tokenResponse.user.fullName,
             selectedWorkspaceId: selectedWorkspaceId,
             aiHistoryEnabled: tokenResponse.user.aiHistoryEnabled,
+            autoImageRemarkEnabled: tokenResponse.user.autoImageRemarkEnabled,
             noteContentEditLevel: tokenResponse.user.noteContentEditLevel,
             noteLayoutEditLevel: tokenResponse.user.noteLayoutEditLevel,
-            noteHistoryLimit: tokenResponse.user.noteHistoryLimit
+            noteHistoryLimit: tokenResponse.user.noteHistoryLimit,
+            aiOnboardingVersion: tokenResponse.user.aiOnboardingVersion,
+            aiOnboardingCompletedAt: tokenResponse.user.aiOnboardingCompletedAt,
+            aiOnboardingCompleted: tokenResponse.user.aiOnboardingCompleted,
+            aiPreferences: tokenResponse.user.aiPreferences
         )
     }
 
@@ -1882,9 +2189,14 @@ struct SavedSession: Equatable {
             fullName: fullName,
             selectedWorkspaceId: selectedWorkspaceId,
             aiHistoryEnabled: enabled,
+            autoImageRemarkEnabled: autoImageRemarkEnabled,
             noteContentEditLevel: noteContentEditLevel,
             noteLayoutEditLevel: noteLayoutEditLevel,
-            noteHistoryLimit: noteHistoryLimit
+            noteHistoryLimit: noteHistoryLimit,
+            aiOnboardingVersion: aiOnboardingVersion,
+            aiOnboardingCompletedAt: aiOnboardingCompletedAt,
+            aiOnboardingCompleted: aiOnboardingCompleted,
+            aiPreferences: aiPreferences
         )
     }
 
@@ -1900,9 +2212,14 @@ struct SavedSession: Equatable {
             fullName: user.fullName,
             selectedWorkspaceId: selectedWorkspaceId,
             aiHistoryEnabled: user.aiHistoryEnabled,
+            autoImageRemarkEnabled: user.autoImageRemarkEnabled,
             noteContentEditLevel: user.noteContentEditLevel,
             noteLayoutEditLevel: user.noteLayoutEditLevel,
-            noteHistoryLimit: user.noteHistoryLimit
+            noteHistoryLimit: user.noteHistoryLimit,
+            aiOnboardingVersion: user.aiOnboardingVersion,
+            aiOnboardingCompletedAt: user.aiOnboardingCompletedAt,
+            aiOnboardingCompleted: user.aiOnboardingCompleted,
+            aiPreferences: user.aiPreferences
         )
     }
 
@@ -1918,10 +2235,24 @@ struct SavedSession: Equatable {
             fullName: profile.name,
             selectedWorkspaceId: selectedWorkspaceId,
             aiHistoryEnabled: aiHistoryEnabled,
+            autoImageRemarkEnabled: autoImageRemarkEnabled,
             noteContentEditLevel: noteContentEditLevel,
             noteLayoutEditLevel: noteLayoutEditLevel,
-            noteHistoryLimit: noteHistoryLimit
+            noteHistoryLimit: noteHistoryLimit,
+            aiOnboardingVersion: aiOnboardingVersion,
+            aiOnboardingCompletedAt: aiOnboardingCompletedAt,
+            aiOnboardingCompleted: aiOnboardingCompleted,
+            aiPreferences: aiPreferences
         )
+    }
+
+    func withAIOnboarding(_ onboarding: AIOnboardingResponse) -> SavedSession {
+        var updated = self
+        updated.aiOnboardingVersion = onboarding.version
+        updated.aiOnboardingCompletedAt = onboarding.completedAt
+        updated.aiOnboardingCompleted = onboarding.completed
+        updated.aiPreferences = onboarding.answers
+        return updated
     }
 
     func withNotePreferences(
@@ -2009,6 +2340,24 @@ enum JSONValue: Codable, Equatable {
             return !object.isEmpty
         }
         return false
+    }
+
+    var stringValue: String? {
+        guard case .string(let value) = self else { return nil }
+        return value
+    }
+
+    var intValue: Int? {
+        switch self {
+        case .number(let value): return Int(value)
+        case .string(let value): return Int(value)
+        default: return nil
+        }
+    }
+
+    var stringArrayValue: [String]? {
+        guard case .array(let values) = self else { return nil }
+        return values.compactMap(\.stringValue)
     }
 
     func objectStringValue(for key: String) -> String? {

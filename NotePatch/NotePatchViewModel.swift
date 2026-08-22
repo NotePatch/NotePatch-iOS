@@ -203,6 +203,7 @@ final class NotePatchViewModel: ObservableObject {
     let authenticationState: AuthenticationState
     let userProfileState: UserProfileState
     let learningWorkflowState: LearningWorkflowState
+    let aiExperienceState: AIExperienceState
     @Published var apiBaseURLText: String
     @Published var tusBaseURLText: String
     @Published var emailText: String
@@ -218,7 +219,10 @@ final class NotePatchViewModel: ObservableObject {
     @Published var workspaces: [WorkspaceItem] = []
     @Published var selectedWorkspaceId: String?
     @Published var documents: [LearningDocumentItem] = [] {
-        didSet { homeDashboardState.updateDocuments(documents) }
+        didSet {
+            homeDashboardState.updateDocuments(documents)
+            reconcileImageRemarkTracking(with: documents)
+        }
     }
     @Published var activeTask: TaskItem? {
         didSet { homeDashboardState.updateActiveTask(activeTask) }
@@ -240,6 +244,9 @@ final class NotePatchViewModel: ObservableObject {
     let openClawComposerState: OpenClawComposerState
     @Published var aiHistoryEnabled = true
     @Published private(set) var isAIPreferenceUpdating = false
+    @Published var autoImageRemarkEnabled = true
+    @Published private(set) var isAutoImageRemarkPreferenceUpdating = false
+    @Published private(set) var documentRemarkUpdatingId: String?
     @Published var noteContentEditLevel: NoteContentEditLevel = .conceptual
     @Published var noteLayoutEditLevel: NoteLayoutEditLevel = .minor
     @Published var noteHistoryLimit = 3
@@ -338,6 +345,8 @@ final class NotePatchViewModel: ObservableObject {
     @Published var downloadedPreview: DownloadedPreview?
     @Published private(set) var previewLoadingDocumentIds = Set<String>()
     @Published var queuedUploadItems: [QueuedUploadItem] = []
+    @Published var isLearningUploadFormatConfirmationPresented = false
+    @Published private(set) var pendingLearningFormatConversionIds: [UUID] = []
     @Published private(set) var isOfflineTestMode = false
 
     private let settings: SettingsStore
@@ -345,6 +354,7 @@ final class NotePatchViewModel: ObservableObject {
     private let tusSession: URLSession
     private let cacheDirectory: URL
     private let taskEventStreamingEnabled: Bool
+    private let imageRemarkSecondNanoseconds: UInt64
     private var nextOpenClawMessageId: Int64 = 1
     private var presenceTask: Task<Void, Never>?
     private var studyNoteGenerationPollingTask: Task<Void, Never>?
@@ -373,6 +383,13 @@ final class NotePatchViewModel: ObservableObject {
     private var messageRevisionGeneration = UUID()
     private var aiPreferenceTask: Task<Void, Never>?
     private var aiPreferenceGeneration = UUID()
+    private var autoImageRemarkPreferenceTask: Task<Void, Never>?
+    private var autoImageRemarkPreferenceGeneration = UUID()
+    private var imageRemarkTrackingTask: Task<Void, Never>?
+    private var imageRemarkTrackingGeneration = UUID()
+    private var trackedImageRemarkDocumentIds = Set<String>()
+    private var documentRemarkUpdateTask: Task<Void, Never>?
+    private var documentRemarkUpdateGeneration = UUID()
     private var notePreferenceTask: Task<Void, Never>?
     private var notePreferenceGeneration = UUID()
     private var homeworkSelectionTask: Task<Void, Never>?
@@ -551,7 +568,8 @@ final class NotePatchViewModel: ObservableObject {
         backendSession: URLSession = .shared,
         tusSession: URLSession = .shared,
         cacheDirectory: URL = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first ?? FileManager.default.temporaryDirectory,
-        taskEventStreamingEnabled: Bool = true
+        taskEventStreamingEnabled: Bool = true,
+        imageRemarkSecondNanoseconds: UInt64 = 1_000_000_000
     ) {
         if ProcessInfo.processInfo.arguments.contains("-NotePatchUITestResetGlobalFeedback") {
             settings.saveGlobalFeedbackEnabled(true)
@@ -565,6 +583,7 @@ final class NotePatchViewModel: ObservableObject {
         self.authenticationState = AuthenticationState(session: loadedSession)
         self.userProfileState = UserProfileState()
         self.learningWorkflowState = LearningWorkflowState()
+        self.aiExperienceState = AIExperienceState()
         self.openClawState = OpenClawViewState()
         self.openClawComposerState = OpenClawComposerState()
         self.settings = settings
@@ -572,6 +591,7 @@ final class NotePatchViewModel: ObservableObject {
         self.tusSession = tusSession
         self.cacheDirectory = cacheDirectory
         self.taskEventStreamingEnabled = taskEventStreamingEnabled
+        self.imageRemarkSecondNanoseconds = imageRemarkSecondNanoseconds
         self.apiBaseURLText = loadedSession?.baseURL ?? settings.loadBaseURL()
         self.tusBaseURLText = loadedSession?.tusBaseURL ?? settings.loadTUSBaseURL()
         self.emailText = loadedSession?.email ?? ""
@@ -579,6 +599,7 @@ final class NotePatchViewModel: ObservableObject {
         self.isGlobalFeedbackEnabled = settings.loadGlobalFeedbackEnabled()
         self.selectedWorkspaceId = loadedSession?.selectedWorkspaceId
         self.aiHistoryEnabled = loadedSession?.aiHistoryEnabled ?? true
+        self.autoImageRemarkEnabled = loadedSession?.autoImageRemarkEnabled ?? true
         self.noteContentEditLevel = loadedSession?.noteContentEditLevel ?? .conceptual
         self.noteLayoutEditLevel = loadedSession?.noteLayoutEditLevel ?? .minor
         self.noteHistoryLimit = loadedSession?.noteHistoryLimit ?? 3
@@ -587,7 +608,7 @@ final class NotePatchViewModel: ObservableObject {
         self.notePreferenceDraftHistoryLimit = loadedSession?.noteHistoryLimit ?? 3
         self.uploadNoteContentEditLevel = loadedSession?.noteContentEditLevel ?? .conceptual
         self.uploadNoteLayoutEditLevel = loadedSession?.noteLayoutEditLevel ?? .minor
-        self.openClawState.messages = [welcomeChatMessage]
+        self.openClawState.messages = []
         if ProcessInfo.processInfo.arguments.contains("-NotePatchUITestWorkbench") {
             activateOfflineTestMode()
         }
@@ -595,6 +616,14 @@ final class NotePatchViewModel: ObservableObject {
             if let file = makeUITestPendingImage(in: cacheDirectory) {
                 queuedUploadItems = [QueuedUploadItem(file: file, documentKind: uploadDocumentKind, learningMetadata: uploadLearningMetadata)]
             }
+        }
+        if ProcessInfo.processInfo.arguments.contains("-NotePatchUITestExtendedLearningConflict"),
+           let file = makeUITestPendingFile(named: "workbook.xlsx", in: cacheDirectory) {
+            queuedUploadItems = [QueuedUploadItem(
+                file: file,
+                documentKind: "courseware",
+                learningMetadata: LearningMetadata(subject: "math")
+            )]
         }
     }
 
@@ -641,12 +670,14 @@ final class NotePatchViewModel: ObservableObject {
         case .active:
             isAppActive = true
             resumeStudyNoteGenerationPollingIfNeeded()
+            startImageRemarkTrackingIfNeeded()
             if !isOfflineTestMode, let session {
                 startPresence(activeSession: session)
             }
         case .background, .inactive:
             isAppActive = false
             stopStudyNoteGenerationPolling()
+            stopImageRemarkTracking(clearTrackedDocuments: false)
             if !isOfflineTestMode {
                 stopPresence(activeSession: session, sendOffline: true, clearClientId: false)
             }
@@ -850,9 +881,14 @@ final class NotePatchViewModel: ObservableObject {
                     fullName: token.user.fullName,
                     selectedWorkspaceId: nil,
                     aiHistoryEnabled: token.user.aiHistoryEnabled,
+                    autoImageRemarkEnabled: token.user.autoImageRemarkEnabled,
                     noteContentEditLevel: token.user.noteContentEditLevel,
                     noteLayoutEditLevel: token.user.noteLayoutEditLevel,
-                    noteHistoryLimit: token.user.noteHistoryLimit
+                    noteHistoryLimit: token.user.noteHistoryLimit,
+                    aiOnboardingVersion: token.user.aiOnboardingVersion,
+                    aiOnboardingCompletedAt: token.user.aiOnboardingCompletedAt,
+                    aiOnboardingCompleted: token.user.aiOnboardingCompleted,
+                    aiPreferences: token.user.aiPreferences
                 )
                 saveSession(savedSession, synchronizeServerURLFields: true)
                 startPresence(activeSession: savedSession)
@@ -885,9 +921,14 @@ final class NotePatchViewModel: ObservableObject {
                     fullName: activeSession.fullName,
                     selectedWorkspaceId: activeSession.selectedWorkspaceId,
                     aiHistoryEnabled: activeSession.aiHistoryEnabled,
+                    autoImageRemarkEnabled: activeSession.autoImageRemarkEnabled,
                     noteContentEditLevel: activeSession.noteContentEditLevel,
                     noteLayoutEditLevel: activeSession.noteLayoutEditLevel,
-                    noteHistoryLimit: activeSession.noteHistoryLimit
+                    noteHistoryLimit: activeSession.noteHistoryLimit,
+                    aiOnboardingVersion: activeSession.aiOnboardingVersion,
+                    aiOnboardingCompletedAt: activeSession.aiOnboardingCompletedAt,
+                    aiOnboardingCompleted: activeSession.aiOnboardingCompleted,
+                    aiPreferences: activeSession.aiPreferences
                 ),
                 synchronizeServerURLFields: true
             )
@@ -1203,6 +1244,19 @@ final class NotePatchViewModel: ObservableObject {
             setError("upload.error.selection_required")
             return
         }
+        let incompatibleIds = queuedUploadItems.compactMap { item -> UUID? in
+            guard item.isSelected,
+                  learningDocumentKinds.contains(item.documentKind),
+                  !isSupportedLearningUpload(filename: item.file.filename, mimeType: item.file.mimeType) else {
+                return nil
+            }
+            return item.id
+        }
+        if !incompatibleIds.isEmpty {
+            pendingLearningFormatConversionIds = incompatibleIds
+            isLearningUploadFormatConfirmationPresented = true
+            return
+        }
 
         isBusy = true
         let generation = UUID()
@@ -1258,6 +1312,28 @@ final class NotePatchViewModel: ObservableObject {
                 setError("upload.some_failed_generic")
             }
         }
+    }
+
+    var pendingLearningFormatConversionCount: Int {
+        pendingLearningFormatConversionIds.count
+    }
+
+    func confirmLearningUploadFormatConversion() {
+        guard !isBusy, !pendingLearningFormatConversionIds.isEmpty else { return }
+        let pendingIds = Set(pendingLearningFormatConversionIds)
+        for index in queuedUploadItems.indices where pendingIds.contains(queuedUploadItems[index].id) {
+            guard queuedUploadItems[index].remoteState == nil else { continue }
+            queuedUploadItems[index].documentKind = "other"
+            queuedUploadItems[index].learningMetadata = LearningMetadata()
+            queuedUploadItems[index].state = .pending
+        }
+        cancelLearningUploadFormatConversion()
+        uploadSelectedQueuedFiles()
+    }
+
+    func cancelLearningUploadFormatConversion() {
+        pendingLearningFormatConversionIds = []
+        isLearningUploadFormatConfirmationPresented = false
     }
 
     func moveContinuousNotePage(_ id: UUID, direction: Int) {
@@ -1393,7 +1469,8 @@ final class NotePatchViewModel: ObservableObject {
                 fileSize: prepared.fileSize,
                 documentKind: item.documentKind,
                 learningMetadata: item.learningMetadata,
-                saveToDocuments: item.documentKind == "chat_attachment" ? item.saveToDocuments : nil
+                saveToDocuments: item.documentKind == "chat_attachment" ? item.saveToDocuments : nil,
+                remark: item.file.isImage ? item.remark : nil
             )
             remoteState = QueuedUploadRemoteState(
                 uploadSessionId: uploadSession.uploadSession.id,
@@ -1445,6 +1522,7 @@ final class NotePatchViewModel: ObservableObject {
             tusResult: tusResult,
             file: prepared
         )
+        trackImageRemarkIfNeeded(completedDocument)
         remoteState.documentId = completedDocument.id
         remoteState.tusUploadURL = tusResult.uploadURL
         remoteState.tusUploadId = tusResult.uploadId
@@ -1778,6 +1856,18 @@ final class NotePatchViewModel: ObservableObject {
             return false
         }
         let prompt = trimmedPrompt.isEmpty ? localized("chat.attachment_default_prompt") : trimmedPrompt
+        if !activeSession.aiOnboardingCompleted {
+            aiExperienceState.pendingSubmission = PendingAIChatSubmission(
+                prompt: rawPrompt,
+                attachments: files,
+                userId: activeSession.userId,
+                workspaceId: workspaceId,
+                didAutoRetry: false
+            )
+            aiExperienceState.isOnboardingPresented = true
+            loadAIOnboarding(force: true)
+            return false
+        }
         let requestedConversationId = selectedConversationId
         var chatAttachments = files.map { OpenClawChatAttachment(file: $0) }
         let userMessageId = allocateOpenClawMessageId()
@@ -1863,6 +1953,7 @@ final class NotePatchViewModel: ObservableObject {
                 let task = try await clientFor(chatSession).openClawChat(
                     workspaceId: workspaceId,
                     prompt: prompt,
+                    clientLocale: AppLocalization.shared.language.aiClientLocale,
                     conversationId: requestedConversationId,
                     input: input,
                     options: ["thinking": ["enabled": true, "effort": "adaptive"]]
@@ -1956,7 +2047,21 @@ final class NotePatchViewModel: ObservableObject {
                     return
                 }
                 if !taskWasAccepted {
-                    openClawMessages.removeAll { $0.id == userMessageId || $0.id == assistantMessageId }
+                    if let backendError = error as? LearningBackendError,
+                       backendError.backendCode == "ai_onboarding_required" {
+                        openClawMessages.removeAll { $0.id == userMessageId || $0.id == assistantMessageId }
+                        aiExperienceState.pendingSubmission = PendingAIChatSubmission(
+                            prompt: rawPrompt,
+                            attachments: files,
+                            userId: activeSession.userId,
+                            workspaceId: workspaceId,
+                            didAutoRetry: false
+                        )
+                        aiExperienceState.isOnboardingPresented = true
+                        loadAIOnboarding(force: true)
+                        return
+                    }
+                    openClawMessages.removeAll { $0.id == assistantMessageId }
                     showError(error)
                     return
                 }
@@ -2079,6 +2184,7 @@ final class NotePatchViewModel: ObservableObject {
                     conversationId: conversationId,
                     messageId: message.id,
                     prompt: trimmed,
+                    clientLocale: AppLocalization.shared.language.aiClientLocale,
                     options: ["thinking": ["enabled": true, "effort": "adaptive"]]
                 )
                 guard messageRevisionGeneration == requestGeneration,
@@ -2300,22 +2406,202 @@ final class NotePatchViewModel: ObservableObject {
             setLoading: { [weak self] isLoading in self?.isChatHistoryLoading = isLoading }
         ) { [weak self] activeSession, workspaceId, isCurrent in
             guard let self else { return }
-            try await self.refreshConversations(
-                activeSession: activeSession,
+            let client = self.clientFor(activeSession)
+            self.aiExperienceState.isGreetingLoading = true
+            async let greetingRequest = try? client.getChatGreeting(
                 workspaceId: workspaceId,
-                shouldApply: isCurrent
+                clientLocale: AppLocalization.shared.language.aiClientLocale
             )
-            if let conversationId = self.selectedConversationId {
-                try await self.refreshConversationMessages(
+            async let onboardingRequest = try? client.getAIOnboarding()
+            var chatError: Error?
+            do {
+                try await self.refreshConversations(
                     activeSession: activeSession,
                     workspaceId: workspaceId,
-                    conversationId: conversationId,
                     shouldApply: isCurrent
                 )
+                if let conversationId = self.selectedConversationId {
+                    try await self.refreshConversationMessages(
+                        activeSession: activeSession,
+                        workspaceId: workspaceId,
+                        conversationId: conversationId,
+                        shouldApply: isCurrent
+                    )
+                } else if isCurrent() {
+                    self.openClawMessages = []
+                }
+            } catch {
+                chatError = error
+            }
+            if let greeting = await greetingRequest, isCurrent() {
+                self.aiExperienceState.greeting = greeting
+                self.aiExperienceState.greetingError = nil
             } else if isCurrent() {
-                self.openClawMessages = [self.welcomeChatMessage]
+                self.aiExperienceState.greetingError = localized("ai.greeting.load_failed")
+            }
+            if isCurrent() {
+                self.aiExperienceState.isGreetingLoading = false
+            }
+            if let onboarding = await onboardingRequest, isCurrent() {
+                self.aiExperienceState.apply(onboarding, presentIfRequired: true)
+                if let current = self.session, current.userId == activeSession.userId {
+                    self.saveSession(current.withAIOnboarding(onboarding))
+                }
+            } else if isCurrent(), !activeSession.aiOnboardingCompleted {
+                self.aiExperienceState.errorMessage = localized("ai.onboarding.load_failed")
+                self.aiExperienceState.isOnboardingPresented = true
+            }
+            if let chatError {
+                throw chatError
             }
         }
+    }
+
+    func loadAIOnboarding(force: Bool = false) {
+        guard let activeSession = currentSessionOrError() else { return }
+        if aiExperienceState.isLoading && !force { return }
+        aiExperienceState.isLoading = true
+        aiExperienceState.errorMessage = nil
+        Task {
+            defer { aiExperienceState.isLoading = false }
+            do {
+                let response = try await clientFor(activeSession).getAIOnboarding()
+                guard isCurrentSessionContext(activeSession) else { return }
+                aiExperienceState.apply(response, presentIfRequired: true)
+                if let current = session, current.userId == activeSession.userId {
+                    saveSession(current.withAIOnboarding(response))
+                }
+            } catch {
+                guard isCurrentSessionContext(activeSession) else { return }
+                aiExperienceState.errorMessage = friendlyError(error)
+            }
+        }
+    }
+
+    func saveAIOnboarding() {
+        guard let activeSession = currentSessionOrError(),
+              let onboarding = aiExperienceState.onboarding,
+              !aiExperienceState.isSaving else { return }
+        let custom = aiExperienceState.draftPreferences.customInstructions?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard (custom?.count ?? 0) <= 1000 else {
+            aiExperienceState.errorMessage = localized("ai.onboarding.custom_too_long")
+            return
+        }
+        for question in onboarding.questions where question.required {
+            guard question.options.contains(where: { $0.value == aiExperienceState.answer(for: question.id) }) else {
+                aiExperienceState.errorMessage = localized("ai.onboarding.answer_required")
+                return
+            }
+        }
+        aiExperienceState.draftPreferences.customInstructions = custom?.isEmpty == true ? nil : custom
+
+        if isOfflineTestMode {
+            let completed = AIOnboardingResponse(
+                version: onboarding.version,
+                completed: true,
+                completedAt: ISO8601DateFormatter().string(from: Date()),
+                answers: aiExperienceState.draftPreferences,
+                questions: onboarding.questions
+            )
+            aiExperienceState.apply(completed, presentIfRequired: false)
+            aiExperienceState.isOnboardingPresented = false
+            if let current = session {
+                saveSession(current.withAIOnboarding(completed))
+            }
+            return
+        }
+
+        aiExperienceState.isSaving = true
+        aiExperienceState.errorMessage = nil
+        Task {
+            defer { aiExperienceState.isSaving = false }
+            do {
+                let response = try await clientFor(activeSession).completeAIOnboarding(
+                    version: onboarding.version,
+                    preferences: aiExperienceState.draftPreferences
+                )
+                guard isCurrentSessionContext(activeSession) else { return }
+                aiExperienceState.apply(response, presentIfRequired: false)
+                aiExperienceState.isOnboardingPresented = false
+                if let current = session, current.userId == activeSession.userId {
+                    saveSession(current.withAIOnboarding(response))
+                }
+                resumePendingAIChatIfPossible()
+            } catch let error as LearningBackendError where error.backendCode == "ai_onboarding_version_mismatch" {
+                let preserved = aiExperienceState.draftPreferences
+                do {
+                    let refreshed = try await clientFor(activeSession).getAIOnboarding()
+                    guard isCurrentSessionContext(activeSession) else { return }
+                    aiExperienceState.apply(refreshed, presentIfRequired: true)
+                    aiExperienceState.draftPreferences = preserved
+                    aiExperienceState.errorMessage = localized("ai.onboarding.version_changed")
+                } catch {
+                    aiExperienceState.errorMessage = friendlyError(error)
+                }
+            } catch {
+                guard isCurrentSessionContext(activeSession) else { return }
+                aiExperienceState.errorMessage = friendlyError(error)
+            }
+        }
+    }
+
+    func presentAISettings() {
+        guard let session else { return }
+        if !session.aiOnboardingCompleted {
+            aiExperienceState.isOnboardingPresented = true
+            loadAIOnboarding(force: true)
+            return
+        }
+        aiExperienceState.beginSettings(with: session.aiPreferences)
+    }
+
+    func saveAISettings() {
+        guard let activeSession = currentSessionOrError(), !aiExperienceState.isSaving else { return }
+        let custom = aiExperienceState.draftPreferences.customInstructions?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard (custom?.count ?? 0) <= 1000 else {
+            aiExperienceState.errorMessage = localized("ai.onboarding.custom_too_long")
+            return
+        }
+        aiExperienceState.draftPreferences.customInstructions = custom?.isEmpty == true ? nil : custom
+        let patch = aiExperienceState.draftPreferences.patch(comparedTo: activeSession.aiPreferences)
+        guard !patch.isEmpty else {
+            aiExperienceState.isSettingsPresented = false
+            return
+        }
+        aiExperienceState.isSaving = true
+        Task {
+            defer { aiExperienceState.isSaving = false }
+            do {
+                let user = try await clientFor(activeSession).updateAIProfilePreferences(patch)
+                guard isCurrentSessionContext(activeSession), let current = session else { return }
+                saveSession(current.withUser(user))
+                aiExperienceState.draftPreferences = user.aiPreferences
+                aiExperienceState.isSettingsPresented = false
+                setStatus("ai.preferences.saved")
+            } catch {
+                aiExperienceState.errorMessage = friendlyError(error)
+            }
+        }
+    }
+
+    func reloadAIGreetingForLanguageChange() {
+        aiExperienceState.greeting = nil
+        loadChatHistory(force: true)
+    }
+
+    private func resumePendingAIChatIfPossible() {
+        guard var pending = aiExperienceState.pendingSubmission,
+              !pending.didAutoRetry,
+              session?.userId == pending.userId,
+              selectedWorkspaceId == pending.workspaceId else {
+            aiExperienceState.pendingSubmission = nil
+            return
+        }
+        pending.didAutoRetry = true
+        aiExperienceState.pendingSubmission = nil
+        _ = startOpenClawChat(prompt: pending.prompt, attachments: pending.attachments)
     }
 
     func selectConversation(_ conversationId: String) {
@@ -2386,7 +2672,7 @@ final class NotePatchViewModel: ObservableObject {
         conversationLoadTask = nil
         isChatHistoryLoading = false
         selectedConversationId = nil
-        openClawMessages = [welcomeChatMessage]
+        openClawMessages = []
         openClawComposerState.attachments.forEach { preparedChatAttachmentDocuments[$0.id] = nil }
         openClawComposerState.clearDraft(removeAttachmentFiles: true)
     }
@@ -2470,7 +2756,7 @@ final class NotePatchViewModel: ObservableObject {
 
                 if selectedConversationId == conversationId {
                     selectedConversationId = conversations.first?.id
-                    openClawMessages = [welcomeChatMessage]
+                    openClawMessages = []
 
                     do {
                         try await refreshConversations(
@@ -2534,6 +2820,107 @@ final class NotePatchViewModel: ObservableObject {
                 guard aiPreferenceGeneration == generation,
                       session?.userId == activeSession.userId else { return }
                 aiHistoryEnabled = previous
+                showError(error)
+            }
+        }
+    }
+
+    func updateAutoImageRemarkEnabled(_ enabled: Bool) {
+        guard let activeSession = currentSessionOrError(), !isAutoImageRemarkPreferenceUpdating else { return }
+        let previous = autoImageRemarkEnabled
+        autoImageRemarkEnabled = enabled
+        isAutoImageRemarkPreferenceUpdating = true
+        let generation = UUID()
+        autoImageRemarkPreferenceGeneration = generation
+        errorMessage = nil
+        setStatus("image_remark.preference.saving")
+        autoImageRemarkPreferenceTask?.cancel()
+        autoImageRemarkPreferenceTask = Task {
+            defer {
+                if autoImageRemarkPreferenceGeneration == generation {
+                    autoImageRemarkPreferenceTask = nil
+                    isAutoImageRemarkPreferenceUpdating = false
+                }
+            }
+            do {
+                let user = try await clientFor(activeSession).updateAutoImageRemarkPreference(enabled: enabled)
+                guard autoImageRemarkPreferenceGeneration == generation,
+                      let current = session,
+                      current.userId == activeSession.userId else { return }
+                saveSession(current.withUser(user))
+                setStatus("image_remark.preference.saved")
+            } catch is CancellationError {
+                return
+            } catch {
+                guard autoImageRemarkPreferenceGeneration == generation,
+                      session?.userId == activeSession.userId else { return }
+                autoImageRemarkEnabled = previous
+                showError(error)
+            }
+        }
+    }
+
+    func updateQueuedUploadRemark(_ id: UUID, remark: String) -> Bool {
+        guard !isBusy,
+              let index = queuedUploadItems.firstIndex(where: { $0.id == id }),
+              queuedUploadItems[index].file.isImage,
+              queuedUploadItems[index].remoteState == nil else { return false }
+        let trimmed = remark.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count <= 255 else {
+            setError("image_remark.error.too_long")
+            return false
+        }
+        queuedUploadItems[index].remark = trimmed.isEmpty ? nil : trimmed
+        return true
+    }
+
+    func updateDocumentRemark(
+        _ document: LearningDocumentItem,
+        remark: String,
+        onSaved: @escaping @MainActor () -> Void = {}
+    ) {
+        let trimmed = remark.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            setError("image_remark.error.required")
+            return
+        }
+        guard trimmed.count <= 255 else {
+            setError("image_remark.error.too_long")
+            return
+        }
+        guard documentRemarkUpdatingId == nil,
+              let activeSession = currentSessionOrError(),
+              let workspaceId = selectedWorkspaceId else { return }
+        let generation = UUID()
+        documentRemarkUpdateGeneration = generation
+        documentRemarkUpdatingId = document.id
+        errorMessage = nil
+        setStatus("image_remark.saving")
+        documentRemarkUpdateTask?.cancel()
+        documentRemarkUpdateTask = Task {
+            defer {
+                if documentRemarkUpdateGeneration == generation {
+                    documentRemarkUpdateTask = nil
+                    documentRemarkUpdatingId = nil
+                }
+            }
+            do {
+                let updated = try await clientFor(activeSession).updateDocumentRemark(
+                    workspaceId: workspaceId,
+                    documentId: document.id,
+                    remark: trimmed
+                )
+                guard documentRemarkUpdateGeneration == generation,
+                      isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) else { return }
+                applyUpdatedDocument(updated)
+                trackedImageRemarkDocumentIds.remove(updated.id)
+                setStatus("image_remark.saved")
+                onSaved()
+            } catch is CancellationError {
+                return
+            } catch {
+                guard documentRemarkUpdateGeneration == generation,
+                      isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) else { return }
                 showError(error)
             }
         }
@@ -3628,6 +4015,8 @@ final class NotePatchViewModel: ObservableObject {
                 let optimisticItem = StudyNoteListItem(learningUnit: item.learningUnit, note: response.note)
                 selectedStudyNoteItem = optimisticItem
                 studyNoteHTML = html
+                studyNoteRenderedURL = nil
+                studyNoteReaderErrorText = nil
                 isStudyNoteEditorPresented = false
                 setStatus("operation.note_revision_saved")
 
@@ -4912,7 +5301,8 @@ final class NotePatchViewModel: ObservableObject {
     }
 
     func canProcessDocument(_ document: LearningDocumentItem) -> Bool {
-        document.documentKind != "chat_attachment"
+        learningDocumentKinds.contains(document.documentKind)
+            && learningPipelineFileTypes.contains(document.fileType)
             && ["uploaded", "ready", "failed"].contains(document.status)
     }
 
@@ -5023,6 +5413,7 @@ final class NotePatchViewModel: ObservableObject {
     private func activateOfflineTestMode() {
         presenceTask?.cancel()
         presenceTask = nil
+        let onboardingRequired = ProcessInfo.processInfo.arguments.contains("-NotePatchUITestAIOnboardingRequired")
         let uiSession = SavedSession(
             baseURL: normalizeLearningBackendBaseURL(apiBaseURLText),
             tusBaseURL: normalizeTUSBaseURL(tusBaseURLText),
@@ -5033,9 +5424,15 @@ final class NotePatchViewModel: ObservableObject {
             email: "uitest",
             fullName: "UI Test",
             selectedWorkspaceId: "ui-workspace",
-            aiHistoryEnabled: true
+            aiHistoryEnabled: true,
+            autoImageRemarkEnabled: true,
+            aiOnboardingVersion: onboardingRequired ? 0 : 1,
+            aiOnboardingCompletedAt: onboardingRequired ? nil : "2026-08-22T00:00:00Z",
+            aiOnboardingCompleted: !onboardingRequired,
+            aiPreferences: .defaults
         )
         let sampleDocuments = [
+            LearningDocumentItem(id: "remark-doc", workspaceId: "ui-workspace", title: "Whiteboard", remark: "CPU pipeline diagram", remarkSource: "ai_ocr", originalFilename: "IMG_0001.png", mimeType: "image/png", fileType: "image", documentKind: "note", status: "uploaded", imageRemarkStatus: "running"),
             LearningDocumentItem(id: "homework-doc", workspaceId: "ui-workspace", title: "Algebra Homework", originalFilename: "homework.pdf", mimeType: "application/pdf", fileType: "pdf", documentKind: "homework", status: "ready"),
             LearningDocumentItem(id: "answer-doc", workspaceId: "ui-workspace", title: "Answer Key", originalFilename: "answer.pdf", mimeType: "application/pdf", fileType: "pdf", documentKind: "answer_key", status: "ready"),
             LearningDocumentItem(id: "preparing-doc", workspaceId: "ui-workspace", title: "New Worksheet", originalFilename: "worksheet.pdf", mimeType: "application/pdf", fileType: "pdf", documentKind: "homework", status: "scanning")
@@ -5050,6 +5447,22 @@ final class NotePatchViewModel: ObservableObject {
         fullNameText = uiSession.fullName ?? ""
         selectedWorkspaceId = uiSession.selectedWorkspaceId
         workspaces = [WorkspaceItem(id: "ui-workspace", name: "My Workspace")]
+        let onboarding = AIOnboardingResponse(
+            version: 1,
+            completed: !onboardingRequired,
+            completedAt: onboardingRequired ? nil : "2026-08-22T00:00:00Z",
+            answers: .defaults,
+            questions: makeUITestAIOnboardingQuestions()
+        )
+        aiExperienceState.greeting = ChatGreeting(
+            assistantName: "NotePatch AI",
+            message: "NotePatch AI 可以帮助整理思路、分析学习资料并回答问题，回复支持 Markdown。",
+            locale: "zh-CN",
+            onboardingRequired: onboardingRequired,
+            onboardingVersion: 1,
+            questions: onboarding.questions
+        )
+        aiExperienceState.apply(onboarding, presentIfRequired: onboardingRequired)
         documents = sampleDocuments
         learningUnits = [
             LearningUnit(
@@ -5154,6 +5567,28 @@ final class NotePatchViewModel: ObservableObject {
                 back: "The relationship between **two quantities**.",
                 priorityScore: 1.8,
                 priorityFactors: ["base": .number(1), "error_pressure": .number(0.4), "success_pressure": .number(0.1), "recent_correct_streak": .number(0)],
+                reviewHint: FlashcardReviewHint(
+                    primary: FlashcardHintItem(
+                        code: "frequent_recent_errors",
+                        messageKey: "flashcards.hints.frequent_recent_errors",
+                        tone: "warning",
+                        params: ["count": .number(3), "window_days": .number(30)]
+                    ),
+                    badges: [
+                        FlashcardHintItem(
+                            code: "historical_errors",
+                            messageKey: "flashcards.badges.historical_errors",
+                            tone: "neutral",
+                            params: ["count": .number(4)]
+                        ),
+                        FlashcardHintItem(
+                            code: "latest_outcome",
+                            messageKey: "flashcards.badges.latest_outcome",
+                            tone: "warning",
+                            params: ["outcome": .string("incorrect")]
+                        )
+                    ]
+                ),
                 rank: 1,
                 createdAt: "2026-07-14T00:00:00Z"
             ),
@@ -5164,6 +5599,14 @@ final class NotePatchViewModel: ObservableObject {
                 back: "1. Set the cross products equal.\n2. Solve for the `unknown`.",
                 priorityScore: 1.2,
                 priorityFactors: ["base": .number(1), "recent_correct_streak": .number(1)],
+                reviewHint: FlashcardReviewHint(
+                    primary: FlashcardHintItem(
+                        code: "from_notes",
+                        messageKey: "flashcards.hints.from_notes",
+                        tone: "neutral"
+                    ),
+                    dataQuality: "legacy"
+                ),
                 rank: 2,
                 createdAt: "2026-07-14T00:00:00Z"
             )
@@ -5195,7 +5638,9 @@ final class NotePatchViewModel: ObservableObject {
                 ChatConversation(
                     id: "ui-conv-1",
                     workspaceId: "ui-workspace",
-                    title: "数学作业讲解",
+                    title: ProcessInfo.processInfo.arguments.contains("-NotePatchUITestLongConversationTitle")
+                        ? "数学作业讲解与本周错题复习计划详细讨论"
+                        : "数学作业讲解",
                     lastMessageAt: "2026-08-18T09:30:00Z",
                     createdAt: "2026-08-18T09:00:00Z",
                     updatedAt: "2026-08-18T09:30:00Z"
@@ -5335,7 +5780,7 @@ final class NotePatchViewModel: ObservableObject {
                 )
             }
         } else {
-            openClawMessages = [welcomeChatMessage]
+            openClawMessages = []
         }
         if ProcessInfo.processInfo.arguments.contains("-NotePatchUITestPurgeFailure") {
             activeTask = TaskItem(
@@ -5372,6 +5817,14 @@ final class NotePatchViewModel: ObservableObject {
         aiPreferenceGeneration = UUID()
         aiPreferenceTask?.cancel()
         aiPreferenceTask = nil
+        autoImageRemarkPreferenceGeneration = UUID()
+        autoImageRemarkPreferenceTask?.cancel()
+        autoImageRemarkPreferenceTask = nil
+        documentRemarkUpdateGeneration = UUID()
+        documentRemarkUpdateTask?.cancel()
+        documentRemarkUpdateTask = nil
+        documentRemarkUpdatingId = nil
+        stopImageRemarkTracking(clearTrackedDocuments: true)
         uploadImportGeneration = UUID()
         uploadQueueGeneration = UUID()
         learningUnitSelectionGeneration = UUID()
@@ -5398,6 +5851,7 @@ final class NotePatchViewModel: ObservableObject {
         isBusy = false
         uploadProgressPercent = nil
         uploadProgressLabel = ""
+        cancelLearningUploadFormatConversion()
         isOfflineTestMode = false
         didRestoreSession = false
         session = nil
@@ -5413,7 +5867,9 @@ final class NotePatchViewModel: ObservableObject {
         retryableDocumentPurgeId = nil
         isDocumentPurgeRetryAvailable = false
         clearChatWorkspaceState()
+        aiExperienceState.reset()
         isAIPreferenceUpdating = false
+        isAutoImageRemarkPreferenceUpdating = false
         notePreferenceTask?.cancel()
         notePreferenceTask = nil
         isNotePreferenceUpdating = false
@@ -5425,6 +5881,7 @@ final class NotePatchViewModel: ObservableObject {
         closeStudyNoteReader()
         clearLearningWorkspaceState()
         aiHistoryEnabled = true
+        autoImageRemarkEnabled = true
         noteContentEditLevel = .conceptual
         noteLayoutEditLevel = .minor
         noteHistoryLimit = 3
@@ -5471,6 +5928,7 @@ final class NotePatchViewModel: ObservableObject {
         fullNameText = updated.fullName ?? ""
         selectedWorkspaceId = updated.selectedWorkspaceId
         aiHistoryEnabled = updated.aiHistoryEnabled
+        autoImageRemarkEnabled = updated.autoImageRemarkEnabled
         noteContentEditLevel = updated.noteContentEditLevel
         noteLayoutEditLevel = updated.noteLayoutEditLevel
         noteHistoryLimit = updated.noteHistoryLimit
@@ -5479,14 +5937,28 @@ final class NotePatchViewModel: ObservableObject {
             notePreferenceDraftLayout = updated.noteLayoutEditLevel
             notePreferenceDraftHistoryLimit = updated.noteHistoryLimit
         }
+        if !uploadUsesCustomNoteStrategy {
+            uploadNoteContentEditLevel = updated.noteContentEditLevel
+            uploadNoteLayoutEditLevel = updated.noteLayoutEditLevel
+        }
+        if !studyNoteGenerationUsesOverride {
+            studyNoteGenerationContentLevel = updated.noteContentEditLevel
+            studyNoteGenerationLayoutLevel = updated.noteLayoutEditLevel
+        }
     }
 
     private func saveSelectedWorkspace(_ workspaceId: String?) {
         if selectedWorkspaceId != workspaceId {
+            stopImageRemarkTracking(clearTrackedDocuments: true)
+            documentRemarkUpdateGeneration = UUID()
+            documentRemarkUpdateTask?.cancel()
+            documentRemarkUpdateTask = nil
+            documentRemarkUpdatingId = nil
             invalidateDeferredContentLoads()
             DocumentThumbnailPipeline.shared.removeAll()
             clearAIModelState()
             clearChatWorkspaceState()
+            aiExperienceState.reset()
             workflowLoadTask?.cancel()
             workflowMonitorTask?.cancel()
             workflows = []
@@ -5516,9 +5988,14 @@ final class NotePatchViewModel: ObservableObject {
                     fullName: latest.fullName,
                     selectedWorkspaceId: workspaceId,
                     aiHistoryEnabled: latest.aiHistoryEnabled,
+                    autoImageRemarkEnabled: latest.autoImageRemarkEnabled,
                     noteContentEditLevel: latest.noteContentEditLevel,
                     noteLayoutEditLevel: latest.noteLayoutEditLevel,
-                    noteHistoryLimit: latest.noteHistoryLimit
+                    noteHistoryLimit: latest.noteHistoryLimit,
+                    aiOnboardingVersion: latest.aiOnboardingVersion,
+                    aiOnboardingCompletedAt: latest.aiOnboardingCompletedAt,
+                    aiOnboardingCompleted: latest.aiOnboardingCompleted,
+                    aiPreferences: latest.aiPreferences
                 )
             )
         }
@@ -5921,6 +6398,149 @@ final class NotePatchViewModel: ObservableObject {
         }
     }
 
+    private func reconcileImageRemarkTracking(with loadedDocuments: [LearningDocumentItem]) {
+        guard !isOfflineTestMode else { return }
+        for document in loadedDocuments where document.fileType == "image" {
+            if document.isImageRemarkActive {
+                trackedImageRemarkDocumentIds.insert(document.id)
+            } else {
+                trackedImageRemarkDocumentIds.remove(document.id)
+            }
+        }
+        startImageRemarkTrackingIfNeeded()
+    }
+
+    private func trackImageRemarkIfNeeded(_ document: LearningDocumentItem) {
+        guard document.fileType == "image", document.isImageRemarkActive else {
+            trackedImageRemarkDocumentIds.remove(document.id)
+            return
+        }
+        trackedImageRemarkDocumentIds.insert(document.id)
+        startImageRemarkTrackingIfNeeded()
+    }
+
+    private func applyUpdatedDocument(_ document: LearningDocumentItem) {
+        if let index = documents.firstIndex(where: { $0.id == document.id }) {
+            guard documents[index] != document else {
+                trackImageRemarkIfNeeded(document)
+                return
+            }
+            documents[index] = document
+        }
+        trackImageRemarkIfNeeded(document)
+    }
+
+    private func startImageRemarkTrackingIfNeeded() {
+        guard isAppActive,
+              !isOfflineTestMode,
+              imageRemarkTrackingTask == nil,
+              !trackedImageRemarkDocumentIds.isEmpty,
+              let activeSession = session,
+              let workspaceId = selectedWorkspaceId else { return }
+        let generation = UUID()
+        imageRemarkTrackingGeneration = generation
+        imageRemarkTrackingTask = Task {
+            defer {
+                if imageRemarkTrackingGeneration == generation {
+                    imageRemarkTrackingTask = nil
+                }
+            }
+            var retryDelay: UInt64 = 3
+            while imageRemarkTrackingGeneration == generation,
+                  isAppActive,
+                  isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId),
+                  !trackedImageRemarkDocumentIds.isEmpty {
+                do {
+                    try await Task.sleep(nanoseconds: retryDelay * imageRemarkSecondNanoseconds)
+                    try Task.checkCancellation()
+                    let ids = Array(trackedImageRemarkDocumentIds)
+                    let results = await loadImageRemarkDocumentsConcurrently(
+                        activeSession: session ?? activeSession,
+                        workspaceId: workspaceId,
+                        documentIds: ids
+                    )
+                    guard imageRemarkTrackingGeneration == generation,
+                          isAppActive,
+                          isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) else { return }
+                    var successfulCount = 0
+                    var firstError: Error?
+                    for result in results {
+                        if let document = result.document {
+                            successfulCount += 1
+                            applyUpdatedDocument(document)
+                        } else if firstError == nil {
+                            firstError = result.error
+                        }
+                    }
+                    if firstError == nil && successfulCount > 0 {
+                        retryDelay = 3
+                    } else {
+                        retryDelay = min(30, retryDelay == 3 ? 5 : retryDelay * 2)
+                    }
+                    if let backendError = firstError as? LearningBackendError,
+                       backendError.shouldClearSession || backendError.statusCode == 403 {
+                        showError(backendError)
+                        return
+                    }
+                } catch is CancellationError {
+                    return
+                } catch {
+                    retryDelay = min(30, retryDelay == 3 ? 5 : retryDelay * 2)
+                }
+            }
+        }
+    }
+
+    private func stopImageRemarkTracking(clearTrackedDocuments: Bool) {
+        imageRemarkTrackingGeneration = UUID()
+        imageRemarkTrackingTask?.cancel()
+        imageRemarkTrackingTask = nil
+        if clearTrackedDocuments {
+            trackedImageRemarkDocumentIds = []
+        }
+    }
+
+    private func loadImageRemarkDocumentsConcurrently(
+        activeSession: SavedSession,
+        workspaceId: String,
+        documentIds: [String]
+    ) async -> [(document: LearningDocumentItem?, error: Error?)] {
+        let maxConcurrentRequests = 4
+        var results = Array<(document: LearningDocumentItem?, error: Error?)>(
+            repeating: (nil, nil),
+            count: documentIds.count
+        )
+        await withTaskGroup(of: (Int, LearningDocumentItem?, Error?).self) { group in
+            var nextIndex = 0
+            func enqueueNext() {
+                guard nextIndex < documentIds.count else { return }
+                let index = nextIndex
+                let documentId = documentIds[index]
+                nextIndex += 1
+                group.addTask { [weak self] in
+                    guard let self else { return (index, nil, CancellationError()) }
+                    do {
+                        let document = try await self.clientFor(activeSession).getDocument(
+                            workspaceId: workspaceId,
+                            documentId: documentId
+                        )
+                        return (index, document, nil)
+                    } catch {
+                        return (index, nil, error)
+                    }
+                }
+            }
+            for _ in 0..<min(maxConcurrentRequests, documentIds.count) {
+                enqueueNext()
+            }
+            while let (index, document, error) = await group.next() {
+                results[index] = (document, error)
+                enqueueNext()
+            }
+        }
+        return results
+    }
+
     private func refreshAfterDocumentDeletion(activeSession: SavedSession, workspaceId: String) async -> Error? {
         var firstError: Error?
 
@@ -5954,9 +6574,14 @@ final class NotePatchViewModel: ObservableObject {
         if user.email != activeSession.email
             || user.fullName != activeSession.fullName
             || user.aiHistoryEnabled != activeSession.aiHistoryEnabled
+            || user.autoImageRemarkEnabled != activeSession.autoImageRemarkEnabled
             || user.noteContentEditLevel != activeSession.noteContentEditLevel
             || user.noteLayoutEditLevel != activeSession.noteLayoutEditLevel
-            || user.noteHistoryLimit != activeSession.noteHistoryLimit {
+            || user.noteHistoryLimit != activeSession.noteHistoryLimit
+            || user.aiOnboardingVersion != activeSession.aiOnboardingVersion
+            || user.aiOnboardingCompletedAt != activeSession.aiOnboardingCompletedAt
+            || user.aiOnboardingCompleted != activeSession.aiOnboardingCompleted
+            || user.aiPreferences != activeSession.aiPreferences {
             guard let currentSession = session, currentSession.userId == activeSession.userId else {
                 throw CancellationError()
             }
@@ -6195,10 +6820,6 @@ final class NotePatchViewModel: ObservableObject {
         openClawState.updateMessage(id: messageId, transform: transform)
     }
 
-    private var welcomeChatMessage: OpenClawChatMessage {
-        OpenClawChatMessage(id: "system", role: .system, content: "", status: .done, taskId: nil, progress: nil, events: [])
-    }
-
     private func refreshConversations(
         activeSession: SavedSession,
         workspaceId: String,
@@ -6257,7 +6878,7 @@ final class NotePatchViewModel: ObservableObject {
                 attachments: restoredAttachments
             )
         }
-        openClawMessages = messages.isEmpty ? [welcomeChatMessage] : messages
+        openClawMessages = messages
         try await hydrateChatAttachments(
             serverAttachmentsByMessageId,
             activeSession: activeSession,
@@ -6761,6 +7382,7 @@ final class NotePatchViewModel: ObservableObject {
         isBusy = false
         uploadProgressPercent = nil
         uploadProgressLabel = ""
+        cancelLearningUploadFormatConversion()
         isLearningUnitMergePresented = false
         isLearningUnitMergeConfirmationPresented = false
         mergeTargetLearningUnitId = ""
@@ -6794,6 +7416,7 @@ final class NotePatchViewModel: ObservableObject {
         flashcardErrorText = nil
         studyNoteGroups = []
         closeStudyNoteReader()
+        aiExperienceState.reset()
     }
 
     private func clearChatWorkspaceState() {
@@ -6826,7 +7449,7 @@ final class NotePatchViewModel: ObservableObject {
 
         conversations = []
         selectedConversationId = nil
-        openClawMessages = [welcomeChatMessage]
+        openClawMessages = []
         openClawComposerState.clearDraft(removeAttachmentFiles: true)
         isOpenClawSending = false
         isChatHistoryLoading = false
@@ -6845,6 +7468,40 @@ private func makeUITestPendingImage(in cacheDirectory: URL) -> LocalUploadFile? 
         context.fill(CGRect(x: 80, y: 80, width: 800, height: 480))
     }
     return try? writeImageToUploadCache(image, cacheDirectory: cacheDirectory)
+}
+
+private func makeUITestPendingFile(named filename: String, in cacheDirectory: URL) -> LocalUploadFile? {
+    let directory = cacheDirectory.appendingPathComponent("uploads", isDirectory: true)
+    let url = directory.appendingPathComponent(filename)
+    do {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try Data("fixture".utf8).write(to: url, options: .atomic)
+        return LocalUploadFile(url: url, filename: filename, mimeType: contentTypeForFilename(filename))
+    } catch {
+        return nil
+    }
+}
+
+private func makeUITestAIOnboardingQuestions() -> [AIOnboardingQuestion] {
+    let definitions: [(String, [String])] = [
+        ("response_language", ["match_user", "client_locale", "zh-CN", "en-US", "pt-BR"]),
+        ("collaboration_style", ["direct", "collaborative", "coach", "socratic"]),
+        ("response_depth", ["concise", "balanced", "detailed"]),
+        ("response_structure", ["adaptive", "steps", "bullets", "prose"]),
+        ("clarification_policy", ["ask_when_ambiguous", "assume_when_safe", "confirm_before_actions"]),
+        ("feedback_tone", ["gentle", "neutral", "strict"]),
+        ("learning_guidance", ["answer_first", "explain_then_answer", "hint_first"])
+    ]
+    return definitions.map { id, values in
+        AIOnboardingQuestion(
+            id: id,
+            messageKey: "ai.onboarding.questions.\(id)",
+            required: true,
+            options: values.map {
+                AIOnboardingOption(value: $0, labelKey: "ai.onboarding.options.\(id).\($0)")
+            }
+        )
+    }
 }
 
 private extension Comparable {

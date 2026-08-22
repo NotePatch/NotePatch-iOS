@@ -172,6 +172,15 @@ final class LearningBackendClient {
         )
     }
 
+    func updateAutoImageRemarkPreference(enabled: Bool) async throws -> BackendUser {
+        try await authedJSON(
+            "PATCH",
+            "/auth/preferences",
+            payload: ["auto_image_remark_enabled": enabled],
+            as: BackendUser.self
+        )
+    }
+
     func updateNotePreferences(
         contentEditLevel: NoteContentEditLevel,
         layoutEditLevel: NoteLayoutEditLevel,
@@ -185,6 +194,28 @@ final class LearningBackendClient {
                 "note_layout_edit_level": layoutEditLevel.rawValue,
                 "note_history_limit": min(100, max(0, historyLimit))
             ],
+            as: BackendUser.self
+        )
+    }
+
+    func getAIOnboarding() async throws -> AIOnboardingResponse {
+        try await authedJSON("GET", "/auth/ai-onboarding", payload: nil, as: AIOnboardingResponse.self)
+    }
+
+    func completeAIOnboarding(version: Int, preferences: AIPreferences) async throws -> AIOnboardingResponse {
+        try await authedJSON(
+            "PUT",
+            "/auth/ai-onboarding",
+            payload: ["version": version, "answers": preferences.payload],
+            as: AIOnboardingResponse.self
+        )
+    }
+
+    func updateAIProfilePreferences(_ patch: [String: Any]) async throws -> BackendUser {
+        try await authedJSON(
+            "PATCH",
+            "/auth/preferences",
+            payload: ["ai_preferences": patch],
             as: BackendUser.self
         )
     }
@@ -278,6 +309,19 @@ final class LearningBackendClient {
         )
     }
 
+    func updateDocumentRemark(
+        workspaceId: String,
+        documentId: String,
+        remark: String
+    ) async throws -> LearningDocumentItem {
+        try await authedJSON(
+            "PATCH",
+            "/workspaces/\(workspaceId.pathSegment)/documents/\(documentId.pathSegment)",
+            payload: ["remark": remark],
+            as: LearningDocumentItem.self
+        )
+    }
+
     func createUploadSession(
         workspaceId: String,
         filename: String,
@@ -285,7 +329,8 @@ final class LearningBackendClient {
         fileSize: Int64?,
         documentKind: String,
         learningMetadata: LearningMetadata? = nil,
-        saveToDocuments: Bool? = nil
+        saveToDocuments: Bool? = nil,
+        remark: String? = nil
     ) async throws -> UploadSessionResponse {
         var payload: [String: Any] = [
             "filename": filename,
@@ -302,6 +347,9 @@ final class LearningBackendClient {
         }
         if let fileSize {
             payload["file_size"] = fileSize
+        }
+        if let remark = remark?.trimmingCharacters(in: .whitespacesAndNewlines), !remark.isEmpty {
+            payload["remark"] = remark
         }
         return try await authedJSON(
             "POST",
@@ -385,13 +433,9 @@ final class LearningBackendClient {
         }
         guard (200...299).contains(httpResponse.statusCode) else {
             let errorData = (try? Data(contentsOf: temporaryURL)) ?? Data()
-            throw LearningBackendError(
-                Self.parseErrorMessage(
-                    String(data: errorData.prefix(64 * 1024), encoding: .utf8) ?? "",
-                    status: httpResponse.statusCode
-                ),
-                statusCode: httpResponse.statusCode,
-                shouldClearSession: httpResponse.statusCode == 401
+            throw Self.parseHTTPError(
+                String(data: errorData.prefix(64 * 1024), encoding: .utf8) ?? "",
+                status: httpResponse.statusCode
             )
         }
         try FileManager.default.createDirectory(
@@ -443,6 +487,7 @@ final class LearningBackendClient {
     func openClawChat(
         workspaceId: String,
         prompt: String,
+        clientLocale: String? = nil,
         conversationId: String? = nil,
         input: [String: Any] = [:],
         options: [String: Any] = [:]
@@ -455,6 +500,7 @@ final class LearningBackendClient {
         if let conversationId, !conversationId.isEmpty {
             payload["conversation_id"] = conversationId
         }
+        if let clientLocale, !clientLocale.isEmpty { payload["client_locale"] = clientLocale }
         return try await authedJSON(
             "POST",
             "/workspaces/\(workspaceId.pathSegment)/ai/chat",
@@ -512,19 +558,31 @@ final class LearningBackendClient {
         conversationId: String,
         messageId: String,
         prompt: String,
+        clientLocale: String? = nil,
         options: [String: Any]
     ) async throws -> TaskItem {
+        var payload: [String: Any] = [
+            "prompt": prompt,
+            "input": NSNull(),
+            "options": options
+        ]
+        if let clientLocale, !clientLocale.isEmpty { payload["client_locale"] = clientLocale }
         let response = try await authedJSON(
             "POST",
             "/workspaces/\(workspaceId.pathSegment)/ai/conversations/\(conversationId.pathSegment)/messages/\(messageId.pathSegment)/revisions",
-            payload: [
-                "prompt": prompt,
-                "input": NSNull(),
-                "options": options
-            ],
+            payload: payload,
             as: APIResponseEnvelope<TaskItem>.self
         )
         return response.data
+    }
+
+    func getChatGreeting(workspaceId: String, clientLocale: String) async throws -> ChatGreeting {
+        try await authedJSON(
+            "GET",
+            "/workspaces/\(workspaceId.pathSegment)/ai/greeting?client_locale=\(clientLocale.queryValue)",
+            payload: nil,
+            as: ChatGreeting.self
+        )
     }
 
     func listLearningUnits(workspaceId: String) async throws -> [LearningUnit] {
@@ -1252,11 +1310,7 @@ final class LearningBackendClient {
             for try await byte in bytes.prefix(64 * 1024) {
                 errorData.append(byte)
             }
-            throw LearningBackendError(
-                Self.parseErrorMessage(String(data: errorData, encoding: .utf8) ?? "", status: httpResponse.statusCode),
-                statusCode: httpResponse.statusCode,
-                shouldClearSession: httpResponse.statusCode == 401
-            )
+            throw Self.parseHTTPError(String(data: errorData, encoding: .utf8) ?? "", status: httpResponse.statusCode)
         }
         return (bytes, httpResponse)
     }
@@ -1293,11 +1347,7 @@ final class LearningBackendClient {
         guard (200...299).contains(httpResponse.statusCode) else {
             var errorData = Data()
             for try await byte in bytes.prefix(64 * 1024) { errorData.append(byte) }
-            throw LearningBackendError(
-                Self.parseErrorMessage(String(data: errorData, encoding: .utf8) ?? "", status: httpResponse.statusCode),
-                statusCode: httpResponse.statusCode,
-                shouldClearSession: httpResponse.statusCode == 401
-            )
+            throw Self.parseHTTPError(String(data: errorData, encoding: .utf8) ?? "", status: httpResponse.statusCode)
         }
         return (bytes, httpResponse)
     }
@@ -1373,11 +1423,7 @@ final class LearningBackendClient {
             throw LearningBackendError(localizedKey: "error.server.invalid_response")
         }
         guard (200...299).contains(httpResponse.statusCode) else {
-            throw LearningBackendError(
-                Self.parseErrorMessage(String(data: data, encoding: .utf8) ?? "", status: httpResponse.statusCode),
-                statusCode: httpResponse.statusCode,
-                shouldClearSession: httpResponse.statusCode == 401
-            )
+            throw Self.parseHTTPError(String(data: data, encoding: .utf8) ?? "", status: httpResponse.statusCode)
         }
     }
 
@@ -1417,12 +1463,46 @@ final class LearningBackendClient {
             }
             return messages.joined(separator: "；").nilIfBlank ?? defaultErrorMessage(status)
         }
+        if let details = detail as? [String: Any] {
+            let code = details["code"] as? String
+            switch code {
+            case "unsupported_file_format":
+                return localized("error.upload.unsupported_file_format")
+            case "unsupported_learning_format":
+                return localized("error.upload.unsupported_learning_format")
+            default:
+                if let message = details["message"] as? String,
+                   !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    return message
+                }
+            }
+        }
         if JSONSerialization.isValidJSONObject(detail),
            let data = try? JSONSerialization.data(withJSONObject: detail),
            let string = String(data: data, encoding: .utf8) {
             return string
         }
         return defaultErrorMessage(status)
+    }
+
+    static func parseHTTPError(_ body: String, status: Int) -> LearningBackendError {
+        var code: String?
+        var details: [String: JSONValue]?
+        if let data = body.data(using: .utf8),
+           let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let detail = object["detail"] as? [String: Any] {
+            code = detail["code"] as? String
+            if let encoded = try? JSONSerialization.data(withJSONObject: detail) {
+                details = try? JSONDecoder.notepatch.decode([String: JSONValue].self, from: encoded)
+            }
+        }
+        return LearningBackendError(
+            parseErrorMessage(body, status: status),
+            statusCode: status,
+            shouldClearSession: status == 401,
+            backendCode: code,
+            backendDetails: details
+        )
     }
 
     private static func defaultErrorMessage(_ status: Int) -> String {
@@ -1437,6 +1517,8 @@ final class LearningBackendClient {
             return localized("error.http.conflict")
         case 410:
             return localized("error.http.gone")
+        case 415:
+            return localized("error.http.unsupported_media_type")
         case 422:
             return localized("error.http.validation")
         default:

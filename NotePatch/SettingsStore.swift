@@ -26,9 +26,14 @@ final class SettingsStore {
         static let fullName = "learning_full_name"
         static let selectedWorkspaceId = "learning_selected_workspace_id"
         static let aiHistoryEnabled = "ai_history_enabled"
+        static let autoImageRemarkEnabled = "auto_image_remark_enabled"
         static let noteContentEditLevel = "note_content_edit_level"
         static let noteLayoutEditLevel = "note_layout_edit_level"
         static let noteHistoryLimit = "note_history_limit"
+        static let aiOnboardingVersion = "ai_onboarding_version"
+        static let aiOnboardingCompletedAt = "ai_onboarding_completed_at"
+        static let aiOnboardingCompleted = "ai_onboarding_completed"
+        static let aiPreferences = "ai_preferences"
         static let accessToken = "learning_access_token"
         static let refreshToken = "learning_refresh_token"
         static let presenceClientId = "presence_client_id"
@@ -125,13 +130,18 @@ final class SettingsStore {
             fullName: defaults.string(forKey: Keys.fullName)?.nilIfBlank,
             selectedWorkspaceId: defaults.string(forKey: Keys.selectedWorkspaceId)?.nilIfBlank,
             aiHistoryEnabled: defaults.object(forKey: Keys.aiHistoryEnabled) as? Bool ?? true,
+            autoImageRemarkEnabled: defaults.object(forKey: Keys.autoImageRemarkEnabled) as? Bool ?? true,
             noteContentEditLevel: NoteContentEditLevel(
                 rawValue: defaults.string(forKey: Keys.noteContentEditLevel) ?? NoteContentEditLevel.conceptual.rawValue
             ),
             noteLayoutEditLevel: NoteLayoutEditLevel(
                 rawValue: defaults.string(forKey: Keys.noteLayoutEditLevel) ?? NoteLayoutEditLevel.minor.rawValue
             ),
-            noteHistoryLimit: defaults.object(forKey: Keys.noteHistoryLimit) as? Int ?? 3
+            noteHistoryLimit: defaults.object(forKey: Keys.noteHistoryLimit) as? Int ?? 3,
+            aiOnboardingVersion: defaults.object(forKey: Keys.aiOnboardingVersion) as? Int ?? 0,
+            aiOnboardingCompletedAt: defaults.string(forKey: Keys.aiOnboardingCompletedAt)?.nilIfBlank,
+            aiOnboardingCompleted: defaults.object(forKey: Keys.aiOnboardingCompleted) as? Bool ?? false,
+            aiPreferences: loadAIPreferences()
         )
     }
 
@@ -146,9 +156,24 @@ final class SettingsStore {
         defaults.set(session.fullName ?? "", forKey: Keys.fullName)
         defaults.set(session.selectedWorkspaceId ?? "", forKey: Keys.selectedWorkspaceId)
         defaults.set(session.aiHistoryEnabled, forKey: Keys.aiHistoryEnabled)
+        defaults.set(session.autoImageRemarkEnabled, forKey: Keys.autoImageRemarkEnabled)
         defaults.set(session.noteContentEditLevel.rawValue, forKey: Keys.noteContentEditLevel)
         defaults.set(session.noteLayoutEditLevel.rawValue, forKey: Keys.noteLayoutEditLevel)
         defaults.set(session.noteHistoryLimit, forKey: Keys.noteHistoryLimit)
+        defaults.set(session.aiOnboardingVersion, forKey: Keys.aiOnboardingVersion)
+        defaults.set(session.aiOnboardingCompletedAt ?? "", forKey: Keys.aiOnboardingCompletedAt)
+        defaults.set(session.aiOnboardingCompleted, forKey: Keys.aiOnboardingCompleted)
+        if let data = try? JSONEncoder().encode(session.aiPreferences) {
+            defaults.set(data, forKey: Keys.aiPreferences)
+        }
+    }
+
+    private func loadAIPreferences() -> AIPreferences {
+        guard let data = defaults.data(forKey: Keys.aiPreferences),
+              let preferences = try? JSONDecoder().decode(AIPreferences.self, from: data) else {
+            return .defaults
+        }
+        return preferences
     }
 
     func saveSelectedWorkspaceId(_ workspaceId: String?) {
@@ -178,9 +203,14 @@ final class SettingsStore {
             Keys.fullName,
             Keys.selectedWorkspaceId,
             Keys.aiHistoryEnabled,
+            Keys.autoImageRemarkEnabled,
             Keys.noteContentEditLevel,
             Keys.noteLayoutEditLevel,
-            Keys.noteHistoryLimit
+            Keys.noteHistoryLimit,
+            Keys.aiOnboardingVersion,
+            Keys.aiOnboardingCompletedAt,
+            Keys.aiOnboardingCompleted,
+            Keys.aiPreferences
         ].forEach(defaults.removeObject(forKey:))
     }
 }

@@ -113,6 +113,14 @@ enum HTMLNoteSecurity {
             table { width: 100%; border-collapse: collapse; }
             th, td { padding: 7px; border: 1px solid rgba(127,127,127,.35); text-align: left; }
             a { color: #0a84ff; }
+            .np-font-size-12 { font-size: 12px; }
+            .np-font-size-14 { font-size: 14px; }
+            .np-font-size-17 { font-size: 17px; }
+            .np-font-size-20 { font-size: 20px; }
+            .np-font-size-24 { font-size: 24px; }
+            .np-font-size-28 { font-size: 28px; }
+            .np-font-size-32 { font-size: 32px; }
+            .np-font-size-40 { font-size: 40px; }
           </style>
         </head>
         <body>\(bodyHTML)</body>
@@ -145,6 +153,14 @@ enum HTMLNoteSecurity {
             font[face="notepatch-size-28"] { font-family: inherit; font-size: 28px; }
             font[face="notepatch-size-32"] { font-family: inherit; font-size: 32px; }
             font[face="notepatch-size-40"] { font-family: inherit; font-size: 40px; }
+            .np-font-size-12 { font-size: 12px; }
+            .np-font-size-14 { font-size: 14px; }
+            .np-font-size-17 { font-size: 17px; }
+            .np-font-size-20 { font-size: 20px; }
+            .np-font-size-24 { font-size: 24px; }
+            .np-font-size-28 { font-size: 28px; }
+            .np-font-size-32 { font-size: 32px; }
+            .np-font-size-40 { font-size: 40px; }
           </style>
         </head>
         <body contenteditable="true" spellcheck="true"></body>
@@ -218,6 +234,11 @@ enum HTMLNoteSecurity {
         if (marker) {
           return normalizedFontSize(marker.getAttribute('face').slice(fontSizeMarkerPrefix.length));
         }
+        const sizedElement = element.closest && element.closest('[class*="np-font-size-"]');
+        if (sizedElement) {
+          const sizeClass = Array.from(sizedElement.classList).find(value => value.startsWith('np-font-size-'));
+          if (sizeClass) return normalizedFontSize(sizeClass.slice('np-font-size-'.length));
+        }
         return normalizedFontSize(window.getComputedStyle(element).fontSize);
       }
 
@@ -233,9 +254,36 @@ enum HTMLNoteSecurity {
         for (const marker of markers) {
           const size = normalizedFontSize(marker.getAttribute('face').slice(fontSizeMarkerPrefix.length));
           const span = document.createElement('span');
-          span.style.fontSize = size + 'px';
+          span.className = 'np-font-size-' + size;
           while (marker.firstChild) span.appendChild(marker.firstChild);
           marker.replaceWith(span);
+        }
+
+        for (const element of Array.from(root.querySelectorAll('[style]'))) {
+          const inlineSize = element.style && element.style.fontSize;
+          const match = inlineSize && inlineSize.match(/^([0-9]+(?:\.[0-9]+)?)px$/i);
+          if (!match) continue;
+          const size = normalizedFontSize(match[1]);
+          for (const className of Array.from(element.classList)) {
+            if (className.startsWith('np-font-size-')) element.classList.remove(className);
+          }
+          element.classList.add('np-font-size-' + size);
+          element.style.removeProperty('font-size');
+          if (!element.getAttribute('style').trim()) element.removeAttribute('style');
+        }
+      }
+
+      function normalizeSemanticFormatting(root) {
+        const replacements = [['b', 'strong'], ['i', 'em']];
+        for (const [sourceTag, targetTag] of replacements) {
+          for (const element of Array.from(root.querySelectorAll(sourceTag))) {
+            const replacement = document.createElement(targetTag);
+            for (const attribute of Array.from(element.attributes)) {
+              replacement.setAttribute(attribute.name, attribute.value);
+            }
+            while (element.firstChild) replacement.appendChild(element.firstChild);
+            element.replaceWith(replacement);
+          }
         }
       }
 
@@ -249,6 +297,7 @@ enum HTMLNoteSecurity {
         const template = document.createElement('template');
         template.innerHTML = html || '';
         normalizeFontSizeMarkers(template.content);
+        normalizeSemanticFormatting(template.content);
         const elements = Array.from(template.content.querySelectorAll('*'));
         for (const element of elements) {
           if (blockedTags.has(element.tagName)) {
@@ -486,8 +535,12 @@ struct RichHTMLNoteEditor: UIViewRepresentable {
     @Binding var selectedFontSize: Int
     let command: HTMLNoteCommand?
     let commandToken: Int
+    let snapshotRequestToken: Int
+    let onSnapshot: (String?) -> Void
 
-    func makeCoordinator() -> Coordinator { Coordinator(html: $html, selectedFontSize: $selectedFontSize) }
+    func makeCoordinator() -> Coordinator {
+        Coordinator(html: $html, selectedFontSize: $selectedFontSize, snapshotCallback: onSnapshot)
+    }
 
     func makeUIView(context: Context) -> WKWebView {
         let configuration = NoteWebViewRuntime.shared.configuration(allowsContentJavaScript: true)
@@ -516,6 +569,7 @@ struct RichHTMLNoteEditor: UIViewRepresentable {
         webView.overrideUserInterfaceStyle = colorScheme == .dark ? .dark : .light
         context.coordinator.binding = $html
         context.coordinator.selectedFontSizeBinding = $selectedFontSize
+        context.coordinator.snapshotCallback = onSnapshot
         if context.coordinator.isReady,
            context.coordinator.lastHTML != html {
             context.coordinator.setHTML(html)
@@ -523,12 +577,18 @@ struct RichHTMLNoteEditor: UIViewRepresentable {
             context.coordinator.pendingHTML = html
         }
 
-        guard commandToken != context.coordinator.lastCommandToken, let command else { return }
-        context.coordinator.lastCommandToken = commandToken
-        let arguments = command.javascriptArguments
-        let commandJSON = Self.javascriptString(arguments.command)
-        let valueJSON = arguments.value.map(Self.javascriptString) ?? "null"
-        webView.evaluateJavaScript("window.__notePatchEditor && window.__notePatchEditor.command(\(commandJSON), \(valueJSON));")
+        if commandToken != context.coordinator.lastCommandToken, let command {
+            context.coordinator.lastCommandToken = commandToken
+            let arguments = command.javascriptArguments
+            let commandJSON = Self.javascriptString(arguments.command)
+            let valueJSON = arguments.value.map(Self.javascriptString) ?? "null"
+            webView.evaluateJavaScript("window.__notePatchEditor && window.__notePatchEditor.command(\(commandJSON), \(valueJSON));")
+        }
+
+        if snapshotRequestToken != context.coordinator.lastSnapshotRequestToken {
+            context.coordinator.lastSnapshotRequestToken = snapshotRequestToken
+            context.coordinator.captureSnapshot(requestToken: snapshotRequestToken)
+        }
     }
 
     static func dismantleUIView(_ webView: WKWebView, coordinator: Coordinator) {
@@ -550,13 +610,20 @@ struct RichHTMLNoteEditor: UIViewRepresentable {
         var pendingHTML: String
         var lastHTML: String
         var lastCommandToken = -1
+        var lastSnapshotRequestToken = 0
+        var snapshotCallback: (String?) -> Void
         var isReady = false
 
-        init(html: Binding<String>, selectedFontSize: Binding<Int>) {
+        init(
+            html: Binding<String>,
+            selectedFontSize: Binding<Int>,
+            snapshotCallback: @escaping (String?) -> Void
+        ) {
             binding = html
             selectedFontSizeBinding = selectedFontSize
             pendingHTML = html.wrappedValue
             lastHTML = html.wrappedValue
+            self.snapshotCallback = snapshotCallback
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
@@ -570,6 +637,25 @@ struct RichHTMLNoteEditor: UIViewRepresentable {
             pendingHTML = html
             let encoded = RichHTMLNoteEditor.javascriptString(html)
             webView.evaluateJavaScript("window.__notePatchEditor && window.__notePatchEditor.setHTML(\(encoded));")
+        }
+
+        func captureSnapshot(requestToken: Int) {
+            guard isReady, let webView else {
+                snapshotCallback(nil)
+                return
+            }
+            webView.evaluateJavaScript("window.__notePatchEditor && window.__notePatchEditor.getHTML();") { [weak self] value, error in
+                guard let self, self.lastSnapshotRequestToken == requestToken else { return }
+                guard error == nil, let html = value as? String else {
+                    self.snapshotCallback(nil)
+                    return
+                }
+                self.lastHTML = html
+                if self.binding.wrappedValue != html {
+                    self.binding.wrappedValue = html
+                }
+                self.snapshotCallback(html)
+            }
         }
 
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {

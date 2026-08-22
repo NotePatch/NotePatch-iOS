@@ -35,8 +35,309 @@ struct NotePatchTests {
         let data = try Data(contentsOf: documentURL)
         let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
 
-        #expect(data.split(separator: 0x0A, omittingEmptySubsequences: false).count == 1_394)
-        #expect(digest == "31455ff3fdbb1cef53d39014d00db78e04a4b954c30e4fe922870f08ade21a22")
+        #expect(data.split(separator: 0x0A, omittingEmptySubsequences: false).count == 1_603)
+        #expect(digest == "9957f9f9e19366c07993f65587c25edbfc77de5ef4174ccb570d99fb40a56225")
+    }
+
+    @Test func aiOnboardingModels_decodeNewAndLegacyUsers() throws {
+        let legacy = try JSONDecoder.notepatch.decode(
+            BackendUser.self,
+            from: Data(#"{"id":"u-1","email":"user@example.test","is_active":true,"created_at":""}"#.utf8)
+        )
+        #expect(legacy.aiOnboardingVersion == 0)
+        #expect(!legacy.aiOnboardingCompleted)
+        #expect(legacy.aiPreferences == .defaults)
+
+        let current = try JSONDecoder.notepatch.decode(
+            BackendUser.self,
+            from: Data(#"{"id":"u-1","email":"user@example.test","is_active":true,"created_at":"","ai_onboarding_version":2,"ai_onboarding_completed_at":"2026-08-22T01:02:03Z","ai_onboarding_completed":true,"ai_preferences":{"response_language":"future-locale","collaboration_style":"coach","response_depth":"detailed","response_structure":"steps","clarification_policy":"confirm_before_actions","feedback_tone":"strict","learning_guidance":"hint_first","custom_instructions":"Use examples"}}"#.utf8)
+        )
+        #expect(current.aiOnboardingVersion == 2)
+        #expect(current.aiOnboardingCompleted)
+        #expect(current.aiPreferences.responseLanguage == "future-locale")
+        #expect(current.aiPreferences.customInstructions == "Use examples")
+
+        let greeting = try JSONDecoder.notepatch.decode(
+            ChatGreeting.self,
+            from: Data(#"{"assistant_name":"Study AI","message":"**Welcome**","message_key":"ai.chat.initial_greeting","format":"markdown","locale":"en-US","onboarding_required":true,"onboarding_version":2,"questions":[{"id":"response_depth","message_key":"ai.onboarding.questions.response_depth","required":true,"options":[{"value":"balanced","label_key":"ai.onboarding.options.response_depth.balanced"}]}]}"#.utf8)
+        )
+        #expect(greeting.assistantName == "Study AI")
+        #expect(greeting.onboardingRequired)
+        #expect(greeting.questions.first?.options.first?.value == "balanced")
+    }
+
+    @Test func settingsStore_persistsAndClearsAIOnboarding() throws {
+        let suiteName = "NotePatchAIOnboardingSettingsTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let keychain = KeychainStore(service: "\(suiteName).keychain")
+        let store = SettingsStore(defaults: defaults, keychain: keychain)
+        var preferences = AIPreferences.defaults
+        preferences.responseDepth = "detailed"
+        preferences.customInstructions = "Show steps"
+        let saved = SavedSession(
+            baseURL: "https://api.test",
+            tusBaseURL: "https://api.test/files/",
+            accessToken: "access",
+            refreshToken: "refresh",
+            expiresAt: "2099-01-01T00:00:00Z",
+            userId: "u-1",
+            email: "user@example.test",
+            fullName: "User",
+            selectedWorkspaceId: "ws-1",
+            aiHistoryEnabled: true,
+            autoImageRemarkEnabled: false,
+            aiOnboardingVersion: 3,
+            aiOnboardingCompletedAt: "2026-08-22T01:02:03Z",
+            aiOnboardingCompleted: true,
+            aiPreferences: preferences
+        )
+
+        store.saveSession(saved)
+        let restored = try #require(store.loadSession())
+        #expect(restored.aiOnboardingVersion == 3)
+        #expect(restored.aiOnboardingCompleted)
+        #expect(!restored.autoImageRemarkEnabled)
+        #expect(restored.aiPreferences.responseDepth == "detailed")
+        #expect(restored.aiPreferences.customInstructions == "Show steps")
+
+        store.clearSession()
+        #expect(store.loadSession() == nil)
+        #expect(defaults.object(forKey: "ai_preferences") == nil)
+        #expect(defaults.object(forKey: "ai_onboarding_completed") == nil)
+        #expect(defaults.object(forKey: "auto_image_remark_enabled") == nil)
+    }
+
+    @Test func aiOnboardingClient_usesDocumentedRequestsAndLocale() async throws {
+        var requests: [URLRequest] = []
+        let onboardingJSON = #"{"version":1,"completed":false,"completed_at":null,"answers":{"response_language":"match_user","collaboration_style":"collaborative","response_depth":"balanced","response_structure":"adaptive","clarification_policy":"ask_when_ambiguous","feedback_tone":"neutral","learning_guidance":"explain_then_answer","custom_instructions":null},"questions":[]}"#
+        let userJSON = #"{"id":"u-1","email":"user@example.test","is_active":true,"created_at":"","ai_onboarding_version":1,"ai_onboarding_completed":true,"ai_preferences":{"response_language":"match_user","collaboration_style":"collaborative","response_depth":"detailed","response_structure":"adaptive","clarification_policy":"ask_when_ambiguous","feedback_tone":"neutral","learning_guidance":"explain_then_answer","custom_instructions":null}}"#
+        let session = Self.mockSession { request in
+            requests.append(request)
+            let encodedPath = request.url.flatMap {
+                URLComponents(url: $0, resolvingAgainstBaseURL: false)?.percentEncodedPath
+            }
+            switch (request.httpMethod, encodedPath) {
+            case ("GET", "/api/v1/workspaces/ws%2F1/ai/greeting"):
+                return Self.response(request, status: 200, body: #"{"assistant_name":"NotePatch AI","message":"Welcome","format":"markdown","locale":"zh-TW","onboarding_required":false,"onboarding_version":1,"questions":[]}"#)
+            case ("GET", "/api/v1/auth/ai-onboarding"):
+                return Self.response(request, status: 200, body: onboardingJSON)
+            case ("PUT", "/api/v1/auth/ai-onboarding"):
+                return Self.response(request, status: 200, body: onboardingJSON.replacingOccurrences(of: "\"completed\":false", with: "\"completed\":true"))
+            case ("PATCH", "/api/v1/auth/preferences"):
+                return Self.response(request, status: 200, body: userJSON)
+            case ("POST", "/api/v1/workspaces/ws-1/ai/chat"):
+                return Self.response(request, status: 200, body: Self.taskJSON)
+            case ("POST", "/api/v1/workspaces/ws-1/ai/conversations/c-1/messages/m-1/revisions"):
+                return Self.response(request, status: 202, body: #"{"code":"ok","message":"accepted","data":\#(Self.taskJSON)}"#)
+            default:
+                return Self.response(request, status: 500, body: #"{"detail":"unexpected request"}"#)
+            }
+        }
+        let client = LearningBackendClient(baseURL: "https://api.test", accessToken: "a", refreshToken: "r", session: session)
+
+        _ = try await client.getChatGreeting(workspaceId: "ws/1", clientLocale: "zh-TW")
+        let onboarding = try await client.getAIOnboarding()
+        _ = try await client.completeAIOnboarding(version: onboarding.version, preferences: onboarding.answers)
+        _ = try await client.updateAIProfilePreferences(["response_depth": "detailed"])
+        _ = try await client.openClawChat(workspaceId: "ws-1", prompt: "Hi", clientLocale: "en-US")
+        _ = try await client.reviseChatMessage(
+            workspaceId: "ws-1",
+            conversationId: "c-1",
+            messageId: "m-1",
+            prompt: "Updated",
+            clientLocale: "zh-CN",
+            options: [:]
+        )
+
+        let greetingRequest = try #require(requests.first)
+        #expect(greetingRequest.url?.query == "client_locale=zh-TW")
+        let put = try #require(requests.first(where: { $0.httpMethod == "PUT" }))
+        let putData = try #require(Self.requestBodyData(put))
+        let putBody = try #require(JSONSerialization.jsonObject(with: putData) as? [String: Any])
+        #expect(putBody["version"] as? Int == 1)
+        #expect((putBody["answers"] as? [String: Any])?["response_depth"] as? String == "balanced")
+        let patch = try #require(requests.first(where: { $0.httpMethod == "PATCH" }))
+        let patchData = try #require(Self.requestBodyData(patch))
+        let patchBody = try #require(JSONSerialization.jsonObject(with: patchData) as? [String: Any])
+        #expect((patchBody["ai_preferences"] as? [String: Any])?["response_depth"] as? String == "detailed")
+        let chatData = try #require(Self.requestBodyData(requests[4]))
+        let chatBody = try #require(JSONSerialization.jsonObject(with: chatData) as? [String: Any])
+        #expect(chatBody["client_locale"] as? String == "en-US")
+        let revisionData = try #require(Self.requestBodyData(requests[5]))
+        let revisionBody = try #require(JSONSerialization.jsonObject(with: revisionData) as? [String: Any])
+        #expect(revisionBody["client_locale"] as? String == "zh-CN")
+    }
+
+    @Test func structuredBackendError_preservesOnboardingCodeAndMetadata() {
+        let error = LearningBackendClient.parseHTTPError(
+            #"{"detail":{"code":"ai_onboarding_required","version":4,"onboarding_url":"/api/v1/auth/ai-onboarding"}}"#,
+            status: 409
+        )
+        #expect(error.statusCode == 409)
+        #expect(error.backendCode == "ai_onboarding_required")
+        #expect(error.backendDetails?["version"] == .number(4))
+        #expect(error.backendDetails?["onboarding_url"] == .string("/api/v1/auth/ai-onboarding"))
+    }
+
+    @Test @MainActor func incompleteAIOnboarding_blocksChatWithoutChatRequest() async throws {
+        var chatRequestCount = 0
+        let onboardingJSON = #"{"version":1,"completed":false,"completed_at":null,"answers":{"response_language":"match_user","collaboration_style":"collaborative","response_depth":"balanced","response_structure":"adaptive","clarification_policy":"ask_when_ambiguous","feedback_tone":"neutral","learning_guidance":"explain_then_answer","custom_instructions":null},"questions":[]}"#
+        let session = Self.mockSession { request in
+            if request.url?.path.hasSuffix("/ai/chat") == true {
+                chatRequestCount += 1
+            }
+            if request.url?.path == "/api/v1/auth/ai-onboarding" {
+                return Self.response(request, status: 200, body: onboardingJSON)
+            }
+            return Self.response(request, status: 500, body: #"{"detail":"unexpected request"}"#)
+        }
+        let suiteName = "NotePatchAIOnboardingBlockTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let store = SettingsStore(defaults: defaults, keychain: KeychainStore(service: suiteName))
+        let saved = SavedSession(
+            baseURL: "https://api.test",
+            tusBaseURL: "https://api.test/files/",
+            accessToken: "a",
+            refreshToken: "r",
+            expiresAt: "x",
+            userId: "u-1",
+            email: "user@example.test",
+            fullName: nil,
+            selectedWorkspaceId: "ws-1",
+            aiHistoryEnabled: true,
+            aiOnboardingCompleted: false
+        )
+        store.saveSession(saved)
+        let model = NotePatchViewModel(settings: store, backendSession: session, tusSession: session)
+        model.session = saved
+        model.selectedWorkspaceId = "ws-1"
+
+        #expect(!model.startOpenClawChat(prompt: "Hello"))
+        #expect(model.openClawMessages.isEmpty)
+        #expect(model.aiExperienceState.isOnboardingPresented)
+        #expect(model.aiExperienceState.pendingSubmission?.prompt == "Hello")
+        try await Self.waitUntil { !model.aiExperienceState.isLoading }
+        #expect(chatRequestCount == 0)
+    }
+
+    @Test @MainActor func onboardingRequiredResponse_retriesBlockedChatExactlyOnceAfterCompletion() async throws {
+        var chatRequestCount = 0
+        let pendingOnboarding = #"{"version":1,"completed":false,"completed_at":null,"answers":{"response_language":"match_user","collaboration_style":"collaborative","response_depth":"balanced","response_structure":"adaptive","clarification_policy":"ask_when_ambiguous","feedback_tone":"neutral","learning_guidance":"explain_then_answer","custom_instructions":null},"questions":[]}"#
+        let completedOnboarding = pendingOnboarding.replacingOccurrences(of: "\"completed\":false", with: "\"completed\":true")
+        let completedTask = #"{"id":"task-1","workspace_id":"ws-1","task_type":"openclaw_agent_run","status":"succeeded","payload":{},"result":{"answer":"Done"},"error_message":null,"progress":100,"created_at":"","updated_at":""}"#
+        let backend = Self.mockSession { request in
+            switch (request.httpMethod, request.url?.path) {
+            case ("POST", "/api/v1/workspaces/ws-1/ai/chat"):
+                chatRequestCount += 1
+                if chatRequestCount == 1 {
+                    return Self.response(
+                        request,
+                        status: 409,
+                        body: #"{"detail":{"code":"ai_onboarding_required","version":1,"onboarding_url":"/api/v1/auth/ai-onboarding"}}"#
+                    )
+                }
+                return Self.response(request, status: 202, body: completedTask)
+            case ("GET", "/api/v1/auth/ai-onboarding"):
+                return Self.response(request, status: 200, body: pendingOnboarding)
+            case ("PUT", "/api/v1/auth/ai-onboarding"):
+                return Self.response(request, status: 200, body: completedOnboarding)
+            case ("GET", "/api/v1/workspaces/ws-1/tasks/task-1/events"):
+                return Self.response(request, status: 200, body: "[]")
+            default:
+                return Self.response(request, status: 500, body: #"{"detail":"unexpected request"}"#)
+            }
+        }
+        let suiteName = "NotePatchAIOnboardingRetryTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let store = SettingsStore(defaults: defaults, keychain: KeychainStore(service: suiteName))
+        let saved = SavedSession(
+            baseURL: "https://api.test",
+            tusBaseURL: "https://api.test/files/",
+            accessToken: "a",
+            refreshToken: "r",
+            expiresAt: "x",
+            userId: "u-1",
+            email: "user@example.test",
+            fullName: nil,
+            selectedWorkspaceId: "ws-1",
+            aiHistoryEnabled: true,
+            aiOnboardingVersion: 1,
+            aiOnboardingCompleted: true
+        )
+        store.saveSession(saved)
+        let model = NotePatchViewModel(
+            settings: store,
+            backendSession: backend,
+            tusSession: backend,
+            taskEventStreamingEnabled: false
+        )
+        model.session = saved
+        model.selectedWorkspaceId = "ws-1"
+
+        #expect(model.startOpenClawChat(prompt: "Retry me"))
+        try await Self.waitUntil { model.aiExperienceState.isOnboardingPresented && !model.aiExperienceState.isLoading }
+        #expect(model.openClawMessages.isEmpty)
+        #expect(model.aiExperienceState.pendingSubmission?.prompt == "Retry me")
+
+        model.saveAIOnboarding()
+        try await Self.waitUntil(attempts: 500) { !model.aiExperienceState.isSaving && !model.isOpenClawSending }
+
+        #expect(chatRequestCount == 2)
+        #expect(model.session?.aiOnboardingCompleted == true)
+        #expect(model.openClawMessages.count == 2)
+        #expect(model.openClawMessages.last?.content == "Done")
+        #expect(model.aiExperienceState.pendingSubmission == nil)
+    }
+
+    @Test @MainActor func notePreferenceSave_appliesAuthoritativeServerValuesAndPersistsThem() async throws {
+        var preferenceBody: [String: Any]?
+        let session = Self.mockSession { request in
+            if let body = Self.requestBodyData(request) {
+                preferenceBody = try JSONSerialization.jsonObject(with: body) as? [String: Any]
+            }
+            return Self.response(
+                request,
+                status: 200,
+                body: #"{"id":"u-1","email":"user@example.test","is_active":true,"created_at":"","ai_history_enabled":true,"note_content_edit_level":"rewrite","note_layout_edit_level":"reflow","note_history_limit":12,"ai_onboarding_version":1,"ai_onboarding_completed":true,"ai_preferences":{}}"#
+            )
+        }
+        let suiteName = "NotePatchNotePreferenceStateTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let store = SettingsStore(defaults: defaults, keychain: KeychainStore(service: suiteName))
+        let saved = SavedSession(
+            baseURL: "https://api.test",
+            tusBaseURL: "https://api.test/files/",
+            accessToken: "a",
+            refreshToken: "r",
+            expiresAt: "x",
+            userId: "u-1",
+            email: "user@example.test",
+            fullName: nil,
+            selectedWorkspaceId: "ws-1",
+            aiHistoryEnabled: true
+        )
+        store.saveSession(saved)
+        let model = NotePatchViewModel(settings: store, backendSession: session, tusSession: session)
+        model.session = saved
+        model.selectedWorkspaceId = "ws-1"
+        model.notePreferenceDraftContent = .rewrite
+        model.notePreferenceDraftLayout = .reflow
+        model.notePreferenceDraftHistoryLimit = 12
+
+        model.saveNotePreferences()
+        try await Self.waitUntil { !model.isNotePreferenceUpdating }
+
+        #expect(preferenceBody?["note_content_edit_level"] as? String == "rewrite")
+        #expect(preferenceBody?["note_layout_edit_level"] as? String == "reflow")
+        #expect(model.noteContentEditLevel == .rewrite)
+        #expect(model.noteLayoutEditLevel == .reflow)
+        #expect(!model.isNotePreferenceDirty)
+        #expect(store.loadSession()?.noteContentEditLevel == .rewrite)
+        #expect(store.loadSession()?.noteLayoutEditLevel == .reflow)
     }
 
     @MainActor
@@ -230,11 +531,14 @@ struct NotePatchTests {
         #expect(appActivityPresentation(isBusy: false, progressPercent: 42, label: "Upload") == .hidden)
         #expect(appActivityPresentation(isBusy: true, progressPercent: nil, label: "Saving") == .indeterminate("Saving"))
         #expect(appActivityPresentation(isBusy: true, progressPercent: 142, label: "Upload") == .determinate(100, "Upload"))
-        #expect(appActivityTopOffset(reportedSafeAreaTop: 59, windowSafeAreaTop: 0) == 61)
-        #expect(appActivityTopOffset(reportedSafeAreaTop: 0, windowSafeAreaTop: 59) == 61)
-        #expect(appActivityTopOffset(reportedSafeAreaTop: 20, windowSafeAreaTop: 20) == 22)
-        #expect(appActivityTopOffset(reportedSafeAreaTop: 0, windowSafeAreaTop: 0, statusBarHeight: 20) == 22)
-        #expect(appActivityTopOffset(reportedSafeAreaTop: -10, windowSafeAreaTop: 0) == 2)
+        #expect(appActivityTopOffset(reportedSafeAreaTop: 59, windowSafeAreaTop: 0, overlayGlobalMinY: 0) == 61)
+        #expect(appActivityTopOffset(reportedSafeAreaTop: 0, windowSafeAreaTop: 59, overlayGlobalMinY: 0) == 61)
+        #expect(appActivityTopOffset(reportedSafeAreaTop: 59, windowSafeAreaTop: 0, overlayGlobalMinY: 59) == 2)
+        #expect(appActivityTopOffset(reportedSafeAreaTop: 20, windowSafeAreaTop: 20, overlayGlobalMinY: 20) == 2)
+        #expect(appActivityTopOffset(reportedSafeAreaTop: 0, windowSafeAreaTop: 0, statusBarHeight: 20, overlayGlobalMinY: 0) == 22)
+        #expect(appActivityTopOffset(reportedSafeAreaTop: -10, windowSafeAreaTop: 0, overlayGlobalMinY: 0) == 2)
+        #expect(appActivityTopOffset(reportedSafeAreaTop: 20, windowSafeAreaTop: 0, overlayGlobalMinY: -8) == 30)
+        #expect(appActivityTopOffset(reportedSafeAreaTop: 59, windowSafeAreaTop: 0, overlayGlobalMinY: 60) == 1)
     }
 
     @Test @MainActor func globalFeedbackAutoDismissesAndReplacementRestartsTimer() async throws {
@@ -617,6 +921,15 @@ struct NotePatchTests {
         #expect(sanitizeFileName("a/b:c?.pdf") == "a_b_c_.pdf")
         #expect(contentTypeForFilename("photo.jpg") == "image/jpeg")
         #expect(contentTypeForFilename("slides.pptx") == "application/vnd.openxmlformats-officedocument.presentationml.presentation")
+        #expect(contentTypeForFilename("workbook.xlsx") == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        #expect(contentTypeForFilename("book.epub") == "application/epub+zip")
+        #expect(contentTypeForFilename("mail.eml") == "message/rfc822")
+        #expect(contentTypeForFilename("notebook.ipynb") == "application/x-ipynb+json")
+        #expect(extendedUploadExtensions.contains("zst"))
+        #expect(isSupportedLearningUpload(filename: "page.tiff", mimeType: "image/tiff"))
+        #expect(isSupportedLearningUpload(filename: "lesson.docx", mimeType: nil))
+        #expect(!isSupportedLearningUpload(filename: "workbook.xlsx", mimeType: nil))
+        #expect(!isSupportedLearningUpload(filename: "archive.zip", mimeType: "application/zip"))
         #expect(replacingFilenameExtension("exam.pdf", with: "jpg") == "exam.jpg")
         #expect(formatBytes(512) == "512 B")
         #expect(formatBytes(2048) == "2.0 KB")
@@ -1325,6 +1638,88 @@ struct NotePatchTests {
         #expect(model.statusMessage == localized("upload.selected_completed"))
     }
 
+    @Test @MainActor func extendedLearningUploadsRequireConfirmationBeforeConvertingToOther() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("NotePatchFormatConflictTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workbookURL = root.appendingPathComponent("workbook.xlsx")
+        let pdfURL = root.appendingPathComponent("lesson.pdf")
+        try Data("xlsx".utf8).write(to: workbookURL)
+        try Data("pdf".utf8).write(to: pdfURL)
+        var requestCount = 0
+        let session = Self.mockSession { request in
+            requestCount += 1
+            return Self.response(request, status: 500, body: #"{"detail":"stop after conversion"}"#)
+        }
+        let suiteName = "NotePatchFormatConflictTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let model = NotePatchViewModel(
+            settings: SettingsStore(defaults: defaults, keychain: KeychainStore(service: suiteName)),
+            backendSession: session,
+            tusSession: session,
+            cacheDirectory: root
+        )
+        model.session = SavedSession(
+            baseURL: "https://api.test",
+            tusBaseURL: "https://tus.test/files/",
+            accessToken: "a",
+            refreshToken: "r",
+            expiresAt: "x",
+            userId: "u",
+            email: "u@test",
+            fullName: nil,
+            selectedWorkspaceId: "ws-1",
+            aiHistoryEnabled: true
+        )
+        model.selectedWorkspaceId = "ws-1"
+        model.queuedUploadItems = [
+            QueuedUploadItem(
+                file: LocalUploadFile(
+                    url: workbookURL,
+                    filename: "workbook.xlsx",
+                    mimeType: contentTypeForFilename("workbook.xlsx")
+                ),
+                documentKind: "courseware",
+                learningMetadata: LearningMetadata(subject: "math")
+            ),
+            QueuedUploadItem(
+                file: LocalUploadFile(url: pdfURL, filename: "lesson.pdf", mimeType: "application/pdf"),
+                documentKind: "homework",
+                learningMetadata: LearningMetadata(subject: "math")
+            )
+        ]
+
+        model.uploadSelectedQueuedFiles()
+        #expect(model.isLearningUploadFormatConfirmationPresented)
+        #expect(model.pendingLearningFormatConversionCount == 1)
+        #expect(requestCount == 0)
+
+        model.cancelLearningUploadFormatConversion()
+        #expect(!model.isLearningUploadFormatConfirmationPresented)
+        #expect(model.queuedUploadItems[0].documentKind == "courseware")
+        #expect(model.queuedUploadItems[0].learningMetadata.subject == "math")
+
+        model.uploadSelectedQueuedFiles()
+        model.confirmLearningUploadFormatConversion()
+        #expect(model.queuedUploadItems[0].documentKind == "other")
+        #expect(model.queuedUploadItems[0].learningMetadata.subject.isEmpty)
+        #expect(model.queuedUploadItems[1].documentKind == "homework")
+        try await Self.waitUntil { !model.isBusy }
+        #expect(requestCount > 0)
+
+        let other = LearningDocumentItem(
+            id: "other-1",
+            workspaceId: "ws-1",
+            originalFilename: "workbook.xlsx",
+            fileType: "other",
+            documentKind: "other",
+            status: "ready"
+        )
+        #expect(!model.canProcessDocument(other))
+    }
+
     @Test @MainActor func uploadUsesServerTusEndpointAndAcceptsWebhookCompletionAfterConflict() async throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("NotePatchUploadRecoveryTests-\(UUID().uuidString)", isDirectory: true)
@@ -1656,6 +2051,25 @@ struct NotePatchTests {
         )
         #expect(LearningBackendClient.parseErrorMessage("", status: 409) == localized("error.http.conflict"))
         #expect(LearningBackendClient.parseErrorMessage("", status: 410) == localized("error.http.gone"))
+        #expect(LearningBackendClient.parseErrorMessage("", status: 415) == localized("error.http.unsupported_media_type"))
+        #expect(
+            LearningBackendClient.parseErrorMessage(
+                #"{"detail":{"code":"unsupported_file_format","message":"Unsupported upload format"}}"#,
+                status: 415
+            ) == localized("error.upload.unsupported_file_format")
+        )
+        #expect(
+            LearningBackendClient.parseErrorMessage(
+                #"{"detail":{"code":"unsupported_learning_format","message":"Learning documents must be supported"}}"#,
+                status: 422
+            ) == localized("error.upload.unsupported_learning_format")
+        )
+        #expect(
+            LearningBackendClient.parseErrorMessage(
+                #"{"detail":{"code":"future_error","message":"Readable server summary"}}"#,
+                status: 422
+            ) == "Readable server summary"
+        )
         #expect(
             LearningBackendClient.parseErrorMessage(
                 #"{"code":"profile_version_mismatch","message":"Profile changed elsewhere"}"#,
@@ -2083,6 +2497,92 @@ struct NotePatchTests {
         let thinking = options?["thinking"] as? [String: Any]
         #expect(thinking?["enabled"] as? Bool == true)
         #expect(task.id == "task-1")
+    }
+
+    @Test @MainActor func reviseOpenClawMessage_appliesServerBranchAfterAcceptance() async throws {
+        var revisionBody: [String: Any]?
+        let backend = Self.mockSession { request in
+            switch (request.httpMethod, request.url?.path) {
+            case ("POST", "/api/v1/workspaces/ws-1/ai/conversations/c-1/messages/m-0/revisions"):
+                if let data = Self.requestBodyData(request) {
+                    revisionBody = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+                }
+                return Self.response(
+                    request,
+                    status: 202,
+                    body: #"{"code":"ok","message":"accepted","data":{"id":"task-revision","workspace_id":"ws-1","task_type":"openclaw_agent_run","status":"succeeded","payload":{"conversation_id":"c-1","user_message_id":"m-0-r","assistant_message_id":"m-1-r"},"result":{"answer":"Updated answer"},"progress":100,"created_at":"","updated_at":""}}"#
+                )
+            case ("GET", "/api/v1/workspaces/ws-1/tasks/task-revision/events"):
+                return Self.response(request, status: 200, body: "[]")
+            case ("GET", "/api/v1/workspaces/ws-1/ai/conversations/c-1/messages"):
+                return Self.response(
+                    request,
+                    status: 200,
+                    body: #"{"items":[{"id":"m-0-r","conversation_id":"c-1","role":"user","content":"Updated prompt","status":"succeeded","created_at":""},{"id":"m-1-r","conversation_id":"c-1","role":"assistant","content":"Updated answer","status":"succeeded","created_at":""}],"page":1,"page_size":100,"total":2}"#
+                )
+            case ("GET", "/api/v1/workspaces/ws-1/ai/conversations"):
+                return Self.response(
+                    request,
+                    status: 200,
+                    body: #"{"items":[{"id":"c-1","workspace_id":"ws-1","title":"Conversation","created_at":"","updated_at":""}],"page":1,"page_size":20,"total":1}"#
+                )
+            default:
+                return Self.response(request, status: 500, body: #"{"detail":"unexpected request"}"#)
+            }
+        }
+        let suiteName = "NotePatchInlineChatRevisionTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let store = SettingsStore(defaults: defaults, keychain: KeychainStore(service: suiteName))
+        let saved = SavedSession(
+            baseURL: "https://api.test",
+            tusBaseURL: "https://api.test/files/",
+            accessToken: "a",
+            refreshToken: "r",
+            expiresAt: "x",
+            userId: "u-1",
+            email: "user@example.test",
+            fullName: nil,
+            selectedWorkspaceId: "ws-1",
+            aiHistoryEnabled: true
+        )
+        store.saveSession(saved)
+        let model = NotePatchViewModel(
+            settings: store,
+            backendSession: backend,
+            tusSession: backend,
+            taskEventStreamingEnabled: false
+        )
+        model.session = saved
+        model.selectedWorkspaceId = "ws-1"
+        model.selectedConversationId = "c-1"
+        let target = OpenClawChatMessage(
+            id: "m-0",
+            role: .user,
+            content: "Original prompt",
+            status: .done,
+            taskId: nil,
+            progress: nil,
+            events: []
+        )
+        model.openClawMessages = [
+            target,
+            OpenClawChatMessage(id: "m-1", role: .assistant, content: "Old answer", status: .done, taskId: nil, progress: nil, events: []),
+            OpenClawChatMessage(id: "m-2", role: .user, content: "Later prompt", status: .done, taskId: nil, progress: nil, events: [])
+        ]
+        var accepted = false
+
+        model.reviseOpenClawMessage(target, prompt: "Updated prompt") {
+            accepted = true
+        }
+        try await Self.waitUntil(attempts: 500) {
+            accepted && !model.openClawState.isMessageRevising && !model.isOpenClawSending
+        }
+
+        #expect(revisionBody?["prompt"] as? String == "Updated prompt")
+        #expect(accepted)
+        #expect(model.openClawMessages.map(\.id) == ["m-0-r", "m-1-r"])
+        #expect(model.openClawMessages.last?.content == "Updated answer")
     }
 
     @Test @MainActor func userProfileRequestsUseETagIdempotencyAndMultipart() async throws {
@@ -2917,6 +3417,74 @@ struct NotePatchTests {
         #expect(model.selectedStudyNoteItem?.note.id == "n-4")
         #expect(model.studyNoteDraftHTML == "<h1>保留的本地草稿</h1>")
         #expect(model.studyNoteHTML == "<h1>服务端最新版本</h1>")
+    }
+
+    @Test @MainActor func successfulStudyNoteRevisionDropsOldRenderedURLWhenRefreshFails() async throws {
+        let suiteName = "NotePatchTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let session = Self.mockSession { request in
+            switch (request.httpMethod, request.url?.path) {
+            case ("POST", "/api/v1/workspaces/ws-1/learning-units/u-1/notes/n-1/revisions"):
+                let body = try #require(Self.requestBodyData(request))
+                let payload = try #require(try JSONSerialization.jsonObject(with: body) as? [String: Any])
+                #expect(payload["html"] as? String == "<p><span class=\"np-font-size-24\"><strong>刚刚编辑的新内容</strong></span></p>")
+                return Self.response(
+                    request,
+                    status: 201,
+                    body: #"{"note":{"id":"n-2","learning_unit_id":"u-1","version_no":2,"title":"新版本","html_object_key":"h2","source_version_id":"n-1","edit_origin":"user","download_urls":null}}"#
+                )
+            case ("GET", "/api/v1/workspaces/ws-1/learning-units/u-1/notes"):
+                return Self.response(request, status: 500, body: #"{"detail":"refresh unavailable"}"#)
+            default:
+                return Self.response(request, status: 500, body: #"{"detail":"unexpected request"}"#)
+            }
+        }
+        let model = NotePatchViewModel(
+            settings: SettingsStore(defaults: defaults, keychain: KeychainStore(service: suiteName)),
+            backendSession: session,
+            tusSession: session
+        )
+        model.session = SavedSession(
+            baseURL: "https://api.test",
+            tusBaseURL: "https://tus.test/",
+            accessToken: "a",
+            refreshToken: "r",
+            expiresAt: "x",
+            userId: "u",
+            email: "u@test",
+            fullName: nil,
+            selectedWorkspaceId: "ws-1",
+            aiHistoryEnabled: true
+        )
+        model.selectedWorkspaceId = "ws-1"
+        let unit = LearningUnit(id: "u-1", title: "比例")
+        let current = StudyNoteListItem(
+            learningUnit: unit,
+            note: StudyNoteVersion(
+                id: "n-1",
+                learningUnitId: "u-1",
+                versionNo: 1,
+                title: "旧版本",
+                htmlObjectKey: "h1",
+                jsonObjectKey: "j1"
+            )
+        )
+        model.studyNoteGroups = [StudyNoteGroup(learningUnit: unit, notes: [current])]
+        model.selectedStudyNoteItem = current
+        model.studyNoteRenderedURL = URL(string: "https://download.test/old-rendered.html")
+        model.studyNoteDraftTitle = "新版本"
+        model.studyNoteDraftHTML = "<p><span class=\"np-font-size-24\"><strong>刚刚编辑的新内容</strong></span></p>"
+        model.studyNoteDraftSummary = "修正文案"
+        model.isStudyNoteEditorPresented = true
+
+        model.saveStudyNoteRevision()
+        try await Self.waitUntil { !model.isStudyNoteSaving }
+
+        #expect(model.selectedStudyNoteItem?.note.id == "n-2")
+        #expect(model.studyNoteHTML == "<p><span class=\"np-font-size-24\"><strong>刚刚编辑的新内容</strong></span></p>")
+        #expect(model.studyNoteRenderedURL == nil)
+        #expect(!model.isStudyNoteEditorPresented)
     }
 
     @Test func persistentMutationRequests_matchDocumentedContracts() async throws {
@@ -4040,7 +4608,7 @@ struct NotePatchTests {
         )
         let detail = try JSONDecoder.notepatch.decode(
             FlashcardDeckDetail.self,
-            from: Data(#"{"deck":{"id":"deck-1","workspace_id":"ws-1","learning_unit_id":"unit-1","study_note_version_id":"note-1","task_id":"task-2","version_no":2,"attempt_revision":2,"weighting_config":{"error_multiplier":1.5},"metadata":{},"created_at":"2026-07-14T01:00:00Z"},"cards":[{"id":"card-1","knowledge_point_id":"kp-1","front":"什么是一元一次方程？","back":"只含一个未知数且最高次数为 1 的方程。","priority_score":1.75,"priority_factors":{"base":1,"error_pressure":0.5,"recent_correct_streak":2},"source_refs":[{"document_id":"doc-1"}],"difficulty":"medium","rank":1,"created_at":"2026-07-14T01:00:00Z"}]}"#.utf8)
+            from: Data(#"{"deck":{"id":"deck-1","workspace_id":"ws-1","learning_unit_id":"unit-1","study_note_version_id":"note-1","task_id":"task-2","version_no":2,"attempt_revision":2,"weighting_config":{"error_multiplier":1.5},"metadata":{},"created_at":"2026-07-14T01:00:00Z"},"cards":[{"id":"card-1","knowledge_point_id":"kp-1","front":"什么是一元一次方程？","back":"只含一个未知数且最高次数为 1 的方程。","priority_score":1.75,"priority_factors":{"base":1,"error_pressure":0.5,"recent_correct_streak":2},"source_refs":[{"document_id":"doc-1"}],"difficulty":"medium","review_hint":{"primary":{"code":"frequent_recent_errors","message_key":"flashcards.hints.frequent_recent_errors","tone":"warning","params":{"count":3,"window_days":30}},"badges":[{"code":"correct_streak","message_key":"flashcards.badges.correct_streak","tone":"positive","params":{"correct_streak":2}},{"code":"latest_outcome","message_key":"flashcards.badges.latest_outcome","tone":"warning","params":{"outcome":"incorrect"}}],"data_quality":"complete"},"rank":1,"created_at":"2026-07-14T01:00:00Z"}]}"#.utf8)
         )
 
         #expect(unit.knowledgeRevision == 4)
@@ -4050,6 +4618,15 @@ struct NotePatchTests {
         #expect(note.knowledgePointIds == ["kp-1"])
         #expect(detail.deck.attemptRevision == 2)
         #expect(detail.cards.first?.priorityFactors["recent_correct_streak"] == .number(2))
+        let reviewHint = try #require(detail.cards.first?.reviewHint)
+        #expect(reviewHint.dataQuality == "complete")
+        #expect(reviewHint.badges.count == 2)
+        #expect(flashcardHintText(reviewHint.primary) == "近 30 天错了 3 次")
+        #expect(flashcardHintText(reviewHint.badges[1]) == "最近：答错")
+        #expect(
+            flashcardHintText(FlashcardHintItem(code: "future", messageKey: "flashcards.hints.future", tone: "future"))
+            == localized("flashcards.hints.general_review")
+        )
 
         let noKnowledge = LearningUnit(id: "u0", title: "空", knowledgeRevision: 0, notesGeneratedRevision: 0)
         let ready = LearningUnit(id: "u1", title: "完成", knowledgeRevision: 2, notesGeneratedRevision: 2)
@@ -4192,11 +4769,149 @@ struct NotePatchTests {
             in: webView
         ) as? String)
 
-        #expect(output.contains("font-size: 24px"))
+        #expect(output.contains("class=\"np-font-size-24\""))
         #expect(output.contains("Hello"))
         #expect(!output.lowercased().contains("<font"))
+        #expect(!output.lowercased().contains("style="))
         #expect(HTMLNoteSecurity.editorUserScript.contains("savedRange"))
         #expect(HTMLNoteSecurity.editorUserScript.contains("noteFormatChanged"))
+
+        let migrated = try #require(try await evaluateJavaScript(
+            """
+            (() => {
+              window.__notePatchEditor.setHTML('<p><span style="font-size: 28px">Legacy</span></p>');
+              return window.__notePatchEditor.getHTML();
+            })();
+            """,
+            in: webView
+        ) as? String)
+        #expect(migrated.contains("class=\"np-font-size-28\""))
+        #expect(!migrated.lowercased().contains("style="))
+
+        let bold = try #require(try await evaluateJavaScript(
+            """
+            (() => {
+              window.__notePatchEditor.setHTML('<p>Bold</p>');
+              const text = document.querySelector('p').firstChild;
+              const range = document.createRange();
+              range.selectNodeContents(text);
+              const selection = window.getSelection();
+              selection.removeAllRanges();
+              selection.addRange(range);
+              document.dispatchEvent(new Event('selectionchange'));
+              window.__notePatchEditor.command('bold', null);
+              return window.__notePatchEditor.getHTML();
+            })();
+            """,
+            in: webView
+        ) as? String)
+        #expect(bold.contains("<strong>Bold</strong>"))
+        #expect(!bold.lowercased().contains("<b>"))
+
+        let unbold = try #require(try await evaluateJavaScript(
+            """
+            (() => {
+              window.__notePatchEditor.setHTML('<p><strong>Bold</strong></p>');
+              const text = document.querySelector('strong').firstChild;
+              const range = document.createRange();
+              range.selectNodeContents(text);
+              const selection = window.getSelection();
+              selection.removeAllRanges();
+              selection.addRange(range);
+              document.dispatchEvent(new Event('selectionchange'));
+              window.__notePatchEditor.command('bold', null);
+              return window.__notePatchEditor.getHTML();
+            })();
+            """,
+            in: webView
+        ) as? String)
+        #expect(!unbold.lowercased().contains("<strong>"))
+        #expect(unbold.contains("Bold"))
+
+        let italic = try #require(try await evaluateJavaScript(
+            """
+            (() => {
+              window.__notePatchEditor.setHTML('<p>Italic</p>');
+              const text = document.querySelector('p').firstChild;
+              const range = document.createRange();
+              range.selectNodeContents(text);
+              const selection = window.getSelection();
+              selection.removeAllRanges();
+              selection.addRange(range);
+              document.dispatchEvent(new Event('selectionchange'));
+              window.__notePatchEditor.command('italic', null);
+              return window.__notePatchEditor.getHTML();
+            })();
+            """,
+            in: webView
+        ) as? String)
+        #expect(italic.contains("<em>Italic</em>"))
+        #expect(!italic.lowercased().contains("<i>"))
+
+        let legacySemanticTags = try #require(try await evaluateJavaScript(
+            """
+            (() => {
+              window.__notePatchEditor.setHTML('<p><b>Old bold</b><i>Old italic</i></p>');
+              return window.__notePatchEditor.getHTML();
+            })();
+            """,
+            in: webView
+        ) as? String)
+        #expect(legacySemanticTags.contains("<strong>Old bold</strong>"))
+        #expect(legacySemanticTags.contains("<em>Old italic</em>"))
+        #expect(!legacySemanticTags.lowercased().contains("<b>"))
+        #expect(!legacySemanticTags.lowercased().contains("<i>"))
+    }
+
+    @Test @MainActor func richHTMLNoteEditorSnapshotCapturesUndebouncedChangesBeforeSave() async throws {
+        var boundHTML = "<p>旧内容</p>"
+        var selectedFontSize = HTMLNoteFontSize.defaultSize
+        var capturedHTML: String?
+        let htmlBinding = Binding(
+            get: { boundHTML },
+            set: { boundHTML = $0 }
+        )
+        let fontBinding = Binding(
+            get: { selectedFontSize },
+            set: { selectedFontSize = $0 }
+        )
+        let coordinator = RichHTMLNoteEditor.Coordinator(
+            html: htmlBinding,
+            selectedFontSize: fontBinding,
+            snapshotCallback: { capturedHTML = $0 }
+        )
+        let configuration = NoteWebViewRuntime.shared.configuration(allowsContentJavaScript: true)
+        configuration.userContentController.addUserScript(
+            WKUserScript(
+                source: HTMLNoteSecurity.editorUserScript,
+                injectionTime: .atDocumentEnd,
+                forMainFrameOnly: true
+            )
+        )
+        configuration.userContentController.add(coordinator, name: "noteHTMLChanged")
+        configuration.userContentController.add(coordinator, name: "noteFormatChanged")
+        defer {
+            configuration.userContentController.removeScriptMessageHandler(forName: "noteHTMLChanged")
+            configuration.userContentController.removeScriptMessageHandler(forName: "noteFormatChanged")
+        }
+        let webView = WKWebView(frame: CGRect(x: 0, y: 0, width: 390, height: 500), configuration: configuration)
+        coordinator.webView = webView
+        webView.navigationDelegate = coordinator
+        webView.loadHTMLString(HTMLNoteSecurity.editorDocument(), baseURL: nil)
+        try await Self.waitUntil { coordinator.isReady }
+
+        _ = try await evaluateJavaScript(
+            "document.body.innerHTML = '<p>保存按钮按下前的最新内容</p>';",
+            in: webView
+        )
+        #expect(boundHTML == "<p>旧内容</p>")
+
+        coordinator.lastSnapshotRequestToken = 1
+        coordinator.captureSnapshot(requestToken: 1)
+        try await Self.waitUntil { capturedHTML != nil }
+
+        #expect(capturedHTML == "<p>保存按钮按下前的最新内容</p>")
+        #expect(boundHTML == capturedHTML)
     }
 
     @Test func latexMathRendererConvertsCommonNoteFormulasToMathML() throws {
@@ -4947,6 +5662,196 @@ private final class TestScriptMessageSink: NSObject, WKScriptMessageHandler {
         )
         #expect(detail.workflow.isTerminal)
         #expect(detail.workflow.coreStatus == "succeeded")
+    }
+
+    @Test func imageRemarkModels_decodeNewAndLegacyContracts() throws {
+        let legacyUser = try JSONDecoder.notepatch.decode(
+            BackendUser.self,
+            from: Data(#"{"id":"u1","email":"u@example.com","is_active":true,"created_at":""}"#.utf8)
+        )
+        #expect(legacyUser.autoImageRemarkEnabled)
+
+        let currentUser = try JSONDecoder.notepatch.decode(
+            BackendUser.self,
+            from: Data(#"{"id":"u1","email":"u@example.com","is_active":true,"created_at":"","auto_image_remark_enabled":false}"#.utf8)
+        )
+        #expect(!currentUser.autoImageRemarkEnabled)
+
+        let document = try JSONDecoder.notepatch.decode(
+            LearningDocumentItem.self,
+            from: Data(#"{"id":"d1","workspace_id":"w1","uploaded_by":"u1","original_filename":"IMG_0001.jpg","remark":"CPU register diagram","remark_source":"ai_ocr","mime_type":"image/jpeg","file_size":100,"file_type":"image","document_kind":"note","storage_backend":"s3","bucket":"files","object_key":"d1.jpg","status":"uploaded","image_remark_status":"running","image_remark_task_id":"t1","created_at":"","updated_at":"","artifacts":[]}"#.utf8)
+        )
+        #expect(document.displayRemark == "CPU register diagram")
+        #expect(document.remarkSource == "ai_ocr")
+        #expect(document.isImageRemarkActive)
+
+        let fallbackDocument = try JSONDecoder.notepatch.decode(
+            LearningDocumentItem.self,
+            from: Data(#"{"id":"d2","workspace_id":"w1","uploaded_by":"u1","original_filename":"page.png","remark":null,"mime_type":"image/png","file_size":100,"file_type":"image","document_kind":"note","storage_backend":"s3","bucket":"files","object_key":"d2.png","status":"uploaded","created_at":"","updated_at":"","artifacts":[]}"#.utf8)
+        )
+        #expect(fallbackDocument.displayRemark == "page.png")
+        #expect(!fallbackDocument.isImageRemarkActive)
+
+        let note = try JSONDecoder.notepatch.decode(
+            StudyNoteVersion.self,
+            from: Data(#"{"id":"n1","learning_unit_id":"u1","version_no":1,"title":"Note","metadata":{"completion_count":3,"completion_source_document_ids":["d1","d2"],"completion_evidence_revision":7,"completion_strategy":"rewrite"}}"#.utf8)
+        )
+        #expect(note.completionCount == 3)
+        #expect(note.completionSourceDocumentIds == ["d1", "d2"])
+        #expect(note.completionEvidenceRevision == 7)
+        #expect(note.completionStrategy == "rewrite")
+    }
+
+    @Test func imageRemarkClient_sendsPreferenceUploadAndDocumentPatches() async throws {
+        var requests: [(method: String, url: String, body: [String: Any]?)] = []
+        let updatedDocumentJSON = #"{"id":"doc/1","workspace_id":"ws 1","uploaded_by":"u1","original_filename":"page.png","remark":"CPU diagram","remark_source":"user","mime_type":"image/png","file_size":100,"file_type":"image","document_kind":"note","storage_backend":"s3","bucket":"files","object_key":"page.png","status":"uploaded","image_remark_status":"user","created_at":"","updated_at":"","artifacts":[]}"#
+        let session = Self.mockSession { request in
+            let body = Self.requestBodyData(request).flatMap {
+                try? JSONSerialization.jsonObject(with: $0) as? [String: Any]
+            }
+            requests.append((request.httpMethod ?? "", request.url?.absoluteString ?? "", body))
+            switch (request.httpMethod, request.url?.path) {
+            case ("PATCH", "/api/v1/auth/preferences"):
+                return Self.response(request, status: 200, body: #"{"id":"u1","email":"u@example.com","is_active":true,"created_at":"","auto_image_remark_enabled":false}"#)
+            case ("POST", "/api/v1/workspaces/ws 1/documents/upload-session"):
+                return Self.response(request, status: 201, body: Self.uploadSessionJSON)
+            case ("PATCH", "/api/v1/workspaces/ws 1/documents/doc/1"):
+                return Self.response(request, status: 200, body: updatedDocumentJSON)
+            default:
+                return Self.response(request, status: 500, body: #"{"detail":"unexpected"}"#)
+            }
+        }
+        let client = LearningBackendClient(baseURL: "https://api.test", accessToken: "a", refreshToken: "r", session: session)
+
+        let user = try await client.updateAutoImageRemarkPreference(enabled: false)
+        #expect(!user.autoImageRemarkEnabled)
+        _ = try await client.createUploadSession(
+            workspaceId: "ws 1",
+            filename: "page.png",
+            mimeType: "image/png",
+            fileSize: 100,
+            documentKind: "note",
+            remark: "  CPU diagram  "
+        )
+        let updated = try await client.updateDocumentRemark(workspaceId: "ws 1", documentId: "doc/1", remark: "CPU diagram")
+        #expect(updated.remarkSource == "user")
+
+        #expect(requests.count == 3)
+        #expect(requests[0].body?["auto_image_remark_enabled"] as? Bool == false)
+        #expect(requests[1].body?["remark"] as? String == "CPU diagram")
+        #expect(requests[2].body?["remark"] as? String == "CPU diagram")
+        #expect(requests[1].url.contains("/workspaces/ws%201/documents/upload-session"))
+        #expect(requests[2].url.contains("/workspaces/ws%201/documents/doc%2F1"))
+    }
+
+    @Test @MainActor func imageRemarkViewModel_persistsPreferenceEditsQueueAndTracksCompletion() async throws {
+        let suiteName = "NotePatchImageRemarkTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let keychain = KeychainStore(service: suiteName)
+        var detailReadCount = 0
+        let session = Self.mockSession { request in
+            switch (request.httpMethod, request.url?.path) {
+            case ("PATCH", "/api/v1/auth/preferences"):
+                return Self.response(request, status: 200, body: #"{"id":"u1","email":"u@example.com","is_active":true,"created_at":"","auto_image_remark_enabled":false}"#)
+            case ("PATCH", "/api/v1/workspaces/ws-1/documents/doc-1"):
+                return Self.response(request, status: 200, body: #"{"id":"doc-1","workspace_id":"ws-1","uploaded_by":"u1","original_filename":"page.png","remark":"Manual title","remark_source":"user","mime_type":"image/png","file_size":100,"file_type":"image","document_kind":"note","storage_backend":"s3","bucket":"files","object_key":"page.png","status":"uploaded","image_remark_status":"user","created_at":"","updated_at":"","artifacts":[]}"#)
+            case ("GET", "/api/v1/workspaces/ws-1/documents/doc-track"):
+                detailReadCount += 1
+                return Self.response(request, status: 200, body: #"{"id":"doc-track","workspace_id":"ws-1","uploaded_by":"u1","original_filename":"tracked.png","remark":"Generated title","remark_source":"ai_ocr","mime_type":"image/png","file_size":100,"file_type":"image","document_kind":"note","storage_backend":"s3","bucket":"files","object_key":"tracked.png","status":"uploaded","image_remark_status":"succeeded","created_at":"","updated_at":"","artifacts":[]}"#)
+            default:
+                return Self.response(request, status: 500, body: #"{"detail":"unexpected"}"#)
+            }
+        }
+        let settings = SettingsStore(defaults: defaults, keychain: keychain)
+        let savedSession = SavedSession(
+            baseURL: "https://api.test", tusBaseURL: "https://api.test/files/",
+            accessToken: "a", refreshToken: "r", expiresAt: "2099-01-01T00:00:00Z", userId: "u1",
+            email: "u@example.com", fullName: nil, selectedWorkspaceId: "ws-1",
+            aiHistoryEnabled: true, autoImageRemarkEnabled: true
+        )
+        settings.saveSession(savedSession)
+        let model = NotePatchViewModel(
+            settings: settings,
+            backendSession: session,
+            tusSession: session,
+            taskEventStreamingEnabled: false,
+            imageRemarkSecondNanoseconds: 1_000_000
+        )
+        model.session = savedSession
+        model.selectedWorkspaceId = "ws-1"
+
+        model.updateAutoImageRemarkEnabled(false)
+        try await Self.waitUntil { !model.isAutoImageRemarkPreferenceUpdating }
+        #expect(!model.autoImageRemarkEnabled)
+        #expect(settings.loadSession()?.autoImageRemarkEnabled == false)
+
+        let image = LocalUploadFile(url: URL(fileURLWithPath: "/tmp/page.png"), filename: "page.png", mimeType: "image/png")
+        let file = LocalUploadFile(url: URL(fileURLWithPath: "/tmp/page.pdf"), filename: "page.pdf", mimeType: "application/pdf")
+        model.stageUploadFileForPreview(image)
+        model.stageUploadFileForPreview(file)
+        #expect(model.updateQueuedUploadRemark(image.id, remark: "  First page  "))
+        #expect(model.queuedUploadItems.first(where: { $0.id == image.id })?.remark == "First page")
+        #expect(!model.updateQueuedUploadRemark(file.id, remark: "PDF remark"))
+
+        let existing = LearningDocumentItem(
+            id: "doc-1", workspaceId: "ws-1", originalFilename: "page.png",
+            fileType: "image", documentKind: "note", status: "uploaded"
+        )
+        model.documents = [existing]
+        model.updateDocumentRemark(existing, remark: "Manual title")
+        try await Self.waitUntil { model.documentRemarkUpdatingId == nil }
+        #expect(model.documents.first?.remark == "Manual title")
+        #expect(model.documents.first?.remarkSource == "user")
+
+        let tracking = LearningDocumentItem(
+            id: "doc-track", workspaceId: "ws-1", originalFilename: "tracked.png",
+            fileType: "image", documentKind: "note", status: "uploaded",
+            imageRemarkStatus: "running"
+        )
+        model.documents = [tracking]
+        try await Self.waitUntil(attempts: 100) { model.documents.first?.imageRemarkStatus == "succeeded" }
+        #expect(detailReadCount == 1)
+        #expect(model.documents.first?.displayRemark == "Generated title")
+    }
+
+    @Test @MainActor func imageRemarkViewModel_rollsBackPreferenceAndDocumentOnFailure() async throws {
+        let suiteName = "NotePatchImageRemarkFailureTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let session = Self.mockSession { request in
+            Self.response(request, status: 500, body: #"{"detail":"remark service unavailable"}"#)
+        }
+        let savedSession = SavedSession(
+            baseURL: "https://api.test", tusBaseURL: "https://api.test/files/",
+            accessToken: "a", refreshToken: "r", expiresAt: "2099-01-01T00:00:00Z",
+            userId: "u1", email: "u@example.com", fullName: nil,
+            selectedWorkspaceId: "ws-1", aiHistoryEnabled: true,
+            autoImageRemarkEnabled: true
+        )
+        let model = NotePatchViewModel(
+            settings: SettingsStore(defaults: defaults, keychain: KeychainStore(service: suiteName)),
+            backendSession: session,
+            tusSession: session,
+            taskEventStreamingEnabled: false
+        )
+        model.session = savedSession
+        model.selectedWorkspaceId = "ws-1"
+        let original = LearningDocumentItem(
+            id: "doc-1", workspaceId: "ws-1", remark: "Original",
+            remarkSource: "ai_ocr", originalFilename: "page.png", fileType: "image",
+            documentKind: "note", status: "uploaded", imageRemarkStatus: "succeeded"
+        )
+        model.documents = [original]
+
+        model.updateAutoImageRemarkEnabled(false)
+        try await Self.waitUntil { !model.isAutoImageRemarkPreferenceUpdating }
+        #expect(model.autoImageRemarkEnabled)
+
+        model.updateDocumentRemark(original, remark: "Changed")
+        try await Self.waitUntil { model.documentRemarkUpdatingId == nil }
+        #expect(model.documents == [original])
+        #expect(model.errorMessage?.contains("remark service unavailable") == true)
     }
 
     @Test func latestLearningClient_requestsMatchProductionOpenAPI() async throws {

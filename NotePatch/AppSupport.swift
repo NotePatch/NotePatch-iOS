@@ -32,10 +32,7 @@ struct LocalUploadFile: Equatable, Identifiable, Sendable {
     }
 
     nonisolated var isImage: Bool {
-        if mimeType?.hasPrefix("image/") == true {
-            return true
-        }
-        return ["jpg", "jpeg", "png", "webp", "heic"].contains(url.pathExtension.lowercased())
+        inferredUploadFileType(filename: filename, mimeType: mimeType) == "image"
     }
 
     nonisolated func previewKind(canQuickLookPreview: Bool) -> UploadPreviewKind {
@@ -66,9 +63,10 @@ struct QueuedUploadRemoteState: Equatable {
 struct QueuedUploadItem: Identifiable, Equatable {
     let id: UUID
     let file: LocalUploadFile
-    let documentKind: String
+    var documentKind: String
     var learningMetadata: LearningMetadata
     var saveToDocuments: Bool
+    var remark: String?
     var isSelected: Bool
     var state: QueuedUploadState
     var remoteState: QueuedUploadRemoteState?
@@ -78,6 +76,7 @@ struct QueuedUploadItem: Identifiable, Equatable {
         documentKind: String,
         learningMetadata: LearningMetadata,
         saveToDocuments: Bool = true,
+        remark: String? = nil,
         isSelected: Bool = true,
         state: QueuedUploadState = .pending,
         remoteState: QueuedUploadRemoteState? = nil
@@ -87,6 +86,7 @@ struct QueuedUploadItem: Identifiable, Equatable {
         self.documentKind = documentKind
         self.learningMetadata = learningMetadata
         self.saveToDocuments = saveToDocuments
+        self.remark = remark
         self.isSelected = isSelected
         self.state = state
         self.remoteState = remoteState
@@ -223,7 +223,11 @@ nonisolated func extensionForContentType(_ contentType: String?) -> String? {
 }
 
 nonisolated func contentTypeForFilename(_ filename: String) -> String? {
-    switch (filename as NSString).pathExtension.lowercased() {
+    let ext = (filename as NSString).pathExtension.lowercased()
+    if let type = UTType(filenameExtension: ext), let mimeType = type.preferredMIMEType {
+        return mimeType
+    }
+    switch ext {
     case "jpg", "jpeg":
         return "image/jpeg"
     case "png":
@@ -240,9 +244,74 @@ nonisolated func contentTypeForFilename(_ filename: String) -> String? {
         return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
     case "pptx":
         return "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+    case "doc": return "application/msword"
+    case "odt": return "application/vnd.oasis.opendocument.text"
+    case "rtf": return "application/rtf"
+    case "ppt": return "application/vnd.ms-powerpoint"
+    case "odp": return "application/vnd.oasis.opendocument.presentation"
+    case "xls": return "application/vnd.ms-excel"
+    case "xlsx": return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    case "ods": return "application/vnd.oasis.opendocument.spreadsheet"
+    case "md": return "text/markdown"
+    case "csv": return "text/csv"
+    case "tsv": return "text/tab-separated-values"
+    case "json": return "application/json"
+    case "jsonl": return "application/x-ndjson"
+    case "yaml", "yml": return "application/yaml"
+    case "xml": return "application/xml"
+    case "html", "htm": return "text/html"
+    case "epub": return "application/epub+zip"
+    case "eml": return "message/rfc822"
+    case "msg": return "application/vnd.ms-outlook"
+    case "ipynb": return "application/x-ipynb+json"
+    case "7z": return "application/x-7z-compressed"
+    case "rar": return "application/vnd.rar"
+    case "tar": return "application/x-tar"
+    case "tgz": return "application/gzip"
+    case "bz2": return "application/x-bzip2"
+    case "xz": return "application/x-xz"
+    case "zst": return "application/zstd"
     default:
         return nil
     }
+}
+
+let extendedUploadExtensions: Set<String> = [
+    "jpg", "jpeg", "png", "webp", "tif", "tiff", "gif", "bmp", "heic",
+    "pdf", "doc", "docx", "odt", "rtf", "ppt", "pptx", "odp",
+    "xls", "xlsx", "ods", "txt", "md", "csv", "tsv", "json", "jsonl",
+    "yaml", "yml", "xml", "html", "htm", "epub", "eml", "msg", "ipynb",
+    "mp3", "wav", "m4a", "aac", "ogg", "flac", "mp4", "mov", "mkv",
+    "avi", "webm", "zip", "7z", "rar", "tar", "tgz", "gz", "bz2", "xz", "zst"
+]
+
+let learningDocumentKinds: Set<String> = [
+    "homework", "corrected_homework", "courseware", "note", "exam", "answer_key", "rubric"
+]
+
+let learningPipelineFileTypes: Set<String> = ["image", "pdf", "docx", "pptx"]
+
+nonisolated func inferredUploadFileType(filename: String, mimeType: String?) -> String {
+    let ext = (filename as NSString).pathExtension.lowercased()
+    let normalizedMIME = mimeType?.lowercased() ?? ""
+    if normalizedMIME.hasPrefix("image/")
+        || ["jpg", "jpeg", "png", "gif", "webp", "bmp", "tif", "tiff", "heic"].contains(ext) {
+        return "image"
+    }
+    if normalizedMIME == "application/pdf" || ext == "pdf" { return "pdf" }
+    if ext == "docx" || normalizedMIME.hasSuffix("wordprocessingml.document") { return "docx" }
+    if ext == "pptx" || normalizedMIME.hasSuffix("presentationml.presentation") { return "pptx" }
+    if normalizedMIME.hasPrefix("audio/") || ["mp3", "wav", "m4a", "aac", "ogg"].contains(ext) {
+        return "audio"
+    }
+    if normalizedMIME.hasPrefix("video/") || ["mp4", "mov", "mkv", "avi", "webm"].contains(ext) {
+        return "video"
+    }
+    return "other"
+}
+
+func isSupportedLearningUpload(filename: String, mimeType: String?) -> Bool {
+    learningPipelineFileTypes.contains(inferredUploadFileType(filename: filename, mimeType: mimeType))
 }
 
 @MainActor
@@ -387,6 +456,42 @@ func artifactTypeLabel(_ value: String) -> String {
     case "other": return localized("common.other")
     default: return localized("artifact.unknown")
     }
+}
+
+private let supportedFlashcardHintKeys: Set<String> = [
+    "flashcards.hints.recently_improving",
+    "flashcards.hints.just_missed",
+    "flashcards.hints.frequent_recent_errors",
+    "flashcards.hints.recently_correct",
+    "flashcards.hints.from_notes",
+    "flashcards.hints.historical_review",
+    "flashcards.hints.general_review",
+    "flashcards.badges.correct_streak",
+    "flashcards.badges.recent_errors",
+    "flashcards.badges.historical_errors",
+    "flashcards.badges.latest_outcome"
+]
+
+func flashcardHintText(_ item: FlashcardHintItem) -> String {
+    let key = supportedFlashcardHintKeys.contains(item.messageKey)
+        ? item.messageKey
+        : "flashcards.hints.general_review"
+    var value = localized(key)
+    for (name, parameter) in item.params {
+        let replacement: String
+        if name == "outcome" {
+            switch parameter.displayString {
+            case "correct": replacement = localized("flashcards.outcome.correct")
+            case "partial": replacement = localized("flashcards.outcome.partial")
+            case "incorrect": replacement = localized("flashcards.outcome.incorrect")
+            default: replacement = parameter.displayString
+            }
+        } else {
+            replacement = parameter.displayString
+        }
+        value = value.replacingOccurrences(of: "{\(name)}", with: replacement)
+    }
+    return value
 }
 
 func compactDateTime(_ value: String) -> String {
