@@ -35,8 +35,8 @@ struct NotePatchTests {
         let data = try Data(contentsOf: documentURL)
         let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
 
-        #expect(data.split(separator: 0x0A, omittingEmptySubsequences: false).count == 1_338)
-        #expect(digest == "0f71d6bb6f56f145457c02a84850fc0b6ccf9b9bbe0918e240e0a65f6bbc1eb5")
+        #expect(data.split(separator: 0x0A, omittingEmptySubsequences: false).count == 1_385)
+        #expect(digest == "eaf17bdeaaf23f15faf8688e3ede1802f579b01cf5baf6dd6b58e03274d32e5f")
     }
 
     @MainActor
@@ -230,6 +230,10 @@ struct NotePatchTests {
         #expect(appActivityPresentation(isBusy: false, progressPercent: 42, label: "Upload") == .hidden)
         #expect(appActivityPresentation(isBusy: true, progressPercent: nil, label: "Saving") == .indeterminate("Saving"))
         #expect(appActivityPresentation(isBusy: true, progressPercent: 142, label: "Upload") == .determinate(100, "Upload"))
+        #expect(appActivityTopOffset(reportedSafeAreaTop: 59, windowSafeAreaTop: 0) == 61)
+        #expect(appActivityTopOffset(reportedSafeAreaTop: 0, windowSafeAreaTop: 59) == 61)
+        #expect(appActivityTopOffset(reportedSafeAreaTop: 20, windowSafeAreaTop: 20) == 22)
+        #expect(appActivityTopOffset(reportedSafeAreaTop: -10, windowSafeAreaTop: 0) == 2)
     }
 
     @Test @MainActor func globalFeedbackAutoDismissesAndReplacementRestartsTimer() async throws {
@@ -869,6 +873,8 @@ struct NotePatchTests {
                 )
             case "GET /api/v1/workspaces/ws-1/tasks/task-1/events":
                 return Self.response(request, status: 200, body: "[]")
+            case "GET /api/v1/workspaces/ws-1/tasks/task-1/events/stream":
+                return Self.response(request, status: 404, body: #"{"detail":"stream unavailable"}"#)
             default:
                 return Self.response(request, status: 500, body: #"{"detail":"unexpected request"}"#)
             }
@@ -1219,8 +1225,8 @@ struct NotePatchTests {
         let otherHost = try TusUploader.resolveUploadURL(endpoint: "http://192.168.100.123:1080/files/", location: "http://other.test/upload/xyz")
         #expect(relative == "http://192.168.100.123:1080/files/abc")
         #expect(absolutePath == "http://192.168.100.123:1080/files/abc")
-        #expect(proxiedPath == "\(defaultTUSDBaseURL)abc")
-        #expect(insecureSameOrigin == "\(defaultTUSDBaseURL)abc")
+        #expect(proxiedPath == "https://8.137.78.255/files/abc")
+        #expect(insecureSameOrigin == "http://8.137.78.255/files/abc")
         #expect(otherHost == "http://other.test/upload/xyz")
         #expect(
             TusUploader.preferredEndpoint(
@@ -1241,6 +1247,7 @@ struct NotePatchTests {
             ) == defaultTUSDBaseURL
         )
         #expect(TusUploader.extractTusUploadId("http://192.168.100.123:1080/files/abc") == "abc")
+        #expect(TusUploader.extractTusUploadId("https://upload.test/files/abc?token=1") == "abc")
     }
 
     @Test @MainActor func uploadQueue_preservesKindsUploadsInOrderAndRemovesSuccesses() async throws {
@@ -1270,6 +1277,15 @@ struct NotePatchTests {
                     statusCode: 201,
                     httpVersion: nil,
                     headerFields: ["Location": "upload-\(tusCreateCount)", "Tus-Resumable": "1.0.0"]
+                )!
+                return (response, Data())
+            }
+            if request.httpMethod == "HEAD", request.url?.host == "192.168.100.123", path.hasPrefix("/files/upload-") {
+                let response = HTTPURLResponse(
+                    url: try #require(request.url),
+                    statusCode: 204,
+                    httpVersion: nil,
+                    headerFields: ["Upload-Offset": "0", "Upload-Length": "0", "Tus-Resumable": "1.0.0"]
                 )!
                 return (response, Data())
             }
@@ -1331,6 +1347,14 @@ struct NotePatchTests {
                     statusCode: 201,
                     httpVersion: nil,
                     headerFields: ["Location": "upload-recovery", "Tus-Resumable": "1.0.0"]
+                )!
+                return (response, Data())
+            case ("HEAD", let path) where path.hasPrefix("/files/upload-recovery"):
+                let response = HTTPURLResponse(
+                    url: try #require(request.url),
+                    statusCode: 204,
+                    httpVersion: nil,
+                    headerFields: ["Upload-Offset": "0", "Upload-Length": "0", "Tus-Resumable": "1.0.0"]
                 )!
                 return (response, Data())
             case ("POST", "/api/v1/workspaces/ws-1/documents/complete-upload"):
@@ -1891,9 +1915,10 @@ struct NotePatchTests {
         #expect(capturedRequest?.value(forHTTPHeaderField: "Authorization") == "Bearer access")
         #expect(capturedBody?["filename"] as? String == "exam.pdf")
         #expect(capturedBody?["document_kind"] as? String == "homework")
-        let metadata = capturedBody?["metadata"] as? [String: String]
-        #expect(metadata?["learning_unit_title"] == "分数")
-        #expect(metadata?["subject"] == "数学")
+        #expect(capturedBody?["learning_unit_title"] as? String == "分数")
+        #expect(capturedBody?["subject"] as? String == "数学")
+        #expect(capturedBody?["auto_group_learning_unit"] as? Bool == true)
+        #expect((capturedBody?["metadata"] as? [String: Any])?.isEmpty == true)
         #expect(upload.document.originalFilename == "exam.pdf")
     }
 
@@ -3492,6 +3517,8 @@ struct NotePatchTests {
                 return Self.response(request, status: 200, body: #"[{"id":"event-1","workspace_id":"ws-1","task_id":"task-1","event_type":"task_cancelled","level":"warning","message":"Source document was deleted","progress":25,"data":{},"created_at":""}]"#)
             case "GET /api/v1/workspaces/ws-1/tasks/task-1/events/stream":
                 return Self.response(request, status: 404, body: #"{"detail":"stream unavailable"}"#)
+            case "GET /api/v1/workspaces/ws-1/documents/doc-ready/workflow":
+                return Self.response(request, status: 404, body: #"{"detail":"workflow unavailable"}"#)
             default:
                 resultReadCount += 1
                 return Self.response(request, status: 500, body: #"{"detail":"unexpected result read"}"#)
@@ -4780,6 +4807,15 @@ private final class TestWebViewNavigationProbe: NSObject, WKNavigationDelegate {
                     )!
                     return (response, Data())
                 }
+                if request.httpMethod == "HEAD", request.url?.host == "192.168.100.123", path.hasPrefix("/files/upload-1") {
+                    let response = HTTPURLResponse(
+                        url: try #require(request.url),
+                        statusCode: 204,
+                        httpVersion: nil,
+                        headerFields: ["Upload-Offset": "0", "Upload-Length": "0", "Tus-Resumable": "1.0.0"]
+                    )!
+                    return (response, Data())
+                }
                 return Self.response(request, status: 500, body: #"{"detail":"unexpected request"}"#)
             }
         }
@@ -4805,6 +4841,309 @@ private final class TestWebViewNavigationProbe: NSObject, WKNavigationDelegate {
         #expect(attachments.count == 1)
         #expect(attachments.first?["document_id"] as? String == "doc-completed")
         #expect(attachments.first?.count == 1)
+    }
+
+    @Test func latestLearningModels_decodeStrategiesGapsNoteSetsAndWorkflows() throws {
+        let user = try JSONDecoder.notepatch.decode(
+            BackendUser.self,
+            from: Data(#"{"id":"u1","email":"u@example.com","full_name":"User","is_active":true,"created_at":"","ai_history_enabled":true,"note_content_edit_level":"future_mode","note_layout_edit_level":"minor","note_history_limit":7}"#.utf8)
+        )
+        #expect(user.noteContentEditLevel.rawValue == "future_mode")
+        #expect(user.noteLayoutEditLevel == .minor)
+        #expect(user.noteHistoryLimit == 7)
+
+        let note = try JSONDecoder.notepatch.decode(
+            StudyNoteVersion.self,
+            from: Data(#"{"id":"n1","workspace_id":"w1","learning_unit_id":"u1","version_no":2,"title":"Note","note_ir_object_key":"ir.json","content_edit_level":"verbatim","layout_edit_level":"preserve","download_urls":null,"rendering":{"theme_id":"paper","css_url":"/paper.css","wrapper_class":"np"}}"#.utf8)
+        )
+        #expect(note.jsonObjectKey.isEmpty)
+        #expect(note.noteIRObjectKey == "ir.json")
+        #expect(note.contentEditLevel == .verbatim)
+        #expect(note.rendering?.themeId == "paper")
+
+        let noteSet = try JSONDecoder.notepatch.decode(
+            NoteSet.self,
+            from: Data(#"{"id":"set1","workspace_id":"w1","title":"Lecture","expected_page_count":2,"status":"uploading","content_edit_level":"conceptual","layout_edit_level":"minor","created_at":"","updated_at":"","documents":[{"id":"p1","document_id":"d1","page_index":0,"created_at":""}]}"#.utf8)
+        )
+        #expect(noteSet.documents.first?.pageIndex == 0)
+
+        let gap = try JSONDecoder.notepatch.decode(
+            NoteGap.self,
+            from: Data(#"{"id":"g1","workspace_id":"w1","learning_unit_id":"u1","knowledge_point_id":"kp1","status":"pending","coverage_score":0.4,"source_refs":[{"document_id":"d1","page_index":1,"excerpt":"source"}],"insert_position":"after","created_at":"","updated_at":""}"#.utf8)
+        )
+        #expect(gap.sourceRefs.first?.documentId == "d1")
+
+        let detail = try JSONDecoder.notepatch.decode(
+            WorkflowDetail.self,
+            from: Data(#"{"workflow":{"id":"wf1","workspace_id":"w1","trigger_type":"upload","status":"partially_succeeded","core_status":"succeeded","enrichment_status":"failed","progress":100,"result":{},"metadata":{},"created_at":"","updated_at":""},"tasks":[]}"#.utf8)
+        )
+        #expect(detail.workflow.isTerminal)
+        #expect(detail.workflow.coreStatus == "succeeded")
+    }
+
+    @Test func latestLearningClient_requestsMatchProductionOpenAPI() async throws {
+        var requests: [(String, String, [String: Any]?)] = []
+        let session = Self.mockSession { request in
+            let method = request.httpMethod ?? ""
+            let path = request.url?.path ?? ""
+            let body = Self.requestBodyData(request).flatMap {
+                try? JSONSerialization.jsonObject(with: $0) as? [String: Any]
+            }
+            requests.append((method, path, body))
+            switch (method, path) {
+            case ("PATCH", "/api/v1/auth/preferences"):
+                return Self.response(request, status: 200, body: #"{"id":"u1","email":"u@example.com","is_active":true,"created_at":"","ai_history_enabled":true,"note_content_edit_level":"spelling","note_layout_edit_level":"reorder","note_history_limit":9}"#)
+            case ("POST", "/api/v1/workspaces/w1/note-sets"):
+                return Self.response(request, status: 201, body: #"{"id":"set1","workspace_id":"w1","title":"Pages","expected_page_count":2,"status":"created","content_edit_level":"spelling","layout_edit_level":"reorder","created_at":"","updated_at":"","documents":[]}"#)
+            case ("POST", "/api/v1/workspaces/w1/learning-units/u1/notes/generate"):
+                return Self.response(request, status: 202, body: Self.taskJSON)
+            case ("GET", "/api/v1/workspaces/w1/learning-units/u1/note-gaps"):
+                return Self.response(request, status: 200, body: "[]")
+            case ("GET", "/api/v1/workspaces/w1/workflows"):
+                return Self.response(request, status: 200, body: "[]")
+            default:
+                return Self.response(request, status: 500, body: #"{"detail":"unexpected"}"#)
+            }
+        }
+        let client = LearningBackendClient(baseURL: "https://api.test", accessToken: "a", refreshToken: "r", session: session)
+        let user = try await client.updateNotePreferences(contentEditLevel: .spelling, layoutEditLevel: .reorder, historyLimit: 9)
+        #expect(user.noteHistoryLimit == 9)
+        _ = try await client.createNoteSet(
+            workspaceId: "w1",
+            input: NoteSetCreateInput(
+                title: "Pages",
+                expectedPageCount: 2,
+                learningUnitId: nil,
+                subject: "Math",
+                gradeLevel: nil,
+                topic: nil,
+                contentEditLevel: .spelling,
+                layoutEditLevel: .reorder
+            )
+        )
+        _ = try await client.generateStudyNote(
+            workspaceId: "w1",
+            learningUnitId: "u1",
+            contentEditLevel: .verbatim,
+            layoutEditLevel: .preserve,
+            forceReprocess: true
+        )
+        _ = try await client.listNoteGaps(workspaceId: "w1", learningUnitId: "u1")
+        _ = try await client.listWorkflows(workspaceId: "w1")
+
+        #expect(requests[0].2?["note_content_edit_level"] as? String == "spelling")
+        #expect(requests[0].2?["note_history_limit"] as? Int == 9)
+        #expect(requests[1].2?["expected_page_count"] as? Int == 2)
+        #expect(requests[2].2?["force_reprocess"] as? Bool == true)
+        #expect(requests[2].2?["content_edit_level"] as? String == "verbatim")
+    }
+
+    @Test func workflowSSEParser_handlesChunksHeartbeatAndDone() throws {
+        var parser = WorkflowSSEParser()
+        let first = try parser.append(
+            ": heartbeat\n\nid: 4\nevent: workflow_event\ndata: {\"id\":\"e1\",\"workflow_run_id\":\"wf1\",\"sequence_no\":4,\"event_type\":\"stage\",\"level\":\"info\",\"message\":\"OCR\",\"data\":{},\"created_at\":\"\"}\n",
+            workspaceId: "w1",
+            workflowRunId: "wf1"
+        )
+        #expect(first.isEmpty)
+        let second = try parser.append(
+            "\nevent: done\ndata: {\"workflow_run_id\":\"wf1\",\"status\":\"succeeded\",\"last_sequence_no\":4}\n\n",
+            workspaceId: "w1",
+            workflowRunId: "wf1"
+        )
+        #expect(second.count == 2)
+        guard case .workflowEvent(let event) = second[0] else {
+            Issue.record("Expected workflow event")
+            return
+        }
+        #expect(event.workspaceId == "w1")
+        #expect(event.sequenceNo == 4)
+        guard case .done(let done) = second[1] else {
+            Issue.record("Expected done")
+            return
+        }
+        #expect(done.status == "succeeded")
+    }
+
+    @Test @MainActor func chatUsesAcceptedTaskToOpenSSEBeforeAuthoritativeTaskGET() async throws {
+        let suite = "ChatSSERace.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        var requestOrder: [String] = []
+        let eventJSON = #"{"id":"event-1","workspace_id":"ws-1","task_id":"task-1","sequence_no":1,"event_type":"chat_answer_delta","level":"info","message":"chunk","progress":60,"data":{"stream":"answer","delta":"Hello ","chunk_index":1,"attempt":1,"characters":6},"created_at":""}"#
+        let session = Self.mockSession { request in
+            let key = "\(request.httpMethod ?? "") \(request.url?.path ?? "")"
+            requestOrder.append(key)
+            switch key {
+            case "POST /api/v1/workspaces/ws-1/ai/chat":
+                return Self.response(request, status: 201, body: Self.taskJSON)
+            case "GET /api/v1/workspaces/ws-1/tasks/task-1/events/stream":
+                let body = "id: 1\nevent: task_event\ndata: \(eventJSON)\n\nevent: done\ndata: {\"task_id\":\"task-1\",\"status\":\"succeeded\",\"last_sequence_no\":1}\n\n"
+                let response = HTTPURLResponse(
+                    url: try #require(request.url),
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "text/event-stream", "X-Accel-Buffering": "no"]
+                )!
+                return (response, Data(body.utf8))
+            case "GET /api/v1/workspaces/ws-1/tasks/task-1":
+                return Self.response(request, status: 200, body: #"{"id":"task-1","workspace_id":"ws-1","task_type":"openclaw_agent_run","status":"succeeded","payload":{},"result":{"answer":"Hello world"},"progress":100,"attempt":1,"max_attempts":3,"created_at":"","updated_at":""}"#)
+            case "GET /api/v1/workspaces/ws-1/tasks/task-1/events":
+                return Self.response(request, status: 200, body: "[\(eventJSON)]")
+            default:
+                return Self.response(request, status: 500, body: #"{"detail":"unexpected"}"#)
+            }
+        }
+        let model = NotePatchViewModel(
+            settings: SettingsStore(defaults: defaults, keychain: KeychainStore(service: suite)),
+            backendSession: session,
+            tusSession: session,
+            taskEventStreamingEnabled: true
+        )
+        model.session = SavedSession(baseURL: "https://api.test", tusBaseURL: "https://tus.test/", accessToken: "a", refreshToken: "r", expiresAt: "", userId: "u", email: "u@test", fullName: nil, selectedWorkspaceId: "ws-1", aiHistoryEnabled: true)
+        model.selectedWorkspaceId = "ws-1"
+        #expect(model.startOpenClawChat(prompt: "Hi"))
+        try await Self.waitUntil(attempts: 500) { !model.isOpenClawSending }
+
+        let streamIndex = try #require(requestOrder.firstIndex(of: "GET /api/v1/workspaces/ws-1/tasks/task-1/events/stream"))
+        let taskIndex = try #require(requestOrder.firstIndex(of: "GET /api/v1/workspaces/ws-1/tasks/task-1"))
+        #expect(streamIndex < taskIndex)
+        #expect(model.openClawMessages.last?.content == "Hello world")
+        #expect(model.openClawMessages.last?.streamingContent == "Hello ")
+    }
+
+    @Test func tusUploader_preservesPublicLocationAndVerifiesServerOffset() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("TusResume-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent("three.txt")
+        try Data("abc".utf8).write(to: file)
+        var offset: Int64 = 0
+        var patchURL: String?
+        let session = Self.mockSession { request in
+            switch request.httpMethod {
+            case "POST":
+                let response = HTTPURLResponse(
+                    url: try #require(request.url),
+                    statusCode: 201,
+                    httpVersion: nil,
+                    headerFields: ["Location": "https://upload.test/np-prefix/files/id-1?signature=x"]
+                )!
+                return (response, Data())
+            case "HEAD":
+                let response = HTTPURLResponse(
+                    url: try #require(request.url),
+                    statusCode: 204,
+                    httpVersion: nil,
+                    headerFields: ["Upload-Offset": String(offset), "Upload-Length": "3", "Tus-Resumable": "1.0.0"]
+                )!
+                return (response, Data())
+            case "PATCH":
+                patchURL = request.url?.absoluteString
+                offset = 3
+                let response = HTTPURLResponse(
+                    url: try #require(request.url),
+                    statusCode: 204,
+                    httpVersion: nil,
+                    headerFields: ["Upload-Offset": "3", "Tus-Resumable": "1.0.0"]
+                )!
+                return (response, Data())
+            default:
+                return Self.response(request, status: 500, body: #"{"detail":"unexpected"}"#)
+            }
+        }
+        let result = try await TusUploader(session: session).upload(
+            fileURL: file,
+            endpoint: "https://upload.test/np-prefix/files/",
+            metadataHeader: ""
+        ) { _, _ in }
+        #expect(result.uploadURL == "https://upload.test/np-prefix/files/id-1?signature=x")
+        #expect(result.uploadId == "id-1")
+        #expect(patchURL == result.uploadURL)
+    }
+
+    @Test @MainActor func continuousNoteUpload_createsOrderedNoteSetAndCompletesAfterAllPages() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("NoteSetUpload-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let firstURL = root.appendingPathComponent("page-1.jpg")
+        let secondURL = root.appendingPathComponent("page-2.jpg")
+        try Data().write(to: firstURL)
+        try Data().write(to: secondURL)
+        var uploadBodies: [[String: Any]] = []
+        var tusCreateCount = 0
+        var didCompleteSet = false
+        let session = Self.mockSession { request in
+            let path = request.url?.path ?? ""
+            if request.httpMethod == "POST", path == "/api/v1/workspaces/ws-1/note-sets" {
+                return Self.response(request, status: 201, body: #"{"id":"set-1","workspace_id":"ws-1","title":"Lecture","expected_page_count":2,"status":"created","content_edit_level":"conceptual","layout_edit_level":"minor","created_at":"","updated_at":"","documents":[]}"#)
+            }
+            if request.httpMethod == "POST", path == "/api/v1/workspaces/ws-1/documents/upload-session" {
+                if let data = Self.requestBodyData(request),
+                   let body = try JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                    uploadBodies.append(body)
+                }
+                return Self.response(request, status: 201, body: Self.uploadSessionJSON)
+            }
+            if request.httpMethod == "POST", request.url?.host == "192.168.100.123", path.hasPrefix("/files") {
+                tusCreateCount += 1
+                let response = HTTPURLResponse(
+                    url: try #require(request.url),
+                    statusCode: 201,
+                    httpVersion: nil,
+                    headerFields: ["Location": "page-upload-\(tusCreateCount)", "Tus-Resumable": "1.0.0"]
+                )!
+                return (response, Data())
+            }
+            if request.httpMethod == "HEAD", path.contains("page-upload-") {
+                let response = HTTPURLResponse(
+                    url: try #require(request.url),
+                    statusCode: 204,
+                    httpVersion: nil,
+                    headerFields: ["Upload-Offset": "0", "Upload-Length": "0", "Tus-Resumable": "1.0.0"]
+                )!
+                return (response, Data())
+            }
+            if request.httpMethod == "POST", path == "/api/v1/workspaces/ws-1/documents/complete-upload" {
+                return Self.response(request, status: 200, body: Self.completedDocumentJSON)
+            }
+            if request.httpMethod == "POST", path == "/api/v1/workspaces/ws-1/note-sets/set-1/complete" {
+                didCompleteSet = true
+                return Self.response(request, status: 200, body: #"{"id":"set-1","workspace_id":"ws-1","title":"Lecture","expected_page_count":2,"status":"completed","content_edit_level":"conceptual","layout_edit_level":"minor","created_at":"","updated_at":"","documents":[]}"#)
+            }
+            if request.httpMethod == "GET", path == "/api/v1/workspaces/ws-1/documents" {
+                return Self.response(request, status: 200, body: "[]")
+            }
+            if request.httpMethod == "GET", path == "/api/v1/workspaces/ws-1/learning-units" {
+                return Self.response(request, status: 200, body: "[]")
+            }
+            return Self.response(request, status: 500, body: #"{"detail":"unexpected"}"#)
+        }
+        let suite = "NoteSetUpload.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let model = NotePatchViewModel(
+            settings: SettingsStore(defaults: defaults, keychain: KeychainStore(service: suite)),
+            backendSession: session,
+            tusSession: session,
+            cacheDirectory: root
+        )
+        model.session = SavedSession(baseURL: "https://api.test", tusBaseURL: "http://192.168.100.123:1080/files/", accessToken: "a", refreshToken: "r", expiresAt: "", userId: "u", email: "u@test", fullName: nil, selectedWorkspaceId: "ws-1", aiHistoryEnabled: true)
+        model.selectedWorkspaceId = "ws-1"
+        model.uploadDocumentKind = "note"
+        model.isContinuousNoteUploadEnabled = true
+        model.continuousNoteTitle = "Lecture"
+        model.stageUploadFileForPreview(LocalUploadFile(url: firstURL, filename: "page-1.jpg", mimeType: "image/jpeg"))
+        model.stageUploadFileForPreview(LocalUploadFile(url: secondURL, filename: "page-2.jpg", mimeType: "image/jpeg"))
+        model.uploadSelectedQueuedFiles()
+        try await Self.waitUntil(attempts: 500) { !model.isBusy }
+
+        #expect(didCompleteSet)
+        #expect(uploadBodies.count == 2)
+        #expect(uploadBodies.compactMap { $0["page_index"] as? Int } == [0, 1])
+        #expect(uploadBodies.allSatisfy { $0["note_set_id"] as? String == "set-1" })
+        #expect(model.queuedUploadItems.isEmpty)
+        #expect(model.activeNoteSet == nil)
     }
 
 }

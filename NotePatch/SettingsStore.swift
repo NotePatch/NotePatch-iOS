@@ -26,6 +26,9 @@ final class SettingsStore {
         static let fullName = "learning_full_name"
         static let selectedWorkspaceId = "learning_selected_workspace_id"
         static let aiHistoryEnabled = "ai_history_enabled"
+        static let noteContentEditLevel = "note_content_edit_level"
+        static let noteLayoutEditLevel = "note_layout_edit_level"
+        static let noteHistoryLimit = "note_history_limit"
         static let accessToken = "learning_access_token"
         static let refreshToken = "learning_refresh_token"
         static let presenceClientId = "presence_client_id"
@@ -121,7 +124,14 @@ final class SettingsStore {
             email: email,
             fullName: defaults.string(forKey: Keys.fullName)?.nilIfBlank,
             selectedWorkspaceId: defaults.string(forKey: Keys.selectedWorkspaceId)?.nilIfBlank,
-            aiHistoryEnabled: defaults.object(forKey: Keys.aiHistoryEnabled) as? Bool ?? true
+            aiHistoryEnabled: defaults.object(forKey: Keys.aiHistoryEnabled) as? Bool ?? true,
+            noteContentEditLevel: NoteContentEditLevel(
+                rawValue: defaults.string(forKey: Keys.noteContentEditLevel) ?? NoteContentEditLevel.conceptual.rawValue
+            ),
+            noteLayoutEditLevel: NoteLayoutEditLevel(
+                rawValue: defaults.string(forKey: Keys.noteLayoutEditLevel) ?? NoteLayoutEditLevel.minor.rawValue
+            ),
+            noteHistoryLimit: defaults.object(forKey: Keys.noteHistoryLimit) as? Int ?? 3
         )
     }
 
@@ -136,6 +146,9 @@ final class SettingsStore {
         defaults.set(session.fullName ?? "", forKey: Keys.fullName)
         defaults.set(session.selectedWorkspaceId ?? "", forKey: Keys.selectedWorkspaceId)
         defaults.set(session.aiHistoryEnabled, forKey: Keys.aiHistoryEnabled)
+        defaults.set(session.noteContentEditLevel.rawValue, forKey: Keys.noteContentEditLevel)
+        defaults.set(session.noteLayoutEditLevel.rawValue, forKey: Keys.noteLayoutEditLevel)
+        defaults.set(session.noteHistoryLimit, forKey: Keys.noteHistoryLimit)
     }
 
     func saveSelectedWorkspaceId(_ workspaceId: String?) {
@@ -164,7 +177,10 @@ final class SettingsStore {
             Keys.email,
             Keys.fullName,
             Keys.selectedWorkspaceId,
-            Keys.aiHistoryEnabled
+            Keys.aiHistoryEnabled,
+            Keys.noteContentEditLevel,
+            Keys.noteLayoutEditLevel,
+            Keys.noteHistoryLimit
         ].forEach(defaults.removeObject(forKey:))
     }
 }

@@ -202,6 +202,7 @@ final class NotePatchViewModel: ObservableObject {
     let workbenchNavigationState: WorkbenchNavigationState
     let authenticationState: AuthenticationState
     let userProfileState: UserProfileState
+    let learningWorkflowState: LearningWorkflowState
     @Published var apiBaseURLText: String
     @Published var tusBaseURLText: String
     @Published var emailText: String
@@ -238,6 +239,13 @@ final class NotePatchViewModel: ObservableObject {
     let openClawComposerState: OpenClawComposerState
     @Published var aiHistoryEnabled = true
     @Published private(set) var isAIPreferenceUpdating = false
+    @Published var noteContentEditLevel: NoteContentEditLevel = .conceptual
+    @Published var noteLayoutEditLevel: NoteLayoutEditLevel = .minor
+    @Published var noteHistoryLimit = 3
+    @Published var notePreferenceDraftContent: NoteContentEditLevel = .conceptual
+    @Published var notePreferenceDraftLayout: NoteLayoutEditLevel = .minor
+    @Published var notePreferenceDraftHistoryLimit = 3
+    @Published private(set) var isNotePreferenceUpdating = false
     @Published private(set) var aiModelCatalog: AiModelCatalog?
     @Published var selectedAIModelId: String?
     @Published private(set) var isAIModelsLoading = false
@@ -262,7 +270,27 @@ final class NotePatchViewModel: ObservableObject {
     @Published private var studyNoteEditorErrorText: AppDisplayText?
     @Published var isStudyNoteSaving = false
     @Published var isStudyNoteConflictPending = false
+    @Published var isNoteGapPresented = false
+    @Published private(set) var noteGaps: [NoteGap] = []
+    @Published var selectedNoteGapDetail: NoteGapDetail?
+    @Published private(set) var isNoteGapLoading = false
+    @Published var selectedNoBaseGapIds = Set<String>()
+    @Published var selectedGapSourceRefs = Set<NoteSourceReference>()
+    @Published var noteGapInstruction = ""
+    @Published var noteGapFeedback = ""
+    @Published var noteGapDraftHTML = ""
+    @Published var noteGapInsertPosition = "after"
+    @Published var isNoteCorrectionsPresented = false
+    @Published private(set) var studyNoteCorrections: [StudyNoteCorrection] = []
+    @Published private(set) var isStudyNoteCorrectionsLoading = false
     @Published var selectedLearningSection: LearningSection = .notes
+    @Published var isStudyNoteGenerationPresented = false
+    @Published var studyNoteGenerationUnitId = ""
+    @Published var studyNoteGenerationUsesOverride = false
+    @Published var studyNoteGenerationContentLevel: NoteContentEditLevel = .conceptual
+    @Published var studyNoteGenerationLayoutLevel: NoteLayoutEditLevel = .minor
+    @Published var studyNoteGenerationForceReprocess = false
+    @Published private(set) var isStudyNoteGenerating = false
     @Published var isLearningUnitMergePresented = false
     @Published var isLearningUnitMergeConfirmationPresented = false
     @Published var mergeTargetLearningUnitId = ""
@@ -300,6 +328,12 @@ final class NotePatchViewModel: ObservableObject {
     @Published var uploadSubject = ""
     @Published var uploadGradeLevel = ""
     @Published var uploadTopic = ""
+    @Published var uploadUsesCustomNoteStrategy = false
+    @Published var uploadNoteContentEditLevel: NoteContentEditLevel = .conceptual
+    @Published var uploadNoteLayoutEditLevel: NoteLayoutEditLevel = .minor
+    @Published var isContinuousNoteUploadEnabled = false
+    @Published var continuousNoteTitle = ""
+    @Published private(set) var activeNoteSet: NoteSet?
     @Published var downloadedPreview: DownloadedPreview?
     @Published private(set) var previewLoadingDocumentIds = Set<String>()
     @Published var queuedUploadItems: [QueuedUploadItem] = []
@@ -320,8 +354,12 @@ final class NotePatchViewModel: ObservableObject {
     private var aiModelSelectionGeneration = UUID()
     private var isAppActive = true
     private var didRestoreSession = false
+    private var didInstallFeedbackUITestFixture = false
     private var pendingUITestUploadFile: LocalUploadFile?
     private var retryableDocumentPurgeId: String?
+    private var workflowLoadTask: Task<Void, Never>?
+    private var workflowMonitorTask: Task<Void, Never>?
+    private var workflowGeneration = UUID()
     private var renderedStudyNoteRefreshAttempted = false
     private var chatAttachmentsByMessageId: [String: [OpenClawChatAttachment]] = [:]
     private var preparedChatAttachmentDocuments: [UUID: LearningDocumentItem] = [:]
@@ -334,6 +372,8 @@ final class NotePatchViewModel: ObservableObject {
     private var messageRevisionGeneration = UUID()
     private var aiPreferenceTask: Task<Void, Never>?
     private var aiPreferenceGeneration = UUID()
+    private var notePreferenceTask: Task<Void, Never>?
+    private var notePreferenceGeneration = UUID()
     private var homeworkSelectionTask: Task<Void, Never>?
     private var homeworkSelectionGeneration = UUID()
     private var gradingHistoryTask: Task<Void, Never>?
@@ -352,12 +392,17 @@ final class NotePatchViewModel: ObservableObject {
     private var pendingAvatarUpload: (data: Data, key: String)?
     private var uploadImportGeneration = UUID()
     private var uploadQueueGeneration = UUID()
+    private var activeNoteSetItemIds: [UUID] = []
     private var learningUnitSelectionGeneration = UUID()
     private var workspaceContentGeneration = UUID()
     private var learningContentGeneration = UUID()
     private var homeworkContentGeneration = UUID()
     private var studyNoteReaderGeneration = UUID()
     private var studyNoteSaveGeneration = UUID()
+    private var studyNoteGenerateTask: Task<Void, Never>?
+    private var noteGapTask: Task<Void, Never>?
+    private var noteGapGeneration = UUID()
+    private var noteCorrectionsTask: Task<Void, Never>?
     private var loadedDeferredContent = Set<DeferredWorkspaceLoadKey>()
     private var deferredLoadTasks: [DeferredWorkspaceLoadKey: Task<Void, Never>] = [:]
     private var deferredLoadGenerations: [DeferredWorkspaceLoadKey: UUID] = [:]
@@ -387,6 +432,30 @@ final class NotePatchViewModel: ObservableObject {
     var selectedHomeDestination: HomeDestination? {
         get { homeDashboardState.destination }
         set { homeDashboardState.destination = newValue }
+    }
+
+    var workflows: [WorkflowRun] {
+        get { learningWorkflowState.workflows }
+        set { learningWorkflowState.workflows = newValue }
+    }
+
+    var activeWorkflowDetail: WorkflowDetail? {
+        get { learningWorkflowState.activeDetail }
+        set {
+            learningWorkflowState.activeDetail = newValue
+            let homeWorkflow = newValue?.workflow.isTerminal == false ? newValue?.workflow : nil
+            homeDashboardState.updateActiveWorkflow(homeWorkflow)
+        }
+    }
+
+    var workflowEvents: [WorkflowEvent] {
+        get { learningWorkflowState.events }
+        set { learningWorkflowState.events = newValue }
+    }
+
+    var isWorkflowsLoading: Bool {
+        get { learningWorkflowState.isLoading }
+        set { learningWorkflowState.isLoading = newValue }
     }
 
     var statusMessage: String {
@@ -494,6 +563,7 @@ final class NotePatchViewModel: ObservableObject {
         self.workbenchNavigationState = WorkbenchNavigationState()
         self.authenticationState = AuthenticationState(session: loadedSession)
         self.userProfileState = UserProfileState()
+        self.learningWorkflowState = LearningWorkflowState()
         self.openClawState = OpenClawViewState()
         self.openClawComposerState = OpenClawComposerState()
         self.settings = settings
@@ -508,6 +578,14 @@ final class NotePatchViewModel: ObservableObject {
         self.isGlobalFeedbackEnabled = settings.loadGlobalFeedbackEnabled()
         self.selectedWorkspaceId = loadedSession?.selectedWorkspaceId
         self.aiHistoryEnabled = loadedSession?.aiHistoryEnabled ?? true
+        self.noteContentEditLevel = loadedSession?.noteContentEditLevel ?? .conceptual
+        self.noteLayoutEditLevel = loadedSession?.noteLayoutEditLevel ?? .minor
+        self.noteHistoryLimit = loadedSession?.noteHistoryLimit ?? 3
+        self.notePreferenceDraftContent = loadedSession?.noteContentEditLevel ?? .conceptual
+        self.notePreferenceDraftLayout = loadedSession?.noteLayoutEditLevel ?? .minor
+        self.notePreferenceDraftHistoryLimit = loadedSession?.noteHistoryLimit ?? 3
+        self.uploadNoteContentEditLevel = loadedSession?.noteContentEditLevel ?? .conceptual
+        self.uploadNoteLayoutEditLevel = loadedSession?.noteLayoutEditLevel ?? .minor
         self.openClawState.messages = [welcomeChatMessage]
         if ProcessInfo.processInfo.arguments.contains("-NotePatchUITestWorkbench") {
             activateOfflineTestMode()
@@ -517,26 +595,25 @@ final class NotePatchViewModel: ObservableObject {
                 queuedUploadItems = [QueuedUploadItem(file: file, documentKind: uploadDocumentKind, learningMetadata: uploadLearningMetadata)]
             }
         }
-        installFeedbackUITestFixtureIfNeeded()
     }
 
-    private func installFeedbackUITestFixtureIfNeeded() {
+    func installFeedbackUITestFixtureIfNeeded() async {
+        guard !didInstallFeedbackUITestFixture else { return }
         let arguments = ProcessInfo.processInfo.arguments
         guard arguments.contains(where: { $0.hasPrefix("-NotePatchUITestFeedback") }) else { return }
-        Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: 350_000_000)
-            guard let self else { return }
-            if arguments.contains("-NotePatchUITestFeedbackBusy") {
-                self.isBusy = true
-                self.setStatus("common.processing")
-            } else if arguments.contains("-NotePatchUITestFeedbackUploadError") {
-                self.workbenchNavigationState.isUploadPresented = true
-                self.setRawError("Upload failed")
-            } else if arguments.contains("-NotePatchUITestFeedbackError") {
-                self.setRawError("Connection failed")
-            } else {
-                self.presentStatus("operation.api_connected")
-            }
+        didInstallFeedbackUITestFixture = true
+        try? await Task.sleep(nanoseconds: 350_000_000)
+        if arguments.contains("-NotePatchUITestFeedbackBusy") {
+            isBusy = true
+            setStatus("common.processing")
+        } else if arguments.contains("-NotePatchUITestFeedbackUploadError") {
+            workbenchNavigationState.isUploadPresented = true
+            try? await Task.sleep(nanoseconds: 700_000_000)
+            setRawError("Upload failed")
+        } else if arguments.contains("-NotePatchUITestFeedbackError") {
+            setRawError("Connection failed")
+        } else {
+            presentStatus("operation.api_connected")
         }
     }
 
@@ -610,6 +687,7 @@ final class NotePatchViewModel: ObservableObject {
             )
             return
         }
+        loadWorkflows(force: force)
         beginDeferredLoad(
             .home,
             force: force,
@@ -764,7 +842,10 @@ final class NotePatchViewModel: ObservableObject {
                     email: token.user.email,
                     fullName: token.user.fullName,
                     selectedWorkspaceId: nil,
-                    aiHistoryEnabled: token.user.aiHistoryEnabled
+                    aiHistoryEnabled: token.user.aiHistoryEnabled,
+                    noteContentEditLevel: token.user.noteContentEditLevel,
+                    noteLayoutEditLevel: token.user.noteLayoutEditLevel,
+                    noteHistoryLimit: token.user.noteHistoryLimit
                 )
                 saveSession(savedSession, synchronizeServerURLFields: true)
                 startPresence(activeSession: savedSession)
@@ -796,7 +877,10 @@ final class NotePatchViewModel: ObservableObject {
                     email: activeSession.email,
                     fullName: activeSession.fullName,
                     selectedWorkspaceId: activeSession.selectedWorkspaceId,
-                    aiHistoryEnabled: activeSession.aiHistoryEnabled
+                    aiHistoryEnabled: activeSession.aiHistoryEnabled,
+                    noteContentEditLevel: activeSession.noteContentEditLevel,
+                    noteLayoutEditLevel: activeSession.noteLayoutEditLevel,
+                    noteHistoryLimit: activeSession.noteHistoryLimit
                 ),
                 synchronizeServerURLFields: true
             )
@@ -1088,11 +1172,13 @@ final class NotePatchViewModel: ObservableObject {
     }
 
     func toggleQueuedUpload(_ id: UUID) {
+        guard activeNoteSet == nil else { return }
         guard !isBusy, let index = queuedUploadItems.firstIndex(where: { $0.id == id }) else { return }
         queuedUploadItems[index].isSelected.toggle()
     }
 
     func removeQueuedUpload(_ id: UUID) {
+        guard activeNoteSet == nil else { return }
         guard !isBusy, let index = queuedUploadItems.firstIndex(where: { $0.id == id }) else { return }
         let item = queuedUploadItems.remove(at: index)
         UploadThumbnailCache.shared.remove(file: item.file)
@@ -1100,6 +1186,10 @@ final class NotePatchViewModel: ObservableObject {
     }
 
     func uploadSelectedQueuedFiles() {
+        if isContinuousNoteUploadEnabled || activeNoteSet != nil {
+            uploadSelectedContinuousNote()
+            return
+        }
         guard !isBusy, let activeSession = currentSessionOrError(), let workspaceId = selectedWorkspaceId else { return }
         let selectedIds = queuedUploadItems.filter(\.isSelected).map(\.id)
         guard !selectedIds.isEmpty else {
@@ -1163,30 +1253,173 @@ final class NotePatchViewModel: ObservableObject {
         }
     }
 
+    func moveContinuousNotePage(_ id: UUID, direction: Int) {
+        guard activeNoteSet == nil, !isBusy,
+              let source = queuedUploadItems.firstIndex(where: { $0.id == id }) else { return }
+        let destination = source + direction
+        guard queuedUploadItems.indices.contains(destination) else { return }
+        queuedUploadItems.swapAt(source, destination)
+    }
+
+    private func uploadSelectedContinuousNote() {
+        guard !isBusy, let activeSession = currentSessionOrError(), let workspaceId = selectedWorkspaceId else { return }
+        let ids = activeNoteSetItemIds.isEmpty
+            ? queuedUploadItems.filter(\.isSelected).map(\.id)
+            : activeNoteSetItemIds
+        let items = ids.compactMap { id in queuedUploadItems.first(where: { $0.id == id }) }
+        guard items.count >= 2 else {
+            setError("note_set.error.minimum_pages")
+            return
+        }
+        guard items.allSatisfy({ $0.documentKind == "note" && $0.file.isImage }) else {
+            setError("note_set.error.images_only")
+            return
+        }
+        let title = continuousNoteTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !title.isEmpty else {
+            setError("note_set.error.title_required")
+            return
+        }
+
+        isBusy = true
+        let generation = UUID()
+        uploadQueueGeneration = generation
+        errorMessage = nil
+        Task {
+            defer {
+                if uploadQueueGeneration == generation {
+                    uploadProgressPercent = nil
+                    uploadProgressLabel = ""
+                    isBusy = false
+                }
+            }
+            do {
+                let client = clientFor(activeSession)
+                if activeNoteSet == nil {
+                    let metadata = items[0].learningMetadata
+                    let noteSet = try await client.createNoteSet(
+                        workspaceId: workspaceId,
+                        input: NoteSetCreateInput(
+                            title: title,
+                            expectedPageCount: items.count,
+                            learningUnitId: metadata.learningUnitId.nilIfBlank,
+                            subject: metadata.subject.nilIfBlank,
+                            gradeLevel: metadata.gradeLevel.nilIfBlank,
+                            topic: metadata.topic.nilIfBlank,
+                            contentEditLevel: metadata.noteContentEditLevel,
+                            layoutEditLevel: metadata.noteLayoutEditLevel
+                        )
+                    )
+                    guard uploadQueueGeneration == generation,
+                          isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) else { return }
+                    activeNoteSet = noteSet
+                    activeNoteSetItemIds = ids
+                    for (pageIndex, id) in ids.enumerated() {
+                        guard let index = queuedUploadItems.firstIndex(where: { $0.id == id }) else { continue }
+                        queuedUploadItems[index].learningMetadata.noteSetId = noteSet.id
+                        queuedUploadItems[index].learningMetadata.pageIndex = pageIndex
+                    }
+                }
+
+                for (pageIndex, id) in ids.enumerated() {
+                    guard uploadQueueGeneration == generation,
+                          isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId),
+                          let index = queuedUploadItems.firstIndex(where: { $0.id == id }) else { return }
+                    if queuedUploadItems[index].state == .uploaded { continue }
+                    queuedUploadItems[index].state = .uploading
+                    let item = queuedUploadItems[index]
+                    setUploadProgress("note_set.uploading_page", String(pageIndex + 1), String(ids.count), item.file.filename)
+                    uploadProgressPercent = 0
+                    do {
+                        _ = try await performUpload(item, activeSession: activeSession, workspaceId: workspaceId)
+                        guard let completedIndex = queuedUploadItems.firstIndex(where: { $0.id == id }) else { return }
+                        queuedUploadItems[completedIndex].state = .uploaded
+                    } catch {
+                        guard let failedIndex = queuedUploadItems.firstIndex(where: { $0.id == id }) else { return }
+                        queuedUploadItems[failedIndex].state = .failed(friendlyDisplayText(error))
+                    }
+                }
+
+                let allUploaded = ids.allSatisfy { id in
+                    queuedUploadItems.first(where: { $0.id == id })?.state == .uploaded
+                }
+                guard allUploaded, let noteSetId = activeNoteSet?.id else {
+                    setError("note_set.error.some_pages_failed")
+                    return
+                }
+                setStatus("note_set.completing")
+                activeNoteSet = try await client.completeNoteSet(workspaceId: workspaceId, noteSetId: noteSetId)
+                guard uploadQueueGeneration == generation,
+                      isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) else { return }
+                let completedItems = queuedUploadItems.filter { ids.contains($0.id) }
+                queuedUploadItems.removeAll { ids.contains($0.id) }
+                completedItems.forEach {
+                    UploadThumbnailCache.shared.remove(file: $0.file)
+                    removeCachedUploadFile($0.file)
+                }
+                activeNoteSet = nil
+                activeNoteSetItemIds = []
+                isContinuousNoteUploadEnabled = false
+                continuousNoteTitle = ""
+                try? await refreshWorkspaceContent(activeSession: activeSession, workspaceId: workspaceId)
+                try? await refreshLearningUnits(activeSession: activeSession, workspaceId: workspaceId)
+                setStatus("note_set.completed")
+            } catch {
+                guard uploadQueueGeneration == generation,
+                      isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) else { return }
+                showError(error)
+            }
+        }
+    }
+
     private func performUpload(_ item: QueuedUploadItem, activeSession: SavedSession, workspaceId: String) async throws -> LearningDocumentItem {
         let prepared = try await FileImportService.shared.prepareForUpload(item.file, cacheDirectory: cacheDirectory)
         guard isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) else { throw CancellationError() }
         let client = clientFor(activeSession)
-        setStatus("upload.creating_session")
-        let uploadSession = try await client.createUploadSession(
-            workspaceId: workspaceId,
-            filename: prepared.filename,
-            mimeType: prepared.mimeType ?? "application/octet-stream",
-            fileSize: prepared.fileSize,
-            documentKind: item.documentKind,
-            learningMetadata: item.learningMetadata,
-            saveToDocuments: item.documentKind == "chat_attachment" ? item.saveToDocuments : nil
-        )
+        var remoteState = item.remoteState
+        if remoteState == nil {
+            setStatus("upload.creating_session")
+            let uploadSession = try await client.createUploadSession(
+                workspaceId: workspaceId,
+                filename: prepared.filename,
+                mimeType: prepared.mimeType ?? "application/octet-stream",
+                fileSize: prepared.fileSize,
+                documentKind: item.documentKind,
+                learningMetadata: item.learningMetadata,
+                saveToDocuments: item.documentKind == "chat_attachment" ? item.saveToDocuments : nil
+            )
+            remoteState = QueuedUploadRemoteState(
+                uploadSessionId: uploadSession.uploadSession.id,
+                tusEndpoint: uploadSession.tusEndpoint,
+                tusMetadataHeader: uploadSession.tusMetadataHeader,
+                tusUploadURL: uploadSession.uploadSession.tusUploadURL,
+                tusUploadId: uploadSession.uploadSession.tusUploadId,
+                workflowRunId: uploadSession.workflowRunId,
+                documentId: uploadSession.document.id
+            )
+            updateQueuedUploadRemoteState(item.id, remoteState)
+        }
+        guard var remoteState else {
+            throw LearningBackendError(localizedKey: "error.upload.session_missing")
+        }
         guard isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) else { throw CancellationError() }
         setStatus("upload.sending")
         let endpoint = TusUploader.preferredEndpoint(
             configuredEndpoint: activeSession.tusBaseURL,
-            serverEndpoint: uploadSession.tusEndpoint
+            serverEndpoint: remoteState.tusEndpoint
         )
         let tusResult = try await TusUploader(session: tusSession).upload(
             fileURL: prepared.url,
             endpoint: endpoint,
-            metadataHeader: uploadSession.tusMetadataHeader
+            metadataHeader: remoteState.tusMetadataHeader,
+            existingUploadURL: remoteState.tusUploadURL,
+            onUploadCreated: { [weak self] uploadURL in
+                await MainActor.run {
+                    remoteState.tusUploadURL = uploadURL
+                    remoteState.tusUploadId = TusUploader.extractTusUploadId(uploadURL)
+                    self?.updateQueuedUploadRemoteState(item.id, remoteState)
+                }
+            }
         ) { [weak self] uploaded, total in
             let progress = total <= 0 ? 0 : Int((uploaded * 100) / total).clamped(to: 0...100)
             await MainActor.run {
@@ -1200,12 +1433,25 @@ final class NotePatchViewModel: ObservableObject {
         let completedDocument = try await completeUploadWithRetry(
             client: client,
             workspaceId: workspaceId,
-            uploadSession: uploadSession,
+            uploadSessionId: remoteState.uploadSessionId,
+            documentId: remoteState.documentId,
             tusResult: tusResult,
             file: prepared
         )
+        remoteState.documentId = completedDocument.id
+        remoteState.tusUploadURL = tusResult.uploadURL
+        remoteState.tusUploadId = tusResult.uploadId
+        updateQueuedUploadRemoteState(item.id, remoteState)
+        if let workflowRunId = remoteState.workflowRunId {
+            monitorWorkflow(workflowRunId, activeSession: activeSession, workspaceId: workspaceId)
+        }
         guard isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) else { throw CancellationError() }
         return completedDocument
+    }
+
+    private func updateQueuedUploadRemoteState(_ id: UUID, _ state: QueuedUploadRemoteState?) {
+        guard let index = queuedUploadItems.firstIndex(where: { $0.id == id }) else { return }
+        queuedUploadItems[index].remoteState = state
     }
 
     func startProcessing(_ document: LearningDocumentItem) {
@@ -1219,6 +1465,18 @@ final class NotePatchViewModel: ObservableObject {
         isBusy = true
         errorMessage = nil
         taskEvents = []
+        workflowLoadTask?.cancel()
+        workflowMonitorTask?.cancel()
+        workflows = []
+        activeWorkflowDetail = nil
+        workflowEvents = []
+        noteGapTask?.cancel()
+        noteCorrectionsTask?.cancel()
+        noteGaps = []
+        selectedNoteGapDetail = nil
+        studyNoteCorrections = []
+        isNoteGapPresented = false
+        isNoteCorrectionsPresented = false
         setStatus("document.processing_starting")
         Task {
             defer {
@@ -1238,6 +1496,25 @@ final class NotePatchViewModel: ObservableObject {
                 selectedTab = .home
                 selectedDocumentsSection = .tasks
                 selectedHomeDestination = .tasks
+                Task { [weak self] in
+                    for delay in [0, 500_000_000, 1_000_000_000, 2_000_000_000] as [UInt64] {
+                        if delay > 0 { try? await Task.sleep(nanoseconds: delay) }
+                        guard let self,
+                              self.isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) else { return }
+                        if let detail = try? await client.getDocumentWorkflow(
+                            workspaceId: workspaceId,
+                            documentId: document.id
+                        ) {
+                            self.activeWorkflowDetail = detail
+                            self.monitorWorkflow(
+                                detail.workflow.id,
+                                activeSession: activeSession,
+                                workspaceId: workspaceId
+                            )
+                            return
+                        }
+                    }
+                }
                 let finishedTask = try await pollTask(activeSession: activeSession, workspaceId: workspaceId, taskId: task.id) { [weak self] updatedTask, events in
                     guard let self,
                           self.isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId),
@@ -1272,6 +1549,209 @@ final class NotePatchViewModel: ObservableObject {
                 guard isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) else { return }
                 showError(error)
             }
+        }
+    }
+
+    func loadWorkflows(force: Bool = false) {
+        if isOfflineTestMode { return }
+        guard let activeSession = currentSessionOrError(), let workspaceId = selectedWorkspaceId else { return }
+        if !force, !workflows.isEmpty { return }
+        workflowLoadTask?.cancel()
+        let generation = UUID()
+        workflowGeneration = generation
+        isWorkflowsLoading = true
+        workflowLoadTask = Task {
+            defer {
+                if workflowGeneration == generation {
+                    workflowLoadTask = nil
+                    isWorkflowsLoading = false
+                }
+            }
+            do {
+                let loaded = try await clientFor(activeSession).listWorkflows(
+                    workspaceId: workspaceId,
+                    page: 1,
+                    pageSize: 50
+                )
+                guard workflowGeneration == generation,
+                      isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) else { return }
+                workflows = loaded
+                if activeWorkflowDetail == nil,
+                   let active = loaded.first(where: { !$0.isTerminal }) ?? loaded.first {
+                    selectWorkflow(active.id)
+                }
+            } catch is CancellationError {
+                return
+            } catch {
+                guard workflowGeneration == generation else { return }
+                showError(error)
+            }
+        }
+    }
+
+    func selectWorkflow(_ workflowRunId: String) {
+        if isOfflineTestMode { return }
+        guard let activeSession = currentSessionOrError(), let workspaceId = selectedWorkspaceId else { return }
+        monitorWorkflow(
+            workflowRunId,
+            activeSession: activeSession,
+            workspaceId: workspaceId,
+            showLoading: true
+        )
+    }
+
+    func openWorkflow(for document: LearningDocumentItem) {
+        selectedTab = .home
+        selectedHomeDestination = .tasks
+        if let workflowRunId = document.latestWorkflowRunId {
+            selectWorkflow(workflowRunId)
+            return
+        }
+        guard let activeSession = currentSessionOrError(), let workspaceId = selectedWorkspaceId else { return }
+        workflowMonitorTask?.cancel()
+        let generation = UUID()
+        workflowGeneration = generation
+        workflowMonitorTask = Task {
+            do {
+                let detail = try await clientFor(activeSession).getDocumentWorkflow(
+                    workspaceId: workspaceId,
+                    documentId: document.id
+                )
+                guard workflowGeneration == generation,
+                      isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) else { return }
+                activeWorkflowDetail = detail
+                monitorWorkflow(detail.workflow.id, activeSession: activeSession, workspaceId: workspaceId)
+            } catch {
+                guard workflowGeneration == generation else { return }
+                showError(error)
+            }
+        }
+    }
+
+    private func monitorWorkflow(
+        _ workflowRunId: String,
+        activeSession: SavedSession,
+        workspaceId: String,
+        showLoading: Bool = false
+    ) {
+        workflowMonitorTask?.cancel()
+        let generation = UUID()
+        workflowGeneration = generation
+        if showLoading { isWorkflowsLoading = true }
+        workflowMonitorTask = Task {
+            defer {
+                if workflowGeneration == generation {
+                    workflowMonitorTask = nil
+                    isWorkflowsLoading = false
+                }
+            }
+            do {
+                var detail = try await clientFor(activeSession).getWorkflow(
+                    workspaceId: workspaceId,
+                    workflowRunId: workflowRunId
+                )
+                guard workflowGeneration == generation,
+                      isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) else { return }
+                activeWorkflowDetail = detail
+                workflowEvents = try await clientFor(activeSession).getWorkflowEvents(
+                    workspaceId: workspaceId,
+                    workflowRunId: workflowRunId
+                )
+                if detail.workflow.isTerminal {
+                    applyWorkflowToList(detail.workflow)
+                    return
+                }
+
+                var reconnectAttempt = 0
+                var lastSequence = workflowEvents.map(\.sequenceNo).max()
+                while !Task.isCancelled && !detail.workflow.isTerminal {
+                    do {
+                        var receivedDone = false
+                        for try await frame in clientFor(session ?? activeSession).streamWorkflowEvents(
+                            workspaceId: workspaceId,
+                            workflowRunId: workflowRunId,
+                            lastEventID: lastSequence
+                        ) {
+                            try Task.checkCancellation()
+                            guard workflowGeneration == generation,
+                                  isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) else { throw CancellationError() }
+                            switch frame {
+                            case .workflowEvent(let event):
+                                guard event.sequenceNo > (lastSequence ?? 0) else { continue }
+                                lastSequence = event.sequenceNo
+                                if !workflowEvents.contains(where: { $0.id == event.id || $0.sequenceNo == event.sequenceNo }) {
+                                    workflowEvents.append(event)
+                                }
+                                let updatedWorkflow = detail.workflow.applying(event: event)
+                                if updatedWorkflow != detail.workflow {
+                                    detail = WorkflowDetail(workflow: updatedWorkflow, tasks: detail.tasks)
+                                    activeWorkflowDetail = detail
+                                    applyWorkflowToList(updatedWorkflow)
+                                }
+                            case .done:
+                                receivedDone = true
+                            }
+                        }
+                        detail = try await clientFor(session ?? activeSession).getWorkflow(
+                            workspaceId: workspaceId,
+                            workflowRunId: workflowRunId
+                        )
+                        activeWorkflowDetail = detail
+                        applyWorkflowToList(detail.workflow)
+                        if detail.workflow.isTerminal || receivedDone { return }
+                        throw LearningBackendError(localizedKey: "workflow.stream_disconnected")
+                    } catch is CancellationError {
+                        return
+                    } catch {
+                        if reconnectAttempt < 2 {
+                            reconnectAttempt += 1
+                            try await Task.sleep(nanoseconds: UInt64(reconnectAttempt) * 1_000_000_000)
+                            continue
+                        }
+                        break
+                    }
+                }
+
+                var retryDelay: UInt64 = 1
+                while !Task.isCancelled {
+                    do {
+                        detail = try await clientFor(session ?? activeSession).getWorkflow(
+                            workspaceId: workspaceId,
+                            workflowRunId: workflowRunId
+                        )
+                        guard workflowGeneration == generation,
+                              isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) else { return }
+                        activeWorkflowDetail = detail
+                        applyWorkflowToList(detail.workflow)
+                        let loadedEvents = try await clientFor(session ?? activeSession).getWorkflowEvents(
+                            workspaceId: workspaceId,
+                            workflowRunId: workflowRunId
+                        )
+                        if loadedEvents != workflowEvents { workflowEvents = loadedEvents }
+                        if detail.workflow.isTerminal { return }
+                        retryDelay = 1
+                        try await Task.sleep(nanoseconds: 1_500_000_000)
+                    } catch is CancellationError {
+                        return
+                    } catch {
+                        try await Task.sleep(nanoseconds: retryDelay * 1_000_000_000)
+                        retryDelay = min(15, retryDelay * 2)
+                    }
+                }
+            } catch is CancellationError {
+                return
+            } catch {
+                guard workflowGeneration == generation else { return }
+                showError(error)
+            }
+        }
+    }
+
+    private func applyWorkflowToList(_ workflow: WorkflowRun) {
+        if let index = workflows.firstIndex(where: { $0.id == workflow.id }) {
+            if workflows[index] != workflow { workflows[index] = workflow }
+        } else {
+            workflows.insert(workflow, at: 0)
         }
     }
 
@@ -1398,7 +1878,12 @@ final class NotePatchViewModel: ObservableObject {
                     $0.progress = task.progress.clamped(to: 0...100)
                     $0.modelId = task.payload?.objectStringValue(for: "ai_model")
                 }
-                let finishedTask = try await pollTask(activeSession: chatSession, workspaceId: workspaceId, taskId: task.id) { [weak self] updatedTask, events in
+                let finishedTask = try await pollTask(
+                    activeSession: chatSession,
+                    workspaceId: workspaceId,
+                    taskId: task.id,
+                    initialTask: task
+                ) { [weak self] updatedTask, events in
                     latestEvents = events
                     let streamState = Self.reduceChatStreamEvents(events)
                     self?.updateOpenClawMessage(assistantMessageId) {
@@ -1635,7 +2120,8 @@ final class NotePatchViewModel: ObservableObject {
                         let finishedTask = try await pollTask(
                             activeSession: activeSession,
                             workspaceId: workspaceId,
-                            taskId: task.id
+                            taskId: task.id,
+                            initialTask: task
                         ) { [weak self] updatedTask, events in
                             guard let self else { return }
                             latestEvents = events
@@ -1790,7 +2276,13 @@ final class NotePatchViewModel: ObservableObject {
             learningUnitTitle: uploadLearningUnitTitle,
             subject: uploadSubject,
             gradeLevel: uploadGradeLevel,
-            topic: uploadTopic
+            topic: uploadTopic,
+            noteContentEditLevel: uploadDocumentKind == "note" && uploadUsesCustomNoteStrategy
+                ? uploadNoteContentEditLevel
+                : nil,
+            noteLayoutEditLevel: uploadDocumentKind == "note" && uploadUsesCustomNoteStrategy
+                ? uploadNoteLayoutEditLevel
+                : nil
         )
     }
 
@@ -2035,6 +2527,58 @@ final class NotePatchViewModel: ObservableObject {
                 guard aiPreferenceGeneration == generation,
                       session?.userId == activeSession.userId else { return }
                 aiHistoryEnabled = previous
+                showError(error)
+            }
+        }
+    }
+
+    var isNotePreferenceDirty: Bool {
+        notePreferenceDraftContent != noteContentEditLevel
+            || notePreferenceDraftLayout != noteLayoutEditLevel
+            || notePreferenceDraftHistoryLimit != noteHistoryLimit
+    }
+
+    func saveNotePreferences() {
+        guard let activeSession = currentSessionOrError(), !isNotePreferenceUpdating else { return }
+        let content = notePreferenceDraftContent
+        let layout = notePreferenceDraftLayout
+        let historyLimit = min(100, max(0, notePreferenceDraftHistoryLimit))
+        guard NoteContentEditLevel.supportedValues.contains(content),
+              NoteLayoutEditLevel.supportedValues.contains(layout) else {
+            setError("note.preferences.unsupported")
+            return
+        }
+        notePreferenceDraftHistoryLimit = historyLimit
+        guard isNotePreferenceDirty else { return }
+        isNotePreferenceUpdating = true
+        let generation = UUID()
+        notePreferenceGeneration = generation
+        errorMessage = nil
+        setStatus("note.preferences.saving")
+        notePreferenceTask?.cancel()
+        notePreferenceTask = Task {
+            defer {
+                if notePreferenceGeneration == generation {
+                    notePreferenceTask = nil
+                    isNotePreferenceUpdating = false
+                }
+            }
+            do {
+                let user = try await clientFor(activeSession).updateNotePreferences(
+                    contentEditLevel: content,
+                    layoutEditLevel: layout,
+                    historyLimit: historyLimit
+                )
+                guard notePreferenceGeneration == generation,
+                      let current = session,
+                      current.userId == activeSession.userId else { return }
+                saveSession(current.withUser(user))
+                setStatus("note.preferences.saved")
+            } catch is CancellationError {
+                return
+            } catch {
+                guard notePreferenceGeneration == generation,
+                      session?.userId == activeSession.userId else { return }
                 showError(error)
             }
         }
@@ -2549,6 +3093,412 @@ final class NotePatchViewModel: ObservableObject {
             return false
         }
         return group.notes.first?.id == item.id && !isStudyNoteLoading
+    }
+
+    func presentNoteGaps(for learningUnitId: String) {
+        selectedLearningUnitId = learningUnitId
+        isNoteGapPresented = true
+        loadNoteGaps(learningUnitId: learningUnitId, force: true)
+    }
+
+    func loadNoteGaps(learningUnitId: String? = nil, force: Bool = false) {
+        if isOfflineTestMode { return }
+        guard let activeSession = currentSessionOrError(), let workspaceId = selectedWorkspaceId,
+              let unitId = learningUnitId ?? selectedLearningUnitId, !unitId.isEmpty else { return }
+        if !force, !noteGaps.isEmpty { return }
+        noteGapTask?.cancel()
+        let generation = UUID()
+        noteGapGeneration = generation
+        isNoteGapLoading = true
+        noteGapTask = Task {
+            defer {
+                if noteGapGeneration == generation {
+                    noteGapTask = nil
+                    isNoteGapLoading = false
+                }
+            }
+            do {
+                let loaded = try await clientFor(activeSession).listNoteGaps(
+                    workspaceId: workspaceId,
+                    learningUnitId: unitId
+                )
+                guard noteGapGeneration == generation,
+                      isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId),
+                      selectedLearningUnitId == unitId else { return }
+                noteGaps = loaded
+                selectedNoBaseGapIds = selectedNoBaseGapIds.intersection(Set(loaded.filter { $0.status == "no_base_note" }.map(\.id)))
+            } catch is CancellationError {
+                return
+            } catch {
+                guard noteGapGeneration == generation else { return }
+                showError(error)
+            }
+        }
+    }
+
+    func selectNoteGap(_ gap: NoteGap) {
+        if isOfflineTestMode {
+            selectedNoteGapDetail = NoteGapDetail(suggestion: gap, drafts: [])
+            selectedGapSourceRefs = Set(gap.sourceRefs)
+            noteGapInsertPosition = gap.insertPosition
+            return
+        }
+        guard let activeSession = currentSessionOrError(), let workspaceId = selectedWorkspaceId else { return }
+        let generation = UUID()
+        noteGapGeneration = generation
+        isNoteGapLoading = true
+        noteGapTask?.cancel()
+        noteGapTask = Task {
+            defer {
+                if noteGapGeneration == generation {
+                    noteGapTask = nil
+                    isNoteGapLoading = false
+                }
+            }
+            do {
+                let detail = try await clientFor(activeSession).getNoteGap(
+                    workspaceId: workspaceId,
+                    learningUnitId: gap.learningUnitId,
+                    gapId: gap.id
+                )
+                guard noteGapGeneration == generation,
+                      isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) else { return }
+                selectedNoteGapDetail = detail
+                selectedGapSourceRefs = Set(detail.suggestion.sourceRefs)
+                let latestDraft = detail.drafts.max { $0.versionNo < $1.versionNo }
+                noteGapDraftHTML = latestDraft?.html ?? ""
+                noteGapInsertPosition = latestDraft?.insertPosition ?? detail.suggestion.insertPosition
+                noteGapInstruction = latestDraft?.instruction ?? ""
+                noteGapFeedback = ""
+            } catch {
+                guard noteGapGeneration == generation else { return }
+                showError(error)
+            }
+        }
+    }
+
+    func toggleGapSourceReference(_ reference: NoteSourceReference) {
+        if selectedGapSourceRefs.contains(reference) {
+            selectedGapSourceRefs.remove(reference)
+        } else {
+            selectedGapSourceRefs.insert(reference)
+        }
+    }
+
+    func previewGapSource(_ reference: NoteSourceReference) {
+        guard let documentId = reference.documentId,
+              let activeSession = currentSessionOrError(), let workspaceId = selectedWorkspaceId else { return }
+        if let document = documents.first(where: { $0.id == documentId }) {
+            downloadAndPreview(document)
+            return
+        }
+        Task {
+            do {
+                let document = try await clientFor(activeSession).getDocument(
+                    workspaceId: workspaceId,
+                    documentId: documentId
+                )
+                guard isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) else { return }
+                downloadAndPreview(document)
+            } catch {
+                showError(error)
+            }
+        }
+    }
+
+    func toggleNoBaseGap(_ id: String) {
+        if selectedNoBaseGapIds.contains(id) { selectedNoBaseGapIds.remove(id) }
+        else if selectedNoBaseGapIds.count < 100 { selectedNoBaseGapIds.insert(id) }
+    }
+
+    func jumpToSelectedGapAnchor() {
+        guard let anchor = selectedNoteGapDetail?.suggestion.targetAnchor,
+              var components = studyNoteRenderedURL.flatMap({ URLComponents(url: $0, resolvingAgainstBaseURL: false) }) else {
+            return
+        }
+        components.fragment = anchor
+        if let url = components.url { studyNoteRenderedURL = url }
+        isNoteGapPresented = false
+    }
+
+    func createSelectedNoteGapDraft() {
+        guard let detail = selectedNoteGapDetail else { return }
+        let instruction = noteGapInstruction.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard instruction.count <= 2_000 else {
+            setError("note_gap.error.instruction_length")
+            return
+        }
+        runNoteGapTask(
+            learningUnitId: detail.suggestion.learningUnitId,
+            gapId: detail.suggestion.id,
+            operation: { client, workspaceId in
+                try await client.createNoteGapDraft(
+                    workspaceId: workspaceId,
+                    learningUnitId: detail.suggestion.learningUnitId,
+                    gapId: detail.suggestion.id,
+                    selectedSourceRefs: Array(self.selectedGapSourceRefs),
+                    targetSectionId: detail.suggestion.targetSectionId,
+                    insertPosition: self.noteGapInsertPosition,
+                    instruction: instruction.nilIfBlank
+                )
+            }
+        )
+    }
+
+    func saveSelectedNoteGapDraft() {
+        guard let detail = selectedNoteGapDetail else { return }
+        guard noteGapDraftHTML.count <= 500_000 else {
+            setError("note_gap.error.html_length")
+            return
+        }
+        runNoteGapMutation(learningUnitId: detail.suggestion.learningUnitId, gapId: detail.suggestion.id) { client, workspaceId in
+            _ = try await client.updateNoteGapDraft(
+                workspaceId: workspaceId,
+                learningUnitId: detail.suggestion.learningUnitId,
+                gapId: detail.suggestion.id,
+                html: self.noteGapDraftHTML,
+                targetSectionId: detail.suggestion.targetSectionId,
+                insertPosition: self.noteGapInsertPosition
+            )
+        }
+    }
+
+    func regenerateSelectedNoteGapDraft() {
+        guard let detail = selectedNoteGapDetail else { return }
+        let feedback = noteGapFeedback.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !feedback.isEmpty, feedback.count <= 2_000 else {
+            setError("note_gap.error.feedback_required")
+            return
+        }
+        runNoteGapTask(
+            learningUnitId: detail.suggestion.learningUnitId,
+            gapId: detail.suggestion.id,
+            operation: { client, workspaceId in
+                try await client.regenerateNoteGapDraft(
+                    workspaceId: workspaceId,
+                    learningUnitId: detail.suggestion.learningUnitId,
+                    gapId: detail.suggestion.id,
+                    feedback: feedback
+                )
+            }
+        )
+    }
+
+    func acceptSelectedNoteGap() {
+        guard let detail = selectedNoteGapDetail else { return }
+        runNoteGapMutation(learningUnitId: detail.suggestion.learningUnitId, gapId: detail.suggestion.id) { client, workspaceId in
+            _ = try await client.acceptNoteGap(
+                workspaceId: workspaceId,
+                learningUnitId: detail.suggestion.learningUnitId,
+                gapId: detail.suggestion.id
+            )
+        }
+    }
+
+    func rejectSelectedNoteGap() {
+        guard let detail = selectedNoteGapDetail else { return }
+        runNoteGapMutation(learningUnitId: detail.suggestion.learningUnitId, gapId: detail.suggestion.id) { client, workspaceId in
+            _ = try await client.rejectNoteGap(
+                workspaceId: workspaceId,
+                learningUnitId: detail.suggestion.learningUnitId,
+                gapId: detail.suggestion.id
+            )
+        }
+    }
+
+    func createNoteFromSelectedGaps() {
+        guard let activeSession = currentSessionOrError(), let workspaceId = selectedWorkspaceId,
+              let unitId = selectedLearningUnitId, !selectedNoBaseGapIds.isEmpty else { return }
+        isNoteGapLoading = true
+        noteGapTask = Task {
+            defer { isNoteGapLoading = false }
+            do {
+                let task = try await clientFor(activeSession).createStudyNoteFromGaps(
+                    workspaceId: workspaceId,
+                    learningUnitId: unitId,
+                    gapIds: Array(selectedNoBaseGapIds),
+                    title: nil,
+                    contentEditLevel: nil,
+                    layoutEditLevel: nil
+                )
+                activeTask = task
+                selectedTab = .home
+                selectedHomeDestination = .tasks
+                _ = try await pollTask(activeSession: activeSession, workspaceId: workspaceId, taskId: task.id) { [weak self] task, events in
+                    self?.activeTask = task
+                    self?.taskEvents = events
+                }
+                loadNoteGaps(learningUnitId: unitId, force: true)
+                setStatus("note_gap.note_created")
+            } catch {
+                showError(error)
+            }
+        }
+    }
+
+    private func runNoteGapTask(
+        learningUnitId: String,
+        gapId: String,
+        operation: @escaping (LearningBackendClient, String) async throws -> TaskItem
+    ) {
+        guard let activeSession = currentSessionOrError(), let workspaceId = selectedWorkspaceId else { return }
+        isNoteGapLoading = true
+        noteGapTask?.cancel()
+        noteGapTask = Task {
+            defer { isNoteGapLoading = false }
+            do {
+                let task = try await operation(clientFor(activeSession), workspaceId)
+                activeTask = task
+                _ = try await pollTask(activeSession: activeSession, workspaceId: workspaceId, taskId: task.id) { [weak self] task, events in
+                    self?.activeTask = task
+                    self?.taskEvents = events
+                }
+                let detail = try await clientFor(session ?? activeSession).getNoteGap(
+                    workspaceId: workspaceId,
+                    learningUnitId: learningUnitId,
+                    gapId: gapId
+                )
+                selectedNoteGapDetail = detail
+                noteGapDraftHTML = detail.drafts.max { $0.versionNo < $1.versionNo }?.html ?? ""
+                loadNoteGaps(learningUnitId: learningUnitId, force: true)
+            } catch {
+                showError(error)
+            }
+        }
+    }
+
+    private func runNoteGapMutation(
+        learningUnitId: String,
+        gapId: String,
+        operation: @escaping (LearningBackendClient, String) async throws -> Void
+    ) {
+        guard let activeSession = currentSessionOrError(), let workspaceId = selectedWorkspaceId else { return }
+        isNoteGapLoading = true
+        noteGapTask?.cancel()
+        noteGapTask = Task {
+            defer { isNoteGapLoading = false }
+            do {
+                try await operation(clientFor(activeSession), workspaceId)
+                selectedNoteGapDetail = try? await clientFor(session ?? activeSession).getNoteGap(
+                    workspaceId: workspaceId,
+                    learningUnitId: learningUnitId,
+                    gapId: gapId
+                )
+                loadNoteGaps(learningUnitId: learningUnitId, force: true)
+                try? await refreshLearningUnits(activeSession: session ?? activeSession, workspaceId: workspaceId)
+                if let notes = try? await clientFor(session ?? activeSession).listStudyNotes(
+                    workspaceId: workspaceId,
+                    learningUnitId: learningUnitId
+                ).sorted(by: { $0.versionNo > $1.versionNo }) {
+                    if selectedLearningUnitId == learningUnitId { studyNotes = notes }
+                    if let unit = learningUnits.first(where: { $0.id == learningUnitId }),
+                       let groupIndex = studyNoteGroups.firstIndex(where: { $0.learningUnit.id == learningUnitId }) {
+                        studyNoteGroups[groupIndex] = StudyNoteGroup(
+                            learningUnit: unit,
+                            notes: notes.map { StudyNoteListItem(learningUnit: unit, note: $0) }
+                        )
+                    }
+                }
+                setStatus("note_gap.saved")
+            } catch let error as LearningBackendError where error.statusCode == 409 {
+                selectedNoteGapDetail = try? await clientFor(session ?? activeSession).getNoteGap(
+                    workspaceId: workspaceId,
+                    learningUnitId: learningUnitId,
+                    gapId: gapId
+                )
+                setError("note_gap.error.conflict")
+            } catch {
+                showError(error)
+            }
+        }
+    }
+
+    func loadStudyNoteCorrections() {
+        guard let item = selectedStudyNoteItem,
+              let activeSession = currentSessionOrError(), let workspaceId = selectedWorkspaceId else { return }
+        isNoteCorrectionsPresented = true
+        isStudyNoteCorrectionsLoading = true
+        noteCorrectionsTask?.cancel()
+        noteCorrectionsTask = Task {
+            defer { isStudyNoteCorrectionsLoading = false }
+            do {
+                studyNoteCorrections = try await clientFor(activeSession).listStudyNoteCorrections(
+                    workspaceId: workspaceId,
+                    learningUnitId: item.learningUnit.id,
+                    noteVersionId: item.note.id
+                )
+            } catch {
+                showError(error)
+            }
+        }
+    }
+
+    func presentStudyNoteGeneration(for learningUnitId: String) {
+        studyNoteGenerationUnitId = learningUnitId
+        studyNoteGenerationUsesOverride = false
+        studyNoteGenerationContentLevel = noteContentEditLevel
+        studyNoteGenerationLayoutLevel = noteLayoutEditLevel
+        studyNoteGenerationForceReprocess = false
+        isStudyNoteGenerationPresented = true
+    }
+
+    func generateStudyNote() {
+        guard !isStudyNoteGenerating,
+              let activeSession = currentSessionOrError(),
+              let workspaceId = selectedWorkspaceId,
+              !studyNoteGenerationUnitId.isEmpty else { return }
+        let unitId = studyNoteGenerationUnitId
+        isStudyNoteGenerating = true
+        errorMessage = nil
+        setStatus("note.generation.starting")
+        studyNoteGenerateTask?.cancel()
+        studyNoteGenerateTask = Task {
+            defer {
+                if isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) {
+                    isStudyNoteGenerating = false
+                    studyNoteGenerateTask = nil
+                }
+            }
+            do {
+                let task = try await clientFor(activeSession).generateStudyNote(
+                    workspaceId: workspaceId,
+                    learningUnitId: unitId,
+                    contentEditLevel: studyNoteGenerationUsesOverride ? studyNoteGenerationContentLevel : nil,
+                    layoutEditLevel: studyNoteGenerationUsesOverride ? studyNoteGenerationLayoutLevel : nil,
+                    forceReprocess: studyNoteGenerationForceReprocess
+                )
+                guard isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) else { return }
+                activeTask = task
+                taskEvents = []
+                isStudyNoteGenerationPresented = false
+                selectedTab = .home
+                selectedHomeDestination = .tasks
+                _ = try await pollTask(
+                    activeSession: activeSession,
+                    workspaceId: workspaceId,
+                    taskId: task.id
+                ) { [weak self] updated, events in
+                    guard let self else { return }
+                    self.activeTask = updated
+                    self.taskEvents = events
+                }
+                try await refreshLearningUnits(activeSession: activeSession, workspaceId: workspaceId)
+                let notes = try await clientFor(session ?? activeSession).listStudyNotes(
+                    workspaceId: workspaceId,
+                    learningUnitId: unitId
+                )
+                if selectedLearningUnitId == unitId { studyNotes = notes.sorted { $0.versionNo > $1.versionNo } }
+                loadedDeferredContent = Set(loadedDeferredContent.filter {
+                    $0.workspaceId != workspaceId || $0.content != .notes
+                })
+                setStatus("note.generation.completed")
+            } catch is CancellationError {
+                return
+            } catch {
+                guard isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) else { return }
+                showError(error)
+            }
+        }
     }
 
     func beginStudyNoteEditing() {
@@ -3955,7 +4905,8 @@ final class NotePatchViewModel: ObservableObject {
     }
 
     func canProcessDocument(_ document: LearningDocumentItem) -> Bool {
-        ["uploaded", "ready", "failed"].contains(document.status)
+        document.documentKind != "chat_attachment"
+            && ["uploaded", "ready", "failed"].contains(document.status)
     }
 
     func canDownloadDocument(_ document: LearningDocumentItem) -> Bool {
@@ -4216,6 +5167,17 @@ final class NotePatchViewModel: ObservableObject {
         flashcardDeckDetail = FlashcardDeckDetail(deck: sampleDeck, cards: sampleCards)
         flashcardIndex = 0
         isFlashcardShowingBack = false
+        if let workflowDetail = try? JSONDecoder.notepatch.decode(
+            WorkflowDetail.self,
+            from: Data(#"{"workflow":{"id":"workflow-ui","workspace_id":"ui-workspace","document_id":"preparing-doc","trigger_type":"upload","status":"waiting","core_status":"succeeded","enrichment_status":"waiting","current_stage":"generate_study_notes","progress":76,"waiting_until":"2026-08-22T03:00:00Z","result":{},"metadata":{},"created_at":"","updated_at":""},"tasks":[]}"#.utf8)
+        ) {
+            workflows = [workflowDetail.workflow]
+            activeWorkflowDetail = workflowDetail
+        }
+        noteGaps = (try? JSONDecoder.notepatch.decode(
+            [NoteGap].self,
+            from: Data(#"[{"id":"gap-pending","workspace_id":"ui-workspace","learning_unit_id":"unit-1","knowledge_point_id":"Equivalent ratios","status":"pending","coverage_score":0.42,"source_refs":[{"document_id":"homework-doc","page_index":0,"excerpt":"Equivalent ratios use the same multiplier."}],"insert_position":"after","created_at":"","updated_at":""},{"id":"gap-no-base","workspace_id":"ui-workspace","learning_unit_id":"unit-1","knowledge_point_id":"Unit rates","status":"no_base_note","coverage_score":0.0,"source_refs":[],"insert_position":"after","created_at":"","updated_at":""}]"#.utf8)
+        )) ?? []
         installOfflineAIModelFixtureIfNeeded()
         conversations = []
         selectedConversationId = nil
@@ -4438,6 +5400,9 @@ final class NotePatchViewModel: ObservableObject {
         isDocumentPurgeRetryAvailable = false
         clearChatWorkspaceState()
         isAIPreferenceUpdating = false
+        notePreferenceTask?.cancel()
+        notePreferenceTask = nil
+        isNotePreferenceUpdating = false
         clearAIModelState()
         learningUnits = []
         selectedLearningUnitId = nil
@@ -4446,6 +5411,12 @@ final class NotePatchViewModel: ObservableObject {
         closeStudyNoteReader()
         clearLearningWorkspaceState()
         aiHistoryEnabled = true
+        noteContentEditLevel = .conceptual
+        noteLayoutEditLevel = .minor
+        noteHistoryLimit = 3
+        notePreferenceDraftContent = .conceptual
+        notePreferenceDraftLayout = .minor
+        notePreferenceDraftHistoryLimit = 3
         passwordText = ""
         queuedUploadItems.forEach {
             UploadThumbnailCache.shared.remove(file: $0.file)
@@ -4486,6 +5457,14 @@ final class NotePatchViewModel: ObservableObject {
         fullNameText = updated.fullName ?? ""
         selectedWorkspaceId = updated.selectedWorkspaceId
         aiHistoryEnabled = updated.aiHistoryEnabled
+        noteContentEditLevel = updated.noteContentEditLevel
+        noteLayoutEditLevel = updated.noteLayoutEditLevel
+        noteHistoryLimit = updated.noteHistoryLimit
+        if !isNotePreferenceUpdating {
+            notePreferenceDraftContent = updated.noteContentEditLevel
+            notePreferenceDraftLayout = updated.noteLayoutEditLevel
+            notePreferenceDraftHistoryLimit = updated.noteHistoryLimit
+        }
     }
 
     private func saveSelectedWorkspace(_ workspaceId: String?) {
@@ -4494,6 +5473,16 @@ final class NotePatchViewModel: ObservableObject {
             DocumentThumbnailPipeline.shared.removeAll()
             clearAIModelState()
             clearChatWorkspaceState()
+            workflowLoadTask?.cancel()
+            workflowMonitorTask?.cancel()
+            workflows = []
+            activeWorkflowDetail = nil
+            workflowEvents = []
+            noteGapTask?.cancel()
+            noteCorrectionsTask?.cancel()
+            noteGaps = []
+            selectedNoteGapDetail = nil
+            studyNoteCorrections = []
         }
         selectedWorkspaceId = workspaceId
         if !isOfflineTestMode {
@@ -4512,7 +5501,10 @@ final class NotePatchViewModel: ObservableObject {
                     email: latest.email,
                     fullName: latest.fullName,
                     selectedWorkspaceId: workspaceId,
-                    aiHistoryEnabled: latest.aiHistoryEnabled
+                    aiHistoryEnabled: latest.aiHistoryEnabled,
+                    noteContentEditLevel: latest.noteContentEditLevel,
+                    noteLayoutEditLevel: latest.noteLayoutEditLevel,
+                    noteHistoryLimit: latest.noteHistoryLimit
                 )
             )
         }
@@ -4945,7 +5937,12 @@ final class NotePatchViewModel: ObservableObject {
         let client = clientFor(activeSession)
         let user = try await client.me()
         guard isCurrentSessionContext(activeSession) else { throw CancellationError() }
-        if user.email != activeSession.email || user.fullName != activeSession.fullName || user.aiHistoryEnabled != activeSession.aiHistoryEnabled {
+        if user.email != activeSession.email
+            || user.fullName != activeSession.fullName
+            || user.aiHistoryEnabled != activeSession.aiHistoryEnabled
+            || user.noteContentEditLevel != activeSession.noteContentEditLevel
+            || user.noteLayoutEditLevel != activeSession.noteLayoutEditLevel
+            || user.noteHistoryLimit != activeSession.noteHistoryLimit {
             guard let currentSession = session, currentSession.userId == activeSession.userId else {
                 throw CancellationError()
             }
@@ -4983,12 +5980,18 @@ final class NotePatchViewModel: ObservableObject {
         activeSession: SavedSession,
         workspaceId: String,
         taskId: String,
+        initialTask: TaskItem? = nil,
         onUpdate: @escaping (TaskItem, [TaskEventItem]) -> Void
     ) async throws -> TaskItem {
         let client = clientFor(activeSession)
-        var currentTask = activeTask?.id == taskId
-            ? activeTask!
-            : try await client.getTask(workspaceId: workspaceId, taskId: taskId)
+        var currentTask: TaskItem
+        if let initialTask, initialTask.id == taskId {
+            currentTask = initialTask
+        } else if activeTask?.id == taskId, let activeTask {
+            currentTask = activeTask
+        } else {
+            currentTask = try await client.getTask(workspaceId: workspaceId, taskId: taskId)
+        }
         var events = taskEvents.filter { $0.taskId == taskId }
         var seenEventIds = Set(events.map(\.id))
         var seenSequences = Set(events.map(\.sequenceNo).filter { $0 > 0 })
@@ -5022,6 +6025,10 @@ final class NotePatchViewModel: ObservableObject {
 
         publishIfChanged()
         if currentTask.isTerminal {
+            if let authoritativeEvents = try? await client.getTaskEvents(workspaceId: workspaceId, taskId: taskId) {
+                authoritativeEvents.forEach(appendEvent)
+            }
+            publishIfChanged()
             return try terminalTaskResult(currentTask, events: events)
         }
 
@@ -5131,7 +6138,8 @@ final class NotePatchViewModel: ObservableObject {
     private func completeUploadWithRetry(
         client: LearningBackendClient,
         workspaceId: String,
-        uploadSession: UploadSessionResponse,
+        uploadSessionId: String,
+        documentId: String?,
         tusResult: TusUploadResult,
         file: LocalUploadFile
     ) async throws -> LearningDocumentItem {
@@ -5141,7 +6149,7 @@ final class NotePatchViewModel: ObservableObject {
             do {
                 return try await client.completeUpload(
                     workspaceId: workspaceId,
-                    uploadSessionId: uploadSession.uploadSession.id,
+                    uploadSessionId: uploadSessionId,
                     tusUploadURL: tusResult.uploadURL,
                     tusUploadId: tusResult.uploadId,
                     fileSize: file.fileSize,
@@ -5149,9 +6157,9 @@ final class NotePatchViewModel: ObservableObject {
                 )
             } catch let error as LearningBackendError where error.statusCode == 409 {
                 lastConflict = error
-                if let document = try? await client.getDocument(
+                if let documentId, let document = try? await client.getDocument(
                     workspaceId: workspaceId,
-                    documentId: uploadSession.document.id
+                    documentId: documentId
                 ), ["uploaded", "processing", "ready", "scanning"].contains(document.status) {
                     return document
                 }

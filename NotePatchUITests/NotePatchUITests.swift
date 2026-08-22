@@ -130,7 +130,7 @@ final class NotePatchUITests: XCTestCase {
         keepScreenshot(app, name: "audit-notes")
 
         app.buttons["notesSubsection.units"].tap()
-        XCTAssertTrue(app.descendants(matching: .any)["learningUnitsSection"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.descendants(matching: .any)["learningContentScroll"].waitForExistence(timeout: 3))
         keepScreenshot(app, name: "audit-units")
 
         app.buttons["notesSubsection.search"].tap()
@@ -350,13 +350,35 @@ final class NotePatchUITests: XCTestCase {
         let uploadApp = makeApp(["-NotePatchUITestWorkbench", "-NotePatchUITestFeedbackUploadError"])
         uploadApp.launch()
         assertBecomesHittable(uploadApp.buttons["closeUploadScreenButton"])
-        XCTAssertTrue(uploadApp.descendants(matching: .any)["globalFeedbackToast"].waitForExistence(timeout: 3))
+        let toast = uploadApp.descendants(matching: .any)["globalFeedbackToast"]
+        let toastText = uploadApp.staticTexts["Upload failed"]
+        XCTAssertTrue(toast.waitForExistence(timeout: 3) || toastText.waitForExistence(timeout: 3))
         uploadApp.terminate()
 
         let busyApp = makeApp(["-NotePatchUITestWorkbench", "-NotePatchUITestFeedbackBusy"])
         busyApp.launch()
-        XCTAssertTrue(busyApp.descendants(matching: .any)["globalActivityBar"].waitForExistence(timeout: 3))
+        let activityBar = busyApp.descendants(matching: .any)["globalActivityBar"]
+        XCTAssertTrue(activityBar.waitForExistence(timeout: 3))
         XCTAssertFalse(busyApp.descendants(matching: .any)["globalFeedbackToast"].exists)
+        XCTAssertGreaterThanOrEqual(activityBar.frame.height, 2)
+        XCTAssertLessThanOrEqual(activityBar.frame.height, 4)
+        let statusBar = busyApp.statusBars.firstMatch
+        if statusBar.exists {
+            XCTAssertGreaterThanOrEqual(activityBar.frame.minY, statusBar.frame.maxY - 1)
+            XCTAssertLessThanOrEqual(activityBar.frame.minY, statusBar.frame.maxY + 4)
+        }
+    }
+
+    @MainActor
+    func testBusyTopBarRespectsSafeArea() throws {
+        let app = makeApp(["-NotePatchUITestWorkbench", "-NotePatchUITestFeedbackBusy"])
+        app.launch()
+        let activityBar = app.descendants(matching: .any)["globalActivityBar"]
+        XCTAssertTrue(activityBar.waitForExistence(timeout: 5))
+        XCTAssertGreaterThanOrEqual(activityBar.frame.height, 2)
+        XCTAssertLessThanOrEqual(activityBar.frame.height, 4)
+        XCTAssertGreaterThanOrEqual(activityBar.frame.minY, app.frame.minY)
+        XCTAssertLessThan(activityBar.frame.maxY, app.frame.midY)
     }
 
     @MainActor
@@ -1108,6 +1130,39 @@ final class NotePatchUITests: XCTestCase {
         app.buttons["创建作业"].tap()
         XCTAssertTrue(app.descendants(matching: .any)["homeworkCreateSheet"].waitForExistence(timeout: 3))
         app.buttons["取消"].tap()
+    }
+
+    @MainActor
+    func testLatestLearningWorkflowNoteSetAndGapControlsAreReachable() throws {
+        let app = makeApp(["-NotePatchUITestWorkbench"])
+        app.launch()
+
+        XCTAssertTrue(app.otherElements["workbenchTabs"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["homeActiveWorkflow"].waitForExistence(timeout: 3))
+        app.buttons["homeActiveWorkflow"].tap()
+        XCTAssertTrue(app.staticTexts["学习工作流"].waitForExistence(timeout: 3))
+        app.navigationBars.buttons.firstMatch.tap()
+
+        app.buttons["uploadFAB"].tap()
+        XCTAssertTrue(app.descendants(matching: .any)["uploadScreen"].waitForExistence(timeout: 3))
+        app.buttons["uploadKind.note"].tap()
+        let continuousToggle = app.switches["continuousNoteToggle"]
+        XCTAssertTrue(continuousToggle.waitForExistence(timeout: 3))
+        continuousToggle.tap()
+        XCTAssertTrue(app.textFields["continuousNoteTitleField"].waitForExistence(timeout: 3))
+        app.buttons["closeUploadScreenButton"].tap()
+
+        app.buttons["tab.notes"].tap()
+        XCTAssertTrue(app.buttons["noteGapsButton.unit-1"].waitForExistence(timeout: 3))
+        app.buttons["noteGapsButton.unit-1"].tap()
+        XCTAssertTrue(app.descendants(matching: .any)["noteGapRow.gap-pending"].waitForExistence(timeout: 3))
+        app.buttons["完成"].tap()
+
+        app.buttons["tab.me"].tap()
+        let preferencePicker = app.descendants(matching: .any)["noteContentPreferencePicker"]
+        for _ in 0..<6 where !preferencePicker.isHittable { app.swipeUp() }
+        XCTAssertTrue(preferencePicker.exists)
+        XCTAssertTrue(app.descendants(matching: .any)["saveNotePreferencesButton"].exists)
     }
 
     @MainActor

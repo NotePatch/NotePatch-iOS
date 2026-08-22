@@ -49,17 +49,29 @@ struct LocalUploadFile: Equatable, Identifiable, Sendable {
 enum QueuedUploadState: Equatable {
     case pending
     case uploading
+    case uploaded
     case failed(AppDisplayText)
+}
+
+struct QueuedUploadRemoteState: Equatable {
+    var uploadSessionId: String
+    var tusEndpoint: String
+    var tusMetadataHeader: String
+    var tusUploadURL: String?
+    var tusUploadId: String?
+    var workflowRunId: String?
+    var documentId: String?
 }
 
 struct QueuedUploadItem: Identifiable, Equatable {
     let id: UUID
     let file: LocalUploadFile
     let documentKind: String
-    let learningMetadata: LearningMetadata
+    var learningMetadata: LearningMetadata
     var saveToDocuments: Bool
     var isSelected: Bool
     var state: QueuedUploadState
+    var remoteState: QueuedUploadRemoteState?
 
     init(
         file: LocalUploadFile,
@@ -67,7 +79,8 @@ struct QueuedUploadItem: Identifiable, Equatable {
         learningMetadata: LearningMetadata,
         saveToDocuments: Bool = true,
         isSelected: Bool = true,
-        state: QueuedUploadState = .pending
+        state: QueuedUploadState = .pending,
+        remoteState: QueuedUploadRemoteState? = nil
     ) {
         id = file.id
         self.file = file
@@ -76,6 +89,7 @@ struct QueuedUploadItem: Identifiable, Equatable {
         self.saveToDocuments = saveToDocuments
         self.isSelected = isSelected
         self.state = state
+        self.remoteState = remoteState
     }
 }
 

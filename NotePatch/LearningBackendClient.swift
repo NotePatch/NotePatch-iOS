@@ -172,6 +172,23 @@ final class LearningBackendClient {
         )
     }
 
+    func updateNotePreferences(
+        contentEditLevel: NoteContentEditLevel,
+        layoutEditLevel: NoteLayoutEditLevel,
+        historyLimit: Int
+    ) async throws -> BackendUser {
+        try await authedJSON(
+            "PATCH",
+            "/auth/preferences",
+            payload: [
+                "note_content_edit_level": contentEditLevel.rawValue,
+                "note_layout_edit_level": layoutEditLevel.rawValue,
+                "note_history_limit": min(100, max(0, historyLimit))
+            ],
+            as: BackendUser.self
+        )
+    }
+
     func listAIModels(workspaceId: String) async throws -> AiModelCatalog {
         try await authedJSON(
             "GET",
@@ -274,8 +291,9 @@ final class LearningBackendClient {
             "filename": filename,
             "document_kind": documentKind,
             "title": filename,
-            "metadata": learningMetadata?.payload ?? [:]
+            "metadata": [:]
         ]
+        learningMetadata?.topLevelPayload.forEach { payload[$0.key] = $0.value }
         if let saveToDocuments {
             payload["save_to_documents"] = saveToDocuments
         }
@@ -518,6 +536,174 @@ final class LearningBackendClient {
         )
     }
 
+    func createNoteSet(workspaceId: String, input: NoteSetCreateInput) async throws -> NoteSet {
+        try await authedJSON(
+            "POST",
+            "/workspaces/\(workspaceId.pathSegment)/note-sets",
+            payload: input.payload,
+            as: NoteSet.self
+        )
+    }
+
+    func getNoteSet(workspaceId: String, noteSetId: String) async throws -> NoteSet {
+        try await authedJSON(
+            "GET",
+            "/workspaces/\(workspaceId.pathSegment)/note-sets/\(noteSetId.pathSegment)",
+            payload: nil,
+            as: NoteSet.self
+        )
+    }
+
+    func completeNoteSet(workspaceId: String, noteSetId: String) async throws -> NoteSet {
+        try await authedJSON(
+            "POST",
+            "/workspaces/\(workspaceId.pathSegment)/note-sets/\(noteSetId.pathSegment)/complete",
+            payload: nil,
+            as: NoteSet.self
+        )
+    }
+
+    func generateStudyNote(
+        workspaceId: String,
+        learningUnitId: String,
+        contentEditLevel: NoteContentEditLevel?,
+        layoutEditLevel: NoteLayoutEditLevel?,
+        forceReprocess: Bool
+    ) async throws -> TaskItem {
+        var payload: [String: Any] = ["force_reprocess": forceReprocess]
+        if let contentEditLevel { payload["content_edit_level"] = contentEditLevel.rawValue }
+        if let layoutEditLevel { payload["layout_edit_level"] = layoutEditLevel.rawValue }
+        return try await authedJSON(
+            "POST",
+            "/workspaces/\(workspaceId.pathSegment)/learning-units/\(learningUnitId.pathSegment)/notes/generate",
+            payload: payload,
+            as: TaskItem.self
+        )
+    }
+
+    func listNoteGaps(workspaceId: String, learningUnitId: String, status: String? = nil) async throws -> [NoteGap] {
+        var path = "/workspaces/\(workspaceId.pathSegment)/learning-units/\(learningUnitId.pathSegment)/note-gaps"
+        if let status, !status.isEmpty { path += "?status=\(status.queryValue)" }
+        return try await authedJSON("GET", path, payload: nil, as: [NoteGap].self)
+    }
+
+    func getNoteGap(workspaceId: String, learningUnitId: String, gapId: String) async throws -> NoteGapDetail {
+        try await authedJSON(
+            "GET",
+            "/workspaces/\(workspaceId.pathSegment)/learning-units/\(learningUnitId.pathSegment)/note-gaps/\(gapId.pathSegment)",
+            payload: nil,
+            as: NoteGapDetail.self
+        )
+    }
+
+    func createNoteGapDraft(
+        workspaceId: String,
+        learningUnitId: String,
+        gapId: String,
+        selectedSourceRefs: [NoteSourceReference],
+        targetSectionId: String?,
+        insertPosition: String,
+        instruction: String?
+    ) async throws -> TaskItem {
+        var payload: [String: Any] = [
+            "selected_source_refs": selectedSourceRefs.map(\.payload),
+            "insert_position": insertPosition
+        ]
+        if let targetSectionId { payload["target_section_id"] = targetSectionId }
+        if let instruction { payload["instruction"] = instruction }
+        return try await authedJSON(
+            "POST",
+            "/workspaces/\(workspaceId.pathSegment)/learning-units/\(learningUnitId.pathSegment)/note-gaps/\(gapId.pathSegment)/draft",
+            payload: payload,
+            as: TaskItem.self
+        )
+    }
+
+    func updateNoteGapDraft(
+        workspaceId: String,
+        learningUnitId: String,
+        gapId: String,
+        html: String?,
+        targetSectionId: String?,
+        insertPosition: String?
+    ) async throws -> NoteSupplementDraft {
+        var payload: [String: Any] = [:]
+        if let html { payload["html"] = html }
+        if let targetSectionId { payload["target_section_id"] = targetSectionId }
+        if let insertPosition { payload["insert_position"] = insertPosition }
+        return try await authedJSON(
+            "PATCH",
+            "/workspaces/\(workspaceId.pathSegment)/learning-units/\(learningUnitId.pathSegment)/note-gaps/\(gapId.pathSegment)/draft",
+            payload: payload,
+            as: NoteSupplementDraft.self
+        )
+    }
+
+    func regenerateNoteGapDraft(
+        workspaceId: String,
+        learningUnitId: String,
+        gapId: String,
+        feedback: String
+    ) async throws -> TaskItem {
+        try await authedJSON(
+            "POST",
+            "/workspaces/\(workspaceId.pathSegment)/learning-units/\(learningUnitId.pathSegment)/note-gaps/\(gapId.pathSegment)/draft/regenerate",
+            payload: ["feedback": feedback],
+            as: TaskItem.self
+        )
+    }
+
+    func acceptNoteGap(workspaceId: String, learningUnitId: String, gapId: String) async throws -> StudyNoteRevisionResponse {
+        try await authedJSON(
+            "POST",
+            "/workspaces/\(workspaceId.pathSegment)/learning-units/\(learningUnitId.pathSegment)/note-gaps/\(gapId.pathSegment)/accept",
+            payload: nil,
+            as: StudyNoteRevisionResponse.self
+        )
+    }
+
+    func rejectNoteGap(workspaceId: String, learningUnitId: String, gapId: String) async throws -> NoteGap {
+        try await authedJSON(
+            "POST",
+            "/workspaces/\(workspaceId.pathSegment)/learning-units/\(learningUnitId.pathSegment)/note-gaps/\(gapId.pathSegment)/reject",
+            payload: nil,
+            as: NoteGap.self
+        )
+    }
+
+    func createStudyNoteFromGaps(
+        workspaceId: String,
+        learningUnitId: String,
+        gapIds: [String],
+        title: String?,
+        contentEditLevel: NoteContentEditLevel?,
+        layoutEditLevel: NoteLayoutEditLevel?
+    ) async throws -> TaskItem {
+        var payload: [String: Any] = ["gap_ids": gapIds]
+        if let title { payload["title"] = title }
+        if let contentEditLevel { payload["content_edit_level"] = contentEditLevel.rawValue }
+        if let layoutEditLevel { payload["layout_edit_level"] = layoutEditLevel.rawValue }
+        return try await authedJSON(
+            "POST",
+            "/workspaces/\(workspaceId.pathSegment)/learning-units/\(learningUnitId.pathSegment)/notes/from-gaps",
+            payload: payload,
+            as: TaskItem.self
+        )
+    }
+
+    func listStudyNoteCorrections(
+        workspaceId: String,
+        learningUnitId: String,
+        noteVersionId: String
+    ) async throws -> [StudyNoteCorrection] {
+        try await authedJSON(
+            "GET",
+            "/workspaces/\(workspaceId.pathSegment)/learning-units/\(learningUnitId.pathSegment)/notes/\(noteVersionId.pathSegment)/corrections",
+            payload: nil,
+            as: [StudyNoteCorrection].self
+        )
+    }
+
     func listStudyNotes(workspaceId: String, learningUnitId: String) async throws -> [StudyNoteVersion] {
         try await authedJSON(
             "GET",
@@ -714,6 +900,90 @@ final class LearningBackendClient {
         )
     }
 
+    func listWorkflows(
+        workspaceId: String,
+        page: Int = 1,
+        pageSize: Int = 50,
+        status: String? = nil,
+        documentId: String? = nil,
+        learningUnitId: String? = nil
+    ) async throws -> [WorkflowRun] {
+        var query = [
+            "page=\(max(1, page))",
+            "page_size=\(min(200, max(1, pageSize)))"
+        ]
+        if let status, !status.isEmpty { query.append("status=\(status.queryValue)") }
+        if let documentId, !documentId.isEmpty { query.append("document_id=\(documentId.queryValue)") }
+        if let learningUnitId, !learningUnitId.isEmpty { query.append("learning_unit_id=\(learningUnitId.queryValue)") }
+        return try await authedJSON(
+            "GET",
+            "/workspaces/\(workspaceId.pathSegment)/workflows?\(query.joined(separator: "&"))",
+            payload: nil,
+            as: [WorkflowRun].self
+        )
+    }
+
+    func getWorkflow(workspaceId: String, workflowRunId: String) async throws -> WorkflowDetail {
+        try await authedJSON(
+            "GET",
+            "/workspaces/\(workspaceId.pathSegment)/workflows/\(workflowRunId.pathSegment)",
+            payload: nil,
+            as: WorkflowDetail.self
+        )
+    }
+
+    func getDocumentWorkflow(workspaceId: String, documentId: String) async throws -> WorkflowDetail {
+        try await authedJSON(
+            "GET",
+            "/workspaces/\(workspaceId.pathSegment)/documents/\(documentId.pathSegment)/workflow",
+            payload: nil,
+            as: WorkflowDetail.self
+        )
+    }
+
+    func getWorkflowEvents(workspaceId: String, workflowRunId: String) async throws -> [WorkflowEvent] {
+        try await authedJSON(
+            "GET",
+            "/workspaces/\(workspaceId.pathSegment)/workflows/\(workflowRunId.pathSegment)/events",
+            payload: nil,
+            as: [WorkflowEvent].self
+        )
+    }
+
+    func streamWorkflowEvents(
+        workspaceId: String,
+        workflowRunId: String,
+        lastEventID: Int?
+    ) -> AsyncThrowingStream<WorkflowSSEFrame, Error> {
+        AsyncThrowingStream { continuation in
+            let streamTask = Task {
+                do {
+                    let (bytes, _) = try await openEventStream(
+                        path: "/workspaces/\(workspaceId.pathSegment)/workflows/\(workflowRunId.pathSegment)/events/stream",
+                        lastEventID: lastEventID,
+                        allowRefresh: true
+                    )
+                    var decoder = WorkflowSSEByteDecoder()
+                    for try await byte in bytes {
+                        try Task.checkCancellation()
+                        for frame in try decoder.append(byte, workspaceId: workspaceId, workflowRunId: workflowRunId) {
+                            continuation.yield(frame)
+                        }
+                    }
+                    for frame in try decoder.finish(workspaceId: workspaceId, workflowRunId: workflowRunId) {
+                        continuation.yield(frame)
+                    }
+                    continuation.finish()
+                } catch is CancellationError {
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in streamTask.cancel() }
+        }
+    }
+
     func getTask(workspaceId: String, taskId: String) async throws -> TaskItem {
         try await authedJSON(
             "GET",
@@ -776,6 +1046,18 @@ final class LearningBackendClient {
             method: "GET",
             pathOrURL: "/workspaces/\(workspaceId.pathSegment)/tasks/\(taskId.pathSegment)/events/stream"
         )
+        streamRequest.timeoutInterval = 0
+        streamRequest.setValue(try bearerHeader(), forHTTPHeaderField: "Authorization")
+        streamRequest.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+        streamRequest.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
+        if let lastEventID, lastEventID > 0 {
+            streamRequest.setValue(String(lastEventID), forHTTPHeaderField: "Last-Event-ID")
+        }
+        return streamRequest
+    }
+
+    private func eventStreamRequest(path: String, lastEventID: Int?) throws -> URLRequest {
+        var streamRequest = try request(method: "GET", pathOrURL: path)
         streamRequest.timeoutInterval = 0
         streamRequest.setValue(try bearerHeader(), forHTTPHeaderField: "Authorization")
         streamRequest.setValue("text/event-stream", forHTTPHeaderField: "Accept")
@@ -970,6 +1252,47 @@ final class LearningBackendClient {
             for try await byte in bytes.prefix(64 * 1024) {
                 errorData.append(byte)
             }
+            throw LearningBackendError(
+                Self.parseErrorMessage(String(data: errorData, encoding: .utf8) ?? "", status: httpResponse.statusCode),
+                statusCode: httpResponse.statusCode,
+                shouldClearSession: httpResponse.statusCode == 401
+            )
+        }
+        return (bytes, httpResponse)
+    }
+
+    private func openEventStream(
+        path: String,
+        lastEventID: Int?,
+        allowRefresh: Bool
+    ) async throws -> (URLSession.AsyncBytes, HTTPURLResponse) {
+        let streamRequest = try eventStreamRequest(path: path, lastEventID: lastEventID)
+        let (bytes, response) = try await session.bytes(for: streamRequest)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw LearningBackendError(localizedKey: "error.server.invalid_response")
+        }
+        if httpResponse.statusCode == 401, allowRefresh {
+            guard let refreshToken else {
+                throw LearningBackendError(localizedKey: "error.session.expired", statusCode: 401, shouldClearSession: true)
+            }
+            let attemptedRefreshToken = refreshToken
+            do {
+                let refreshed = try await refreshTokenSingleFlight(attemptedRefreshToken)
+                accessToken = refreshed.accessToken
+                self.refreshToken = refreshed.refreshToken
+                onTokenRefreshed?(refreshed, attemptedRefreshToken)
+            } catch let error as LearningBackendError {
+                throw error.withContext(
+                    statusCode: error.statusCode ?? 401,
+                    shouldClearSession: true,
+                    refreshTokenAttempt: attemptedRefreshToken
+                )
+            }
+            return try await openEventStream(path: path, lastEventID: lastEventID, allowRefresh: false)
+        }
+        guard (200...299).contains(httpResponse.statusCode) else {
+            var errorData = Data()
+            for try await byte in bytes.prefix(64 * 1024) { errorData.append(byte) }
             throw LearningBackendError(
                 Self.parseErrorMessage(String(data: errorData, encoding: .utf8) ?? "", status: httpResponse.statusCode),
                 statusCode: httpResponse.statusCode,

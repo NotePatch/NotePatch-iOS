@@ -54,7 +54,7 @@ struct ContentView: View {
         }
         _feedbackPresentation = StateObject(
             wrappedValue: AppFeedbackPresentationState(
-                autoDismissNanoseconds: isFeedbackUITest ? 5_000_000_000 : 2_000_000_000
+                autoDismissNanoseconds: isFeedbackUITest ? 15_000_000_000 : 2_000_000_000
             )
         )
     }
@@ -76,12 +76,18 @@ struct ContentView: View {
                     containerSize: geometry.size,
                     safeAreaInsets: geometry.safeAreaInsets
                 )
+                .frame(
+                    maxWidth: .infinity,
+                    maxHeight: .infinity,
+                    alignment: .top
+                )
                 .zIndex(100)
             }
             .coordinateSpace(name: AppFeedbackCoordinateSpace.name)
         }
         .task {
             await model.restoreIfNeeded()
+            await model.installFeedbackUITestFixtureIfNeeded()
         }
         .onAppear {
             model.handleScenePhase(scenePhase)
@@ -701,7 +707,9 @@ private struct HomeTab: View {
 
                 summary
 
-                if let task = state.activeTask {
+                if let workflow = state.activeWorkflow {
+                    activeWorkflow(workflow)
+                } else if let task = state.activeTask {
                     activeTask(task)
                 }
 
@@ -783,6 +791,35 @@ private struct HomeTab: View {
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier("homeActiveTask")
+    }
+
+    private func activeWorkflow(_ workflow: WorkflowRun) -> some View {
+        Button {
+            model.selectedHomeDestination = .tasks
+            model.selectWorkflow(workflow.id)
+        } label: {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Label(localized("workflow.recent"), systemImage: "point.3.connected.trianglepath.dotted")
+                        .font(.subheadline.weight(.semibold))
+                    Spacer()
+                    Text("\(workflow.progress.clamped(to: 0...100))%")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(NPColors.textSecondary)
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(NPColors.textTertiary)
+                }
+                ProgressView(value: Double(workflow.progress.clamped(to: 0...100)), total: 100)
+                    .tint(NPColors.brand)
+                Text(workflowStatusLabel(workflow.status)).npCaption()
+            }
+            .foregroundStyle(NPColors.textPrimary)
+            .padding(12)
+            .modifier(NPListItemModifier())
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("homeActiveWorkflow")
     }
 
     private var recentDocuments: some View {
@@ -1173,6 +1210,9 @@ private struct NotesTab: View {
             }
             .navigationViewStyle(.stack)
         }
+        .sheet(isPresented: $model.isNoteGapPresented) {
+            NoteGapsSheet(model: model)
+        }
         .background(NPColors.background)
         .task {
             await NoteWebViewRuntime.shared.prewarmAfterInterfaceSettles()
@@ -1255,6 +1295,13 @@ private struct NotesTab: View {
                                 Text(details.joined(separator: " · "))
                                     .npCaption()
                             }
+                            Button {
+                                model.presentNoteGaps(for: group.learningUnit.id)
+                            } label: {
+                                Label(localized("note_gap.open"), systemImage: "lightbulb.max")
+                            }
+                            .buttonStyle(NPSecondaryButtonStyle())
+                            .accessibilityIdentifier("noteGapsButton.\(group.learningUnit.id)")
                             if group.notes.isEmpty {
                                 Text(noteStateMessage(group.generationState))
                                     .npCaption()
@@ -1342,6 +1389,8 @@ private struct StudyNoteReader: View {
                             .foregroundStyle(NPColors.textSecondary)
                         Text(item.note.revisionOriginLabel)
                             .npCaption()
+                        Text("\(noteContentEditLevelLabel(item.note.contentEditLevel)) · \(noteLayoutEditLevelLabel(item.note.layoutEditLevel))")
+                            .npCaption()
                         if let summary = item.note.editSummary?.trimmingCharacters(in: .whitespacesAndNewlines), !summary.isEmpty {
                             Text(summary)
                                 .npCaption()
@@ -1387,13 +1436,29 @@ private struct StudyNoteReader: View {
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .navigationBarTrailing) {
-                        if model.canEditSelectedStudyNote {
-                            Button(localized("common.edit")) {
-                                model.beginStudyNoteEditing()
+                        Menu {
+                            Button {
+                                model.presentNoteGaps(for: item.learningUnit.id)
+                            } label: {
+                                Label(localized("note_gap.open"), systemImage: "lightbulb.max")
                             }
-                            .disabled(model.isStudyNoteSaving)
-                            .accessibilityIdentifier("editStudyNoteButton")
+                            Button {
+                                model.loadStudyNoteCorrections()
+                            } label: {
+                                Label(localized("note.corrections"), systemImage: "checkmark.message")
+                            }
+                            if model.canEditSelectedStudyNote {
+                                Button {
+                                    model.beginStudyNoteEditing()
+                                } label: {
+                                    Label(localized("common.edit"), systemImage: "pencil")
+                                }
+                            }
+                        } label: {
+                            Image(systemName: "ellipsis.circle")
                         }
+                        .disabled(model.isStudyNoteSaving)
+                        .accessibilityIdentifier("studyNoteMoreButton")
                     }
                 }
             } else {
@@ -1413,6 +1478,278 @@ private struct StudyNoteReader: View {
             }
             .navigationViewStyle(.stack)
         }
+        .sheet(isPresented: $model.isNoteGapPresented) {
+            NoteGapsSheet(model: model)
+        }
+        .sheet(isPresented: $model.isNoteCorrectionsPresented) {
+            StudyNoteCorrectionsSheet(model: model)
+        }
+    }
+}
+
+private struct NoteGapsSheet: View {
+    @ObservedObject var model: NotePatchViewModel
+    @State private var editorCommand: HTMLNoteCommand?
+    @State private var editorCommandToken = 0
+
+    var body: some View {
+        NavigationView {
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: NPSpacing.item) {
+                    if model.isNoteGapLoading && model.noteGaps.isEmpty {
+                        ProgressView().frame(maxWidth: .infinity).padding(.vertical, 40)
+                    } else if let detail = model.selectedNoteGapDetail {
+                        gapDetail(detail)
+                    } else if model.noteGaps.isEmpty {
+                        NPEmptyState(
+                            systemImage: "lightbulb",
+                            title: localized("note_gap.empty.title"),
+                            message: localized("note_gap.empty.message")
+                        )
+                    } else {
+                        ForEach(model.noteGaps) { gap in
+                            Button {
+                                if gap.status == "no_base_note" {
+                                    model.toggleNoBaseGap(gap.id)
+                                } else {
+                                    model.selectNoteGap(gap)
+                                }
+                            } label: {
+                                HStack(alignment: .top, spacing: NPSpacing.small) {
+                                    Image(systemName: gap.status == "no_base_note"
+                                          ? (model.selectedNoBaseGapIds.contains(gap.id) ? "checkmark.circle.fill" : "circle")
+                                          : "lightbulb.max")
+                                        .foregroundStyle(NPColors.brand)
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(gap.knowledgePointId).font(.body.weight(.medium)).lineLimit(2)
+                                        Text(noteGapStatusLabel(gap.status)).npCaption()
+                                        Text(localizedFormat("note_gap.coverage", String(format: "%.2f", gap.coverageScore)))
+                                            .npCaption()
+                                    }
+                                    Spacer()
+                                    if gap.status != "no_base_note" { Image(systemName: "chevron.right") }
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .modifier(NPCardModifier())
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityIdentifier("noteGapRow.\(gap.id)")
+                        }
+                        if !model.selectedNoBaseGapIds.isEmpty {
+                            Button {
+                                model.createNoteFromSelectedGaps()
+                            } label: {
+                                Label(
+                                    localizedFormat("note_gap.create_note_count", String(model.selectedNoBaseGapIds.count)),
+                                    systemImage: "note.text.badge.plus"
+                                )
+                                .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(NPPrimaryButtonStyle())
+                            .disabled(model.isNoteGapLoading)
+                            .accessibilityIdentifier("createNoteFromGapsButton")
+                        }
+                    }
+                }
+                .padding(NPSpacing.outer)
+            }
+            .navigationTitle(localized("note_gap.title"))
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    if model.selectedNoteGapDetail != nil {
+                        Button(localized("common.back")) { model.selectedNoteGapDetail = nil }
+                    } else {
+                        Button(localized("common.done")) { model.isNoteGapPresented = false }
+                    }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    if model.isNoteGapLoading { ProgressView() }
+                }
+            }
+        }
+        .navigationViewStyle(.stack)
+    }
+
+    private func gapDetail(_ detail: NoteGapDetail) -> some View {
+        VStack(alignment: .leading, spacing: NPSpacing.item) {
+            NPSection {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(detail.suggestion.knowledgePointId).npHeading()
+                    NPStatusChip(text: noteGapStatusLabel(detail.suggestion.status), variant: noteGapStatusVariant(detail.suggestion.status))
+                    Text(localizedFormat("note_gap.insert_position", localized("note_gap.position.\(model.noteGapInsertPosition)")))
+                        .npCaption()
+                    if detail.suggestion.targetAnchor != nil, model.studyNoteRenderedURL != nil {
+                        Button {
+                            model.jumpToSelectedGapAnchor()
+                        } label: {
+                            Label(localized("note_gap.show_location"), systemImage: "scope")
+                        }
+                        .buttonStyle(NPSecondaryButtonStyle())
+                    }
+                }
+            }
+
+            if !detail.suggestion.sourceRefs.isEmpty {
+                Text(localized("note_gap.sources")).npSubheading()
+                ForEach(Array(detail.suggestion.sourceRefs.enumerated()), id: \.offset) { _, reference in
+                    HStack(alignment: .top, spacing: 8) {
+                        Button { model.toggleGapSourceReference(reference) } label: {
+                            Image(systemName: model.selectedGapSourceRefs.contains(reference) ? "checkmark.circle.fill" : "circle")
+                                .frame(width: 44, height: 44)
+                        }
+                        .buttonStyle(.plain)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(reference.excerpt.isEmpty ? localized("note_gap.source_no_excerpt") : reference.excerpt)
+                                .npBody().lineLimit(4)
+                            if let page = reference.pageIndex {
+                                Text(localizedFormat("note_gap.page", String(page + 1))).npCaption()
+                            }
+                        }
+                        Spacer(minLength: 4)
+                        if reference.documentId != nil {
+                            Button { model.previewGapSource(reference) } label: {
+                                Image(systemName: "eye").frame(width: 44, height: 44)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel(localized("common.preview"))
+                        }
+                    }
+                    .modifier(NPCardModifier())
+                }
+            }
+
+            if detail.suggestion.status == "pending" {
+                LabeledField(title: "note_gap.instruction") {
+                    TextEditor(text: $model.noteGapInstruction).frame(minHeight: 90)
+                }
+                Button(localized("note_gap.create_draft")) { model.createSelectedNoteGapDraft() }
+                    .buttonStyle(NPPrimaryButtonStyle())
+                    .disabled(model.isNoteGapLoading || model.selectedGapSourceRefs.isEmpty)
+            }
+
+            if !detail.drafts.isEmpty || detail.suggestion.status == "draft" {
+                Text(localized("note_gap.draft")).npSubheading()
+                if !model.noteGapDraftHTML.isEmpty {
+                    DisclosureGroup(localized("common.preview")) {
+                        SafeHTMLNoteView(html: model.noteGapDraftHTML)
+                            .frame(minHeight: 240)
+                            .padding(.top, 8)
+                    }
+                }
+                gapEditorToolbar
+                RichHTMLNoteEditor(
+                    html: $model.noteGapDraftHTML,
+                    command: editorCommand,
+                    commandToken: editorCommandToken
+                )
+                    .frame(minHeight: 300)
+                    .background(NPColors.surface)
+                    .clipShape(RoundedRectangle(cornerRadius: NPRadius.small, style: .continuous))
+                    .accessibilityIdentifier("noteGapDraftEditor")
+                Picker(localized("note_gap.position"), selection: $model.noteGapInsertPosition) {
+                    ForEach(["before", "after", "inside"], id: \.self) { value in
+                        Text(localized("note_gap.position.\(value)")).tag(value)
+                    }
+                }
+                .pickerStyle(.segmented)
+                Button(localized("common.save")) { model.saveSelectedNoteGapDraft() }
+                    .buttonStyle(NPSecondaryButtonStyle())
+                LabeledField(title: "note_gap.feedback") {
+                    TextEditor(text: $model.noteGapFeedback).frame(minHeight: 72)
+                }
+                Button(localized("note_gap.regenerate")) { model.regenerateSelectedNoteGapDraft() }
+                    .buttonStyle(NPSecondaryButtonStyle())
+                HStack {
+                    Button(role: .destructive) { model.rejectSelectedNoteGap() } label: {
+                        Text(localized("note_gap.reject")).frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(NPSecondaryButtonStyle())
+                    Button { model.acceptSelectedNoteGap() } label: {
+                        Text(localized("note_gap.accept")).frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(NPPrimaryButtonStyle())
+                }
+            }
+
+            if ["accepted", "rejected", "stale"].contains(detail.suggestion.status) {
+                Text(localized("note_gap.read_only")).npCaption()
+            }
+        }
+    }
+
+    private var gapEditorToolbar: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                gapEditorButton(.undo, "arrow.uturn.backward", "note.editor.undo")
+                gapEditorButton(.redo, "arrow.uturn.forward", "note.editor.redo")
+                gapEditorButton(.bold, "bold", "note.editor.bold")
+                gapEditorButton(.italic, "italic", "note.editor.italic")
+                gapEditorButton(.heading2, "textformat.size", "note.editor.heading")
+                gapEditorButton(.unorderedList, "list.bullet", "note.editor.bullet_list")
+                gapEditorButton(.orderedList, "list.number", "note.editor.numbered_list")
+            }
+        }
+        .frame(height: 44)
+    }
+
+    private func gapEditorButton(_ command: HTMLNoteCommand, _ image: String, _ label: String) -> some View {
+        Button {
+            editorCommand = command
+            editorCommandToken += 1
+        } label: {
+            Image(systemName: image).frame(width: 44, height: 44)
+        }
+        .buttonStyle(.plain)
+        .background(NPColors.surface)
+        .clipShape(RoundedRectangle(cornerRadius: NPRadius.xs, style: .continuous))
+        .accessibilityLabel(localized(label))
+    }
+}
+
+private struct StudyNoteCorrectionsSheet: View {
+    @ObservedObject var model: NotePatchViewModel
+
+    var body: some View {
+        NavigationView {
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: NPSpacing.item) {
+                    if model.isStudyNoteCorrectionsLoading {
+                        ProgressView().frame(maxWidth: .infinity).padding(.vertical, 40)
+                    } else if model.studyNoteCorrections.isEmpty {
+                        NPEmptyState(
+                            systemImage: "checkmark.message",
+                            title: localized("note.corrections.empty.title"),
+                            message: localized("note.corrections.empty.message")
+                        )
+                    } else {
+                        ForEach(model.studyNoteCorrections) { correction in
+                            NPSection {
+                                VStack(alignment: .leading, spacing: 8) {
+                                    Text(correction.correctionType).npSubheading()
+                                    Text(localized("note.corrections.original")).npCaption()
+                                    Text(correction.originalText).npBody()
+                                    Text(localized("note.corrections.corrected")).npCaption()
+                                    Text(correction.correctedText).npBody().foregroundStyle(NPColors.brandDark)
+                                    if let reason = correction.reason { Text(reason).npCaption() }
+                                    if let confidence = correction.confidence {
+                                        Text(localizedFormat("note.corrections.confidence", String(format: "%.2f", confidence))).npCaption()
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                .padding(NPSpacing.outer)
+            }
+            .navigationTitle(localized("note.corrections"))
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button(localized("common.done")) { model.isNoteCorrectionsPresented = false }
+                }
+            }
+        }
+        .navigationViewStyle(.stack)
     }
 }
 
@@ -1621,6 +1958,7 @@ private struct DocumentsTab: View {
                             onDownload: { model.downloadAndPreview(document) },
                             onProcess: { model.startProcessing(document) },
                             onDelete: { model.deleteDocument(document) },
+                            onWorkflow: { model.openWorkflow(for: document) },
                             onArtifacts: { model.loadArtifacts(for: document) },
                             onOCR: { model.loadOcrArtifacts(for: document) },
                             onArtifactDownload: { model.downloadAndPreview($0) },
@@ -1777,10 +2115,11 @@ private struct UploadDocumentScreen: View {
                                 )
                             } else {
                                 LazyVStack(spacing: 10) {
-                                    ForEach(model.queuedUploadItems) { item in
+                                    ForEach(Array(model.queuedUploadItems.enumerated()), id: \.element.id) { index, item in
                                         QueuedUploadRow(
                                             item: item,
                                             isBusy: model.isBusy,
+                                            pageNumber: model.isContinuousNoteUploadEnabled || model.activeNoteSet != nil ? index + 1 : nil,
                                             onToggle: { model.toggleQueuedUpload(item.id) },
                                             onPreview: {
                                                 isQueuedPreviewLayerMounted = true
@@ -1791,7 +2130,9 @@ private struct UploadDocumentScreen: View {
                                                     fileSize: item.file.fileSize
                                                 )
                                             },
-                                            onRemove: { model.removeQueuedUpload(item.id) }
+                                            onRemove: { model.removeQueuedUpload(item.id) },
+                                            onMoveUp: { model.moveContinuousNotePage(item.id, direction: -1) },
+                                            onMoveDown: { model.moveContinuousNotePage(item.id, direction: 1) }
                                         )
                                     }
                                 }
@@ -2000,9 +2341,12 @@ private struct QueuedImagePreview: View {
 private struct QueuedUploadRow: View {
     let item: QueuedUploadItem
     let isBusy: Bool
+    let pageNumber: Int?
     let onToggle: () -> Void
     let onPreview: () -> Void
     let onRemove: () -> Void
+    let onMoveUp: () -> Void
+    let onMoveDown: () -> Void
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
@@ -2036,10 +2380,29 @@ private struct QueuedUploadRow: View {
                     .accessibilityIdentifier("queuedUploadFilename")
                 Text("\(documentKindLabel(item.documentKind)) · \(formatBytes(item.file.fileSize))")
                     .npCaption()
+                if let pageNumber {
+                    Text(localizedFormat("note_set.page_number", String(pageNumber)))
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(NPColors.brand)
+                }
                 queueStateView
 
                 HStack(spacing: 4) {
                     Spacer(minLength: 0)
+                    if pageNumber != nil {
+                        Button(action: onMoveUp) {
+                            Image(systemName: "arrow.up").frame(width: 44, height: 44)
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(isBusy)
+                        .accessibilityLabel(localized("note_set.move_up"))
+                        Button(action: onMoveDown) {
+                            Image(systemName: "arrow.down").frame(width: 44, height: 44)
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(isBusy)
+                        .accessibilityLabel(localized("note_set.move_down"))
+                    }
                     Button(action: onPreview) {
                         Image(systemName: "eye")
                             .frame(width: 44, height: 44)
@@ -2079,6 +2442,10 @@ private struct QueuedUploadRow: View {
             Label(localized("upload.queue.uploading"), systemImage: "arrow.up.circle")
                 .npCaption()
                 .foregroundStyle(NPColors.brand)
+        case .uploaded:
+            Label(localized("upload.queue.uploaded"), systemImage: "checkmark.circle.fill")
+                .npCaption()
+                .foregroundStyle(NPColors.successText)
         case .failed(let message):
             Text(message.resolved())
                 .npCaption()
@@ -2168,6 +2535,61 @@ private struct UploadPanel: View {
             .font(.body.weight(.medium))
             .foregroundStyle(NPColors.textPrimary)
             .accessibilityIdentifier("uploadLearningInfoDisclosure")
+
+            if model.uploadDocumentKind == "note" {
+                Divider()
+                Toggle(localized("note_set.toggle"), isOn: $model.isContinuousNoteUploadEnabled)
+                    .disabled(model.isBusy || model.activeNoteSet != nil)
+                    .accessibilityIdentifier("continuousNoteToggle")
+                Text(localized("note_set.help")).npCaption()
+
+                if model.isContinuousNoteUploadEnabled || model.activeNoteSet != nil {
+                    LabeledField(title: "note_set.title") {
+                        TextField(localized("note_set.title_placeholder"), text: $model.continuousNoteTitle)
+                            .disabled(model.activeNoteSet != nil)
+                            .accessibilityIdentifier("continuousNoteTitleField")
+                    }
+                    if let noteSet = model.activeNoteSet {
+                        Label(
+                            localizedFormat("note_set.locked", String(noteSet.expectedPageCount)),
+                            systemImage: "lock.fill"
+                        )
+                        .npCaption()
+                    }
+                }
+
+                Toggle(localized("note.strategy.override"), isOn: $model.uploadUsesCustomNoteStrategy)
+                    .disabled(model.isBusy || model.activeNoteSet != nil)
+                    .accessibilityIdentifier("uploadNoteStrategyOverride")
+                if model.uploadUsesCustomNoteStrategy {
+                    Picker(localized("note.preferences.content"), selection: $model.uploadNoteContentEditLevel) {
+                        ForEach(NoteContentEditLevel.supportedValues) { level in
+                            Text(noteContentEditLevelLabel(level)).tag(level)
+                        }
+                        if !NoteContentEditLevel.supportedValues.contains(model.uploadNoteContentEditLevel) {
+                            Text(model.uploadNoteContentEditLevel.rawValue).tag(model.uploadNoteContentEditLevel)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .accessibilityIdentifier("uploadNoteContentStrategy")
+                    Picker(localized("note.preferences.layout"), selection: $model.uploadNoteLayoutEditLevel) {
+                        ForEach(NoteLayoutEditLevel.supportedValues) { level in
+                            Text(noteLayoutEditLevelLabel(level)).tag(level)
+                        }
+                        if !NoteLayoutEditLevel.supportedValues.contains(model.uploadNoteLayoutEditLevel) {
+                            Text(model.uploadNoteLayoutEditLevel.rawValue).tag(model.uploadNoteLayoutEditLevel)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .accessibilityIdentifier("uploadNoteLayoutStrategy")
+                }
+            }
+        }
+        .onChange(of: model.uploadDocumentKind) { kind in
+            if kind != "note", model.activeNoteSet == nil {
+                model.isContinuousNoteUploadEnabled = false
+                model.uploadUsesCustomNoteStrategy = false
+            }
         }
     }
 }
@@ -2320,6 +2742,7 @@ private struct DocumentRow: View, Equatable {
     let onDownload: () -> Void
     let onProcess: () -> Void
     let onDelete: () -> Void
+    let onWorkflow: () -> Void
     let onArtifacts: () -> Void
     let onOCR: () -> Void
     let onArtifactDownload: (DocumentArtifactItem) -> Void
@@ -2385,6 +2808,11 @@ private struct DocumentRow: View, Equatable {
                 .accessibilityLabel(localized("common.preview"))
 
                 Menu {
+                    if document.latestWorkflowRunId != nil {
+                        Button(action: onWorkflow) {
+                            Label(localized("workflow.view_progress"), systemImage: "point.3.connected.trianglepath.dotted")
+                        }
+                    }
                     Button(action: onOCR) {
                         Label(localized("document.ocr_results"), systemImage: "text.viewfinder")
                     }
@@ -2484,20 +2912,180 @@ private struct TaskTab: View {
 
     var body: some View {
         ScrollView {
-            TaskPanel(
-                activeTask: model.activeTask,
-                events: model.taskEvents,
-                canRetryDocumentPurge: model.canRetryDocumentPurge,
-                onRetryDocumentPurge: model.retryDocumentPurge
-            )
+            LazyVStack(spacing: NPSpacing.item) {
+                WorkflowPanel(model: model, state: model.learningWorkflowState)
+                if model.activeTask != nil || model.activeWorkflowDetail == nil {
+                    TaskPanel(
+                        activeTask: model.activeTask,
+                        events: model.taskEvents,
+                        canRetryDocumentPurge: model.canRetryDocumentPurge,
+                        onRetryDocumentPurge: model.retryDocumentPurge
+                    )
+                }
+            }
                 .padding(.horizontal, 16)
                 .padding(.top, 12)
                 .workbenchContentBottomPadding()
         }
+        .onAppear { model.loadWorkflows() }
+        .refreshable { model.loadWorkflows(force: true) }
         .background(NPColors.background)
-        .navigationTitle(localized("tasks.title"))
+        .navigationTitle(localized("workflow.title"))
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarHidden(false)
+    }
+}
+
+private struct WorkflowPanel: View {
+    @ObservedObject var model: NotePatchViewModel
+    @ObservedObject var state: LearningWorkflowState
+    @State private var stagesExpanded = true
+    @State private var eventsExpanded = false
+
+    var body: some View {
+        NPSection {
+            VStack(alignment: .leading, spacing: NPSpacing.item) {
+                HStack {
+                    Label(localized("workflow.recent"), systemImage: "point.3.connected.trianglepath.dotted")
+                        .npSubheading()
+                        .accessibilityIdentifier("workflowScreen")
+                    Spacer()
+                    if state.isLoading { ProgressView() }
+                }
+
+                if !state.workflows.isEmpty {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: NPSpacing.small) {
+                            ForEach(state.workflows.prefix(20)) { workflow in
+                                Button { model.selectWorkflow(workflow.id) } label: {
+                                    workflowChip(workflow)
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityIdentifier("workflowRow.\(workflow.id)")
+                            }
+                        }
+                    }
+                }
+
+                if let detail = state.activeDetail {
+                    workflowSummary(detail.workflow)
+
+                    DisclosureGroup(localized("workflow.stages"), isExpanded: $stagesExpanded) {
+                        LazyVStack(spacing: NPSpacing.small) {
+                            ForEach(detail.tasks) { item in
+                                HStack(alignment: .top, spacing: NPSpacing.small) {
+                                    Image(systemName: workflowTaskIcon(item.task.status))
+                                        .foregroundStyle(workflowTaskColor(item.task.status))
+                                    VStack(alignment: .leading, spacing: 3) {
+                                        Text(workflowStageLabel(item.stage))
+                                            .font(.body.weight(.medium))
+                                        Text("\(localized("workflow.phase")): \(workflowStageLabel(item.phase))")
+                                            .npCaption()
+                                        if item.required {
+                                            Text(localized("workflow.required"))
+                                                .font(.caption2.weight(.semibold))
+                                                .foregroundStyle(NPColors.brand)
+                                        }
+                                    }
+                                    Spacer()
+                                    Text("\(item.task.progress.clamped(to: 0...100))%")
+                                        .font(.caption.monospacedDigit())
+                                }
+                                .padding(10)
+                                .background(NPColors.surface)
+                                .clipShape(RoundedRectangle(cornerRadius: NPRadius.small, style: .continuous))
+                                .accessibilityIdentifier("workflowStage.\(item.id)")
+                            }
+                        }
+                        .padding(.top, 8)
+                    }
+
+                    if !state.events.isEmpty {
+                        DisclosureGroup(localized("workflow.events"), isExpanded: $eventsExpanded) {
+                            LazyVStack(alignment: .leading, spacing: 8) {
+                                ForEach(eventsExpanded ? state.events : Array(state.events.suffix(4))) { event in
+                                    HStack(alignment: .top, spacing: 8) {
+                                        Circle()
+                                            .fill(event.level == "error" ? NPColors.destructive : NPColors.textTertiary)
+                                            .frame(width: 6, height: 6)
+                                            .padding(.top, 6)
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text(event.message).npCaption()
+                                            if let stage = event.stage {
+                                                Text(workflowStageLabel(stage))
+                                                    .font(.caption2)
+                                                    .foregroundStyle(NPColors.textTertiary)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            .padding(.top, 8)
+                        }
+                    }
+                } else if state.workflows.isEmpty && !state.isLoading {
+                    NPEmptyState(
+                        systemImage: "checkmark.circle",
+                        title: localized("workflow.empty.title"),
+                        message: localized("workflow.empty.message")
+                    )
+                }
+            }
+        }
+    }
+
+    private func workflowSummary(_ workflow: WorkflowRun) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                NPStatusChip(text: workflowStatusLabel(workflow.status), variant: workflowStatusVariant(workflow.status))
+                Spacer()
+                Text("\(workflow.progress.clamped(to: 0...100))%")
+                    .font(.caption.monospacedDigit())
+            }
+            ProgressView(value: Double(workflow.progress.clamped(to: 0...100)), total: 100)
+            HStack(spacing: NPSpacing.item) {
+                workflowStatusColumn("workflow.core", workflow.coreStatus)
+                workflowStatusColumn("workflow.enrichment", workflow.enrichmentStatus)
+            }
+            if let stage = workflow.currentStage {
+                Label(workflowStageLabel(stage), systemImage: "arrow.right.circle")
+                    .npCaption()
+            }
+            if workflow.status == "waiting", let waitingUntil = workflow.waitingUntil {
+                Label(localizedFormat("workflow.waiting_until", compactDateTime(waitingUntil)), systemImage: "clock")
+                    .npCaption()
+            }
+            if let error = workflow.errorMessage, !error.isEmpty {
+                Text(error)
+                    .npBody()
+                    .foregroundStyle(workflow.status == "partially_succeeded" ? NPColors.warning : NPColors.destructive)
+            }
+        }
+    }
+
+    private func workflowChip(_ workflow: WorkflowRun) -> some View {
+        let stage = workflow.currentStage ?? workflow.triggerType
+        let isSelected = state.activeDetail?.workflow.id == workflow.id
+        return VStack(alignment: .leading, spacing: 4) {
+            Text(workflowStageLabel(stage))
+                .font(.caption.weight(.semibold))
+                .lineLimit(1)
+            Text(workflowStatusLabel(workflow.status))
+                .font(.caption2)
+                .foregroundStyle(NPColors.textSecondary)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .background(isSelected ? NPColors.brand.opacity(0.14) : NPColors.surface)
+        .clipShape(RoundedRectangle(cornerRadius: NPRadius.small, style: .continuous))
+    }
+
+    private func workflowStatusColumn(_ title: String, _ status: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(localized(title)).font(.caption2).foregroundStyle(NPColors.textTertiary)
+            Text(workflowStatusLabel(status)).font(.caption.weight(.medium))
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -3601,6 +4189,9 @@ private struct LearningTab: View {
                 model.ensureFlashcardsLoaded()
             }
         }
+        .sheet(isPresented: $model.isStudyNoteGenerationPresented) {
+            StudyNoteGenerationSheet(model: model)
+        }
     }
 }
 
@@ -3663,6 +4254,31 @@ private struct LearningUnitsSection: View {
                 }
             }
             if model.selectedLearningUnitId != nil {
+                Button {
+                    if let unitId = model.selectedLearningUnitId {
+                        model.presentNoteGaps(for: unitId)
+                    }
+                } label: {
+                    Label(localized("note_gap.open"), systemImage: "lightbulb.max")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(NPSecondaryButtonStyle())
+                .accessibilityIdentifier("selectedUnitNoteGapsButton")
+
+                Button {
+                    if let unitId = model.selectedLearningUnitId {
+                        model.presentStudyNoteGeneration(for: unitId)
+                    }
+                } label: {
+                    Label(
+                        localized(model.studyNotes.isEmpty ? "note.generate" : "note.regenerate"),
+                        systemImage: "wand.and.stars"
+                    )
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(NPSecondaryButtonStyle())
+                .accessibilityIdentifier("generateStudyNoteButton")
+
                 Text(localized("notes.default_title")).npSubheading().padding(.top, 6)
                 if model.studyNotes.isEmpty {
                     Text(localized("notes.unit.empty"))
@@ -3707,6 +4323,56 @@ private struct LearningUnitsSection: View {
         } message: {
             Text(localized("merge.confirm.message"))
         }
+    }
+}
+
+private struct StudyNoteGenerationSheet: View {
+    @ObservedObject var model: NotePatchViewModel
+
+    var body: some View {
+        NavigationView {
+            Form {
+                Section(header: Text(localized("note.generation.strategy"))) {
+                    Toggle(localized("note.strategy.override"), isOn: $model.studyNoteGenerationUsesOverride)
+                    if model.studyNoteGenerationUsesOverride {
+                        Picker(localized("note.preferences.content"), selection: $model.studyNoteGenerationContentLevel) {
+                            ForEach(NoteContentEditLevel.supportedValues) { level in
+                                Text(noteContentEditLevelLabel(level)).tag(level)
+                            }
+                            if !NoteContentEditLevel.supportedValues.contains(model.studyNoteGenerationContentLevel) {
+                                Text(model.studyNoteGenerationContentLevel.rawValue).tag(model.studyNoteGenerationContentLevel)
+                            }
+                        }
+                        Picker(localized("note.preferences.layout"), selection: $model.studyNoteGenerationLayoutLevel) {
+                            ForEach(NoteLayoutEditLevel.supportedValues) { level in
+                                Text(noteLayoutEditLevelLabel(level)).tag(level)
+                            }
+                            if !NoteLayoutEditLevel.supportedValues.contains(model.studyNoteGenerationLayoutLevel) {
+                                Text(model.studyNoteGenerationLayoutLevel.rawValue).tag(model.studyNoteGenerationLayoutLevel)
+                            }
+                        }
+                    }
+                }
+                Section {
+                    Toggle(localized("note.generation.force"), isOn: $model.studyNoteGenerationForceReprocess)
+                    Text(localized("note.generation.force_help")).npCaption()
+                }
+            }
+            .navigationTitle(localized("note.generation.title"))
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button(localized("common.cancel")) { model.isStudyNoteGenerationPresented = false }
+                        .disabled(model.isStudyNoteGenerating)
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(localized("note.generate")) { model.generateStudyNote() }
+                        .disabled(model.isStudyNoteGenerating)
+                        .accessibilityIdentifier("confirmGenerateStudyNoteButton")
+                }
+            }
+        }
+        .navigationViewStyle(.stack)
     }
 }
 
@@ -5116,6 +5782,7 @@ private struct ProfileTab: View {
                 // ——— Preferences ———
                 languageSection
                 feedbackSection
+                notePreferencesSection
 
                 // ——— AI ———
                 aiSection
@@ -5395,6 +6062,68 @@ private struct ProfileTab: View {
                         .disabled(model.isAIModelsLoading)
                     }
                 }
+            }
+        }
+    }
+
+    private var notePreferencesSection: some View {
+        NPSection {
+            VStack(alignment: .leading, spacing: 14) {
+                Label(localized("note.preferences.title"), systemImage: "note.text.badge.gearshape")
+                    .npSubheading()
+
+                Picker(localized("note.preferences.content"), selection: $model.notePreferenceDraftContent) {
+                    ForEach(NoteContentEditLevel.supportedValues) { level in
+                        Text(noteContentEditLevelLabel(level)).tag(level)
+                    }
+                    if !NoteContentEditLevel.supportedValues.contains(model.notePreferenceDraftContent) {
+                        Text(model.notePreferenceDraftContent.rawValue).tag(model.notePreferenceDraftContent)
+                    }
+                }
+                .pickerStyle(.menu)
+                .disabled(model.isNotePreferenceUpdating)
+                .accessibilityIdentifier("noteContentPreferencePicker")
+                Text(noteContentEditLevelHelp(model.notePreferenceDraftContent)).npCaption()
+
+                Divider()
+
+                Picker(localized("note.preferences.layout"), selection: $model.notePreferenceDraftLayout) {
+                    ForEach(NoteLayoutEditLevel.supportedValues) { level in
+                        Text(noteLayoutEditLevelLabel(level)).tag(level)
+                    }
+                    if !NoteLayoutEditLevel.supportedValues.contains(model.notePreferenceDraftLayout) {
+                        Text(model.notePreferenceDraftLayout.rawValue).tag(model.notePreferenceDraftLayout)
+                    }
+                }
+                .pickerStyle(.menu)
+                .disabled(model.isNotePreferenceUpdating)
+                .accessibilityIdentifier("noteLayoutPreferencePicker")
+                Text(noteLayoutEditLevelHelp(model.notePreferenceDraftLayout)).npCaption()
+
+                Divider()
+
+                Stepper(
+                    localizedFormat("note.preferences.history_limit", String(model.notePreferenceDraftHistoryLimit)),
+                    value: $model.notePreferenceDraftHistoryLimit,
+                    in: 0...100
+                )
+                .disabled(model.isNotePreferenceUpdating)
+                .accessibilityIdentifier("noteHistoryLimitStepper")
+                Text(localized("note.preferences.history_help")).npCaption()
+
+                Button {
+                    model.saveNotePreferences()
+                } label: {
+                    if model.isNotePreferenceUpdating {
+                        ProgressView().frame(maxWidth: .infinity)
+                    } else {
+                        Label(localized("common.save"), systemImage: "checkmark")
+                            .frame(maxWidth: .infinity)
+                    }
+                }
+                .buttonStyle(NPPrimaryButtonStyle())
+                .disabled(!model.isNotePreferenceDirty || model.isNotePreferenceUpdating)
+                .accessibilityIdentifier("saveNotePreferencesButton")
             }
         }
     }
@@ -6189,6 +6918,83 @@ private func taskStatusChipVariant(_ task: TaskItem) -> NPStatusChip.NPStatusChi
         return .warning
     }
     return statusChipVariant(task.status)
+}
+
+private func workflowStatusLabel(_ status: String) -> String {
+    localized("workflow.status.\(status)") == "workflow.status.\(status)"
+        ? status.replacingOccurrences(of: "_", with: " ")
+        : localized("workflow.status.\(status)")
+}
+
+private func workflowStageLabel(_ stage: String) -> String {
+    let key = "workflow.stage.\(stage)"
+    let value = localized(key)
+    return value == key ? stage.replacingOccurrences(of: "_", with: " ") : value
+}
+
+private func workflowStatusVariant(_ status: String) -> NPStatusChip.NPStatusChipVariant {
+    switch status {
+    case "failed", "cancelled": return .destructive
+    case "succeeded": return .brand
+    case "partially_succeeded", "waiting", "waiting_upload", "queued", "running": return .warning
+    default: return .neutral
+    }
+}
+
+private func workflowTaskIcon(_ status: String) -> String {
+    switch status {
+    case "succeeded": return "checkmark.circle.fill"
+    case "failed", "cancelled": return "exclamationmark.circle.fill"
+    case "running": return "arrow.triangle.2.circlepath.circle.fill"
+    default: return "clock.fill"
+    }
+}
+
+private func workflowTaskColor(_ status: String) -> Color {
+    switch status {
+    case "succeeded": return NPColors.brand
+    case "failed", "cancelled": return NPColors.destructive
+    default: return NPColors.warning
+    }
+}
+
+private func noteContentEditLevelLabel(_ level: NoteContentEditLevel) -> String {
+    let key = "note.strategy.content.\(level.rawValue)"
+    let value = localized(key)
+    return value == key ? level.rawValue : value
+}
+
+private func noteContentEditLevelHelp(_ level: NoteContentEditLevel) -> String {
+    let key = "note.strategy.content.\(level.rawValue).help"
+    let value = localized(key)
+    return value == key ? noteContentEditLevelLabel(level) : value
+}
+
+private func noteLayoutEditLevelLabel(_ level: NoteLayoutEditLevel) -> String {
+    let key = "note.strategy.layout.\(level.rawValue)"
+    let value = localized(key)
+    return value == key ? level.rawValue : value
+}
+
+private func noteLayoutEditLevelHelp(_ level: NoteLayoutEditLevel) -> String {
+    let key = "note.strategy.layout.\(level.rawValue).help"
+    let value = localized(key)
+    return value == key ? noteLayoutEditLevelLabel(level) : value
+}
+
+private func noteGapStatusLabel(_ status: String) -> String {
+    let key = "note_gap.status.\(status)"
+    let value = localized(key)
+    return value == key ? status.replacingOccurrences(of: "_", with: " ") : value
+}
+
+private func noteGapStatusVariant(_ status: String) -> NPStatusChip.NPStatusChipVariant {
+    switch status {
+    case "accepted": return .brand
+    case "rejected", "stale": return .destructive
+    case "pending", "draft", "no_base_note": return .warning
+    default: return .neutral
+    }
 }
 
 private func statusColor(_ status: String) -> Color {

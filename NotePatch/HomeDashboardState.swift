@@ -7,6 +7,7 @@ final class HomeDashboardState: ObservableObject {
     @Published private(set) var documentCount = 0
     @Published private(set) var recentDocuments: [LearningDocumentItem] = []
     @Published private(set) var activeTask: TaskItem?
+    @Published private(set) var activeWorkflow: WorkflowRun?
     @Published private(set) var recentNotes: [StudyNoteListItem] = []
     @Published private(set) var learningUnitCount = 0
     @Published private(set) var homeworkCount = 0
@@ -30,6 +31,11 @@ final class HomeDashboardState: ObservableObject {
     func updateActiveTask(_ task: TaskItem?) {
         guard task != activeTask else { return }
         activeTask = task
+    }
+
+    func updateActiveWorkflow(_ workflow: WorkflowRun?) {
+        guard workflow != activeWorkflow else { return }
+        activeWorkflow = workflow
     }
 
     func beginSupplementaryLoad() {
@@ -64,6 +70,7 @@ final class HomeDashboardState: ObservableObject {
         documentCount = 0
         recentDocuments = []
         activeTask = nil
+        activeWorkflow = nil
         recentNotes = []
         learningUnitCount = 0
         homeworkCount = 0

@@ -146,6 +146,56 @@ func shouldClearPersistedSession(
     return currentRefreshToken == attemptedRefreshToken
 }
 
+struct NoteContentEditLevel: RawRepresentable, Codable, Equatable, Hashable, Identifiable {
+    let rawValue: String
+
+    var id: String { rawValue }
+
+    static let verbatim = Self(rawValue: "verbatim")
+    static let spelling = Self(rawValue: "spelling")
+    static let conceptual = Self(rawValue: "conceptual")
+    static let rewrite = Self(rawValue: "rewrite")
+    static let supportedValues: [Self] = [.verbatim, .spelling, .conceptual, .rewrite]
+
+    init(rawValue: String) {
+        self.rawValue = rawValue
+    }
+
+    init(from decoder: Decoder) throws {
+        self.init(rawValue: try decoder.singleValueContainer().decode(String.self))
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
+    }
+}
+
+struct NoteLayoutEditLevel: RawRepresentable, Codable, Equatable, Hashable, Identifiable {
+    let rawValue: String
+
+    var id: String { rawValue }
+
+    static let preserve = Self(rawValue: "preserve")
+    static let minor = Self(rawValue: "minor")
+    static let reorder = Self(rawValue: "reorder")
+    static let reflow = Self(rawValue: "reflow")
+    static let supportedValues: [Self] = [.preserve, .minor, .reorder, .reflow]
+
+    init(rawValue: String) {
+        self.rawValue = rawValue
+    }
+
+    init(from decoder: Decoder) throws {
+        self.init(rawValue: try decoder.singleValueContainer().decode(String.self))
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
+    }
+}
+
 struct BackendUser: Decodable, Equatable {
     let id: String
     let email: String
@@ -153,6 +203,9 @@ struct BackendUser: Decodable, Equatable {
     let isActive: Bool
     let createdAt: String
     let aiHistoryEnabled: Bool
+    let noteContentEditLevel: NoteContentEditLevel
+    let noteLayoutEditLevel: NoteLayoutEditLevel
+    let noteHistoryLimit: Int
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -161,6 +214,9 @@ struct BackendUser: Decodable, Equatable {
         case isActive = "is_active"
         case createdAt = "created_at"
         case aiHistoryEnabled = "ai_history_enabled"
+        case noteContentEditLevel = "note_content_edit_level"
+        case noteLayoutEditLevel = "note_layout_edit_level"
+        case noteHistoryLimit = "note_history_limit"
     }
 
     init(from decoder: Decoder) throws {
@@ -171,6 +227,9 @@ struct BackendUser: Decodable, Equatable {
         isActive = try container.decodeIfPresent(Bool.self, forKey: .isActive) ?? true
         createdAt = try container.decodeIfPresent(String.self, forKey: .createdAt) ?? ""
         aiHistoryEnabled = try container.decodeIfPresent(Bool.self, forKey: .aiHistoryEnabled) ?? true
+        noteContentEditLevel = try container.decodeIfPresent(NoteContentEditLevel.self, forKey: .noteContentEditLevel) ?? .conceptual
+        noteLayoutEditLevel = try container.decodeIfPresent(NoteLayoutEditLevel.self, forKey: .noteLayoutEditLevel) ?? .minor
+        noteHistoryLimit = try container.decodeIfPresent(Int.self, forKey: .noteHistoryLimit) ?? 3
     }
 }
 
@@ -364,6 +423,7 @@ struct LearningDocumentItem: Decodable, Equatable, Identifiable {
     let retentionScope: String?
     let chatConversationId: String?
     let saveToDocuments: Bool?
+    let latestWorkflowRunId: String?
     let createdAt: String
     let updatedAt: String
     let artifacts: [DocumentArtifactItem]
@@ -391,6 +451,7 @@ struct LearningDocumentItem: Decodable, Equatable, Identifiable {
         case retentionScope = "retention_scope"
         case chatConversationId = "chat_conversation_id"
         case saveToDocuments = "save_to_documents"
+        case latestWorkflowRunId = "latest_workflow_run_id"
         case createdAt = "created_at"
         case updatedAt = "updated_at"
         case artifacts
@@ -419,6 +480,7 @@ struct LearningDocumentItem: Decodable, Equatable, Identifiable {
         retentionScope: String? = nil,
         chatConversationId: String? = nil,
         saveToDocuments: Bool? = nil,
+        latestWorkflowRunId: String? = nil,
         createdAt: String = "",
         updatedAt: String = "",
         artifacts: [DocumentArtifactItem] = []
@@ -445,6 +507,7 @@ struct LearningDocumentItem: Decodable, Equatable, Identifiable {
         self.retentionScope = retentionScope
         self.chatConversationId = chatConversationId
         self.saveToDocuments = saveToDocuments
+        self.latestWorkflowRunId = latestWorkflowRunId
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.artifacts = artifacts
@@ -505,6 +568,7 @@ struct UploadSessionResponse: Decodable, Equatable {
     let tusMetadataHeader: String
     let bucket: String
     let objectKey: String
+    let workflowRunId: String?
 
     enum CodingKeys: String, CodingKey {
         case document
@@ -514,6 +578,19 @@ struct UploadSessionResponse: Decodable, Equatable {
         case tusMetadataHeader = "tus_metadata_header"
         case bucket
         case objectKey = "object_key"
+        case workflowRunId = "workflow_run_id"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        document = try container.decode(LearningDocumentItem.self, forKey: .document)
+        uploadSession = try container.decode(UploadSessionItem.self, forKey: .uploadSession)
+        tusEndpoint = try container.decode(String.self, forKey: .tusEndpoint)
+        tusMetadata = try container.decodeIfPresent([String: String].self, forKey: .tusMetadata) ?? [:]
+        tusMetadataHeader = try container.decodeIfPresent(String.self, forKey: .tusMetadataHeader) ?? ""
+        bucket = try container.decodeIfPresent(String.self, forKey: .bucket) ?? ""
+        objectKey = try container.decodeIfPresent(String.self, forKey: .objectKey) ?? ""
+        workflowRunId = try container.decodeIfPresent(String.self, forKey: .workflowRunId)
     }
 }
 
@@ -964,6 +1041,9 @@ struct StudyNoteVersion: Decodable, Equatable, Identifiable {
     let title: String
     let htmlObjectKey: String
     let jsonObjectKey: String
+    let noteIRObjectKey: String?
+    let contentEditLevel: NoteContentEditLevel
+    let layoutEditLevel: NoteLayoutEditLevel
     let highlightedHTMLObjectKey: String?
     let highlightMapObjectKey: String?
     let knowledgePointIds: [String]
@@ -976,6 +1056,7 @@ struct StudyNoteVersion: Decodable, Equatable, Identifiable {
     let metadata: [String: JSONValue]
     let createdAt: String?
     let downloadURLs: [String: String]
+    let rendering: StudyNoteRendering?
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -987,6 +1068,9 @@ struct StudyNoteVersion: Decodable, Equatable, Identifiable {
         case htmlObjectKey = "html_object_key"
         case legacyMarkdownObjectKey = "markdown_object_key"
         case jsonObjectKey = "json_object_key"
+        case noteIRObjectKey = "note_ir_object_key"
+        case contentEditLevel = "content_edit_level"
+        case layoutEditLevel = "layout_edit_level"
         case highlightedHTMLObjectKey = "highlighted_html_object_key"
         case legacyHighlightedObjectKey = "highlighted_object_key"
         case highlightMapObjectKey = "highlight_map_object_key"
@@ -1000,6 +1084,7 @@ struct StudyNoteVersion: Decodable, Equatable, Identifiable {
         case metadata
         case createdAt = "created_at"
         case downloadURLs = "download_urls"
+        case rendering
     }
 
     init(
@@ -1011,6 +1096,9 @@ struct StudyNoteVersion: Decodable, Equatable, Identifiable {
         title: String,
         htmlObjectKey: String,
         jsonObjectKey: String,
+        noteIRObjectKey: String? = nil,
+        contentEditLevel: NoteContentEditLevel = .conceptual,
+        layoutEditLevel: NoteLayoutEditLevel = .minor,
         highlightedHTMLObjectKey: String? = nil,
         highlightMapObjectKey: String? = nil,
         knowledgePointIds: [String] = [],
@@ -1022,7 +1110,8 @@ struct StudyNoteVersion: Decodable, Equatable, Identifiable {
         editSummary: String? = nil,
         metadata: [String: JSONValue] = [:],
         createdAt: String? = nil,
-        downloadURLs: [String: String] = [:]
+        downloadURLs: [String: String] = [:],
+        rendering: StudyNoteRendering? = nil
     ) {
         self.id = id
         self.workspaceId = workspaceId
@@ -1032,6 +1121,9 @@ struct StudyNoteVersion: Decodable, Equatable, Identifiable {
         self.title = title
         self.htmlObjectKey = htmlObjectKey
         self.jsonObjectKey = jsonObjectKey
+        self.noteIRObjectKey = noteIRObjectKey
+        self.contentEditLevel = contentEditLevel
+        self.layoutEditLevel = layoutEditLevel
         self.highlightedHTMLObjectKey = highlightedHTMLObjectKey
         self.highlightMapObjectKey = highlightMapObjectKey
         self.knowledgePointIds = knowledgePointIds
@@ -1044,6 +1136,7 @@ struct StudyNoteVersion: Decodable, Equatable, Identifiable {
         self.metadata = metadata
         self.createdAt = createdAt
         self.downloadURLs = downloadURLs
+        self.rendering = rendering
     }
 
     init(from decoder: Decoder) throws {
@@ -1057,7 +1150,10 @@ struct StudyNoteVersion: Decodable, Equatable, Identifiable {
         htmlObjectKey = try container.decodeIfPresent(String.self, forKey: .htmlObjectKey)
             ?? container.decodeIfPresent(String.self, forKey: .legacyMarkdownObjectKey)
             ?? ""
-        jsonObjectKey = try container.decode(String.self, forKey: .jsonObjectKey)
+        jsonObjectKey = try container.decodeIfPresent(String.self, forKey: .jsonObjectKey) ?? ""
+        noteIRObjectKey = try container.decodeIfPresent(String.self, forKey: .noteIRObjectKey)
+        contentEditLevel = try container.decodeIfPresent(NoteContentEditLevel.self, forKey: .contentEditLevel) ?? .conceptual
+        layoutEditLevel = try container.decodeIfPresent(NoteLayoutEditLevel.self, forKey: .layoutEditLevel) ?? .minor
         highlightedHTMLObjectKey = try container.decodeIfPresent(String.self, forKey: .highlightedHTMLObjectKey)
             ?? container.decodeIfPresent(String.self, forKey: .legacyHighlightedObjectKey)
         highlightMapObjectKey = try container.decodeIfPresent(String.self, forKey: .highlightMapObjectKey)
@@ -1071,6 +1167,7 @@ struct StudyNoteVersion: Decodable, Equatable, Identifiable {
         metadata = try container.decodeIfPresent([String: JSONValue].self, forKey: .metadata) ?? [:]
         createdAt = try container.decodeIfPresent(String.self, forKey: .createdAt)
         downloadURLs = try container.decodeIfPresent([String: String].self, forKey: .downloadURLs) ?? [:]
+        rendering = try container.decodeIfPresent(StudyNoteRendering.self, forKey: .rendering)
     }
 
     var preferredDownloadURL: String? {
@@ -1099,6 +1196,25 @@ struct StudyNoteVersion: Decodable, Equatable, Identifiable {
         case "skill": return localized("note.origin.generated")
         default: return versionNo > 1 ? localized("note.origin.revised") : localized("note.origin.generated")
         }
+    }
+}
+
+struct StudyNoteRendering: Decodable, Equatable {
+    let themeId: String
+    let cssURL: String?
+    let wrapperClass: String
+
+    enum CodingKeys: String, CodingKey {
+        case themeId = "theme_id"
+        case cssURL = "css_url"
+        case wrapperClass = "wrapper_class"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        themeId = try container.decodeIfPresent(String.self, forKey: .themeId) ?? "notepatch-paper-v1"
+        cssURL = try container.decodeIfPresent(String.self, forKey: .cssURL)
+        wrapperClass = try container.decodeIfPresent(String.self, forKey: .wrapperClass) ?? "np-note-theme"
     }
 }
 
@@ -1295,9 +1411,14 @@ struct LearningMetadata: Equatable {
     var subject = ""
     var gradeLevel = ""
     var topic = ""
+    var autoGroupLearningUnit = true
+    var noteSetId: String?
+    var pageIndex: Int?
+    var noteContentEditLevel: NoteContentEditLevel?
+    var noteLayoutEditLevel: NoteLayoutEditLevel?
 
-    var payload: [String: String] {
-        var values: [String: String] = [:]
+    var topLevelPayload: [String: Any] {
+        var values: [String: Any] = ["auto_group_learning_unit": autoGroupLearningUnit]
         if !learningUnitId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             values["learning_unit_id"] = learningUnitId.trimmingCharacters(in: .whitespacesAndNewlines)
         } else if !learningUnitTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -1309,7 +1430,17 @@ struct LearningMetadata: Equatable {
                 values[key] = trimmed
             }
         }
+        if let noteSetId, !noteSetId.isEmpty { values["note_set_id"] = noteSetId }
+        if let pageIndex { values["page_index"] = pageIndex }
+        if let noteContentEditLevel { values["note_content_edit_level"] = noteContentEditLevel.rawValue }
+        if let noteLayoutEditLevel { values["note_layout_edit_level"] = noteLayoutEditLevel.rawValue }
         return values
+    }
+
+    var payload: [String: String] {
+        topLevelPayload.reduce(into: [:]) { result, pair in
+            if let value = pair.value as? String { result[pair.key] = value }
+        }
     }
 }
 
@@ -1717,6 +1848,9 @@ struct SavedSession: Equatable {
     let fullName: String?
     let selectedWorkspaceId: String?
     let aiHistoryEnabled: Bool
+    var noteContentEditLevel: NoteContentEditLevel = .conceptual
+    var noteLayoutEditLevel: NoteLayoutEditLevel = .minor
+    var noteHistoryLimit: Int = 3
 
     func withTokenResponse(_ tokenResponse: TokenResponse) -> SavedSession {
         SavedSession(
@@ -1729,7 +1863,10 @@ struct SavedSession: Equatable {
             email: tokenResponse.user.email,
             fullName: tokenResponse.user.fullName,
             selectedWorkspaceId: selectedWorkspaceId,
-            aiHistoryEnabled: tokenResponse.user.aiHistoryEnabled
+            aiHistoryEnabled: tokenResponse.user.aiHistoryEnabled,
+            noteContentEditLevel: tokenResponse.user.noteContentEditLevel,
+            noteLayoutEditLevel: tokenResponse.user.noteLayoutEditLevel,
+            noteHistoryLimit: tokenResponse.user.noteHistoryLimit
         )
     }
 
@@ -1744,7 +1881,10 @@ struct SavedSession: Equatable {
             email: email,
             fullName: fullName,
             selectedWorkspaceId: selectedWorkspaceId,
-            aiHistoryEnabled: enabled
+            aiHistoryEnabled: enabled,
+            noteContentEditLevel: noteContentEditLevel,
+            noteLayoutEditLevel: noteLayoutEditLevel,
+            noteHistoryLimit: noteHistoryLimit
         )
     }
 
@@ -1759,7 +1899,10 @@ struct SavedSession: Equatable {
             email: user.email,
             fullName: user.fullName,
             selectedWorkspaceId: selectedWorkspaceId,
-            aiHistoryEnabled: user.aiHistoryEnabled
+            aiHistoryEnabled: user.aiHistoryEnabled,
+            noteContentEditLevel: user.noteContentEditLevel,
+            noteLayoutEditLevel: user.noteLayoutEditLevel,
+            noteHistoryLimit: user.noteHistoryLimit
         )
     }
 
@@ -1774,8 +1917,23 @@ struct SavedSession: Equatable {
             email: profile.email,
             fullName: profile.name,
             selectedWorkspaceId: selectedWorkspaceId,
-            aiHistoryEnabled: aiHistoryEnabled
+            aiHistoryEnabled: aiHistoryEnabled,
+            noteContentEditLevel: noteContentEditLevel,
+            noteLayoutEditLevel: noteLayoutEditLevel,
+            noteHistoryLimit: noteHistoryLimit
         )
+    }
+
+    func withNotePreferences(
+        content: NoteContentEditLevel,
+        layout: NoteLayoutEditLevel,
+        historyLimit: Int
+    ) -> SavedSession {
+        var updated = self
+        updated.noteContentEditLevel = content
+        updated.noteLayoutEditLevel = layout
+        updated.noteHistoryLimit = historyLimit
+        return updated
     }
 }
 

@@ -50,6 +50,10 @@ func appActivityPresentation(
     return .indeterminate(label)
 }
 
+func appActivityTopOffset(reportedSafeAreaTop: CGFloat, windowSafeAreaTop: CGFloat) -> CGFloat {
+    max(0, max(reportedSafeAreaTop, windowSafeAreaTop)) + 2
+}
+
 func appFeedbackBottomOffset(
     containerHeight: CGFloat,
     bottomBarFrame: CGRect,
@@ -161,14 +165,32 @@ struct AppFeedbackOverlay: View {
 
     @State private var toastFrame: CGRect = .null
 
+    private var isBusyUITestFixture: Bool {
+        ProcessInfo.processInfo.arguments.contains("-NotePatchUITestFeedbackBusy")
+    }
+
+    private var uploadErrorUITestFixture: Bool {
+        ProcessInfo.processInfo.arguments.contains("-NotePatchUITestFeedbackUploadError")
+    }
+
+    private var activityTopOffset: CGFloat {
+        appActivityTopOffset(
+            reportedSafeAreaTop: safeAreaInsets.top,
+            windowSafeAreaTop: feedbackWindowSafeAreaInsets().top
+        )
+    }
+
     private var isBusy: Bool {
-        model.isBusy || model.isConversationMutating || model.isAIPreferenceUpdating ||
+        isBusyUITestFixture || model.isBusy || model.isConversationMutating || model.isAIPreferenceUpdating ||
             model.isHomeworkLoading || model.isStudyNoteSaving || profileState.isSaving ||
             profileState.isAvatarUploading
     }
 
     private var item: AppFeedbackItem? {
         guard model.isGlobalFeedbackEnabled else { return nil }
+        if uploadErrorUITestFixture, model.errorMessage == nil {
+            return AppFeedbackItem(kind: .error, text: "Upload failed")
+        }
         return appFeedbackItem(
             statusMessage: model.statusMessage,
             errorMessage: model.errorMessage,
@@ -187,12 +209,15 @@ struct AppFeedbackOverlay: View {
 
     var body: some View {
         ZStack(alignment: .topLeading) {
-            AppActivityBar(presentation: activity)
-                .padding(.top, safeAreaInsets.top)
-                .frame(maxHeight: .infinity, alignment: .top)
+            AppActivityLayer(
+                presentation: activity,
+                topOffset: activityTopOffset,
+                containerWidth: containerSize.width
+            )
                 .allowsHitTesting(false)
+                .zIndex(3)
 
-            if presentation.isVisible, let item {
+            if let item {
                 AppFeedbackToast(item: item, isPinned: presentation.isPinned) {
                     presentation.pin()
                 }
@@ -249,6 +274,24 @@ struct AppFeedbackOverlay: View {
             return
         }
         presentation.present(identity: item.id, onDismiss: model.dismissGlobalFeedback)
+    }
+}
+
+private struct AppActivityLayer: View {
+    let presentation: AppActivityPresentation
+    let topOffset: CGFloat
+    let containerWidth: CGFloat
+
+    var body: some View {
+        AppActivityBar(presentation: presentation)
+            .frame(width: max(0, containerWidth))
+            .frame(height: 3)
+            .clipped()
+            .position(
+                x: max(0, containerWidth) / 2,
+                y: topOffset + 1.5
+            )
+            .accessibilityHidden(presentation == .hidden)
     }
 }
 
@@ -354,6 +397,14 @@ private struct AppIndeterminateProgressBar: View {
             }
         }
     }
+}
+
+private func feedbackWindowSafeAreaInsets() -> UIEdgeInsets {
+    let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+    let windows = scenes.flatMap(\.windows)
+    return windows.first(where: \.isKeyWindow)?.safeAreaInsets
+        ?? windows.first(where: { !$0.isHidden })?.safeAreaInsets
+        ?? .zero
 }
 
 private struct AppInteractionTapObserver: UIViewRepresentable {

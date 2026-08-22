@@ -18,14 +18,37 @@ final class TusUploader {
         fileURL: URL,
         endpoint: String,
         metadataHeader: String,
+        existingUploadURL: String? = nil,
+        onUploadCreated: ((String) async -> Void)? = nil,
         onProgress: @escaping (Int64, Int64) async -> Void
     ) async throws -> TusUploadResult {
         guard FileManager.default.fileExists(atPath: fileURL.path) else {
             throw LearningBackendError(localizedKey: "error.upload.file_missing")
         }
         let sizeBytes = try fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize.map(Int64.init) ?? 0
-        let uploadURL = try await createUpload(endpoint: endpoint, sizeBytes: sizeBytes, metadataHeader: metadataHeader)
-        try await uploadChunks(fileURL: fileURL, uploadURL: uploadURL, totalBytes: sizeBytes, onProgress: onProgress)
+        let uploadURL: String
+        if let existingUploadURL, !existingUploadURL.isEmpty {
+            uploadURL = existingUploadURL
+        } else {
+            uploadURL = try await createUpload(endpoint: endpoint, sizeBytes: sizeBytes, metadataHeader: metadataHeader)
+            await onUploadCreated?(uploadURL)
+        }
+        let initialOffset = try await uploadOffset(uploadURL: uploadURL, expectedLength: sizeBytes)
+        await onProgress(initialOffset, sizeBytes)
+        let uploadedOffset = try await uploadChunks(
+            fileURL: fileURL,
+            uploadURL: uploadURL,
+            totalBytes: sizeBytes,
+            initialOffset: initialOffset,
+            onProgress: onProgress
+        )
+        let verifiedOffset = try await uploadOffset(uploadURL: uploadURL, expectedLength: sizeBytes)
+        guard uploadedOffset == sizeBytes, verifiedOffset == sizeBytes else {
+            throw LearningBackendError(
+                localizedKey: "error.tus.incomplete",
+                arguments: [String(verifiedOffset), String(sizeBytes)]
+            )
+        }
         return TusUploadResult(uploadURL: uploadURL, uploadId: Self.extractTusUploadId(uploadURL))
     }
 
@@ -54,27 +77,34 @@ final class TusUploader {
         fileURL: URL,
         uploadURL: String,
         totalBytes: Int64,
+        initialOffset: Int64,
         onProgress: @escaping (Int64, Int64) async -> Void
-    ) async throws {
+    ) async throws -> Int64 {
         let handle = try FileHandle(forReadingFrom: fileURL)
         defer {
             try? handle.close()
         }
 
-        var offset: Int64 = 0
+        var offset = initialOffset
         while offset < totalBytes {
             try handle.seek(toOffset: UInt64(offset))
             let remaining = totalBytes - offset
             let size = min(Self.chunkSize, Int(remaining))
             guard let chunk = try handle.read(upToCount: size), !chunk.isEmpty else {
-                break
+                throw LearningBackendError(localizedKey: "error.tus.file_read_incomplete")
             }
-            offset = try await patchWithRetry(uploadURL: uploadURL, offset: offset, chunk: chunk)
+            offset = try await patchWithRetry(
+                uploadURL: uploadURL,
+                offset: offset,
+                chunk: chunk,
+                totalBytes: totalBytes
+            )
             await onProgress(offset, totalBytes)
         }
+        return offset
     }
 
-    private func patchWithRetry(uploadURL: String, offset: Int64, chunk: Data) async throws -> Int64 {
+    private func patchWithRetry(uploadURL: String, offset: Int64, chunk: Data, totalBytes: Int64) async throws -> Int64 {
         let retryDelays: [UInt64] = [0, 1_000_000_000, 3_000_000_000, 5_000_000_000]
         var lastError: Error?
         for delay in retryDelays {
@@ -85,6 +115,17 @@ final class TusUploader {
                 return try await patchChunk(uploadURL: uploadURL, offset: offset, chunk: chunk)
             } catch {
                 lastError = error
+                if let serverOffset = try? await uploadOffset(uploadURL: uploadURL, expectedLength: totalBytes) {
+                    if serverOffset == offset + Int64(chunk.count) {
+                        return serverOffset
+                    }
+                    if serverOffset != offset {
+                        throw LearningBackendError(
+                            localizedKey: "error.tus.offset_mismatch",
+                            arguments: [String(serverOffset), String(offset)]
+                        )
+                    }
+                }
             }
         }
         throw LearningBackendError(
@@ -92,6 +133,34 @@ final class TusUploader {
             arguments: [lastError.map(friendlyError) ?? localized("common.unknown")],
             cause: lastError
         )
+    }
+
+    private func uploadOffset(uploadURL: String, expectedLength: Int64) async throws -> Int64 {
+        guard let url = URL(string: uploadURL) else {
+            throw LearningBackendError(localizedKey: "error.server.invalid_address")
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "HEAD"
+        request.timeoutInterval = 30
+        request.setValue(Self.resumableVersion, forHTTPHeaderField: "Tus-Resumable")
+        let (data, response) = try await session.data(for: request)
+        try validate(response: response, data: data)
+        guard let http = response as? HTTPURLResponse,
+              let offsetText = http.value(forHTTPHeaderField: "Upload-Offset"),
+              let offset = Int64(offsetText),
+              offset >= 0,
+              offset <= expectedLength else {
+            throw LearningBackendError(localizedKey: "error.tus.offset_missing")
+        }
+        if let lengthText = http.value(forHTTPHeaderField: "Upload-Length"),
+           let length = Int64(lengthText),
+           length != expectedLength {
+            throw LearningBackendError(
+                localizedKey: "error.tus.length_mismatch",
+                arguments: [String(length), String(expectedLength)]
+            )
+        }
+        return offset
     }
 
     private func patchChunk(uploadURL: String, offset: Int64, chunk: Data) async throws -> Int64 {
@@ -148,26 +217,10 @@ final class TusUploader {
             throw LearningBackendError(localizedKey: "error.tus.location_invalid")
         }
         if location.hasPrefix("http://") || location.hasPrefix("https://") {
-            guard let absolute = URL(string: location),
-                  let locationComponents = URLComponents(url: absolute, resolvingAgainstBaseURL: false) else {
+            guard URL(string: location) != nil else {
                 throw LearningBackendError(localizedKey: "error.tus.location_invalid")
             }
-            if absolute.host?.lowercased() == endpointURL.host?.lowercased() {
-                return try resolveSameOriginLocation(
-                    endpointURL: endpointURL,
-                    locationComponents: locationComponents
-                )
-            }
-            return absolute.absoluteString
-        }
-        if location.hasPrefix("/") {
-            guard let locationComponents = URLComponents(string: location) else {
-                throw LearningBackendError(localizedKey: "error.tus.location_invalid")
-            }
-            return try resolveSameOriginLocation(
-                endpointURL: endpointURL,
-                locationComponents: locationComponents
-            )
+            return location
         }
         guard let resolved = URL(string: location, relativeTo: endpointURL)?.absoluteURL else {
             throw LearningBackendError(localizedKey: "error.tus.location_invalid")
@@ -175,41 +228,10 @@ final class TusUploader {
         return resolved.absoluteString
     }
 
-    private static func resolveSameOriginLocation(
-        endpointURL: URL,
-        locationComponents: URLComponents
-    ) throws -> String {
-        guard var components = URLComponents(url: endpointURL, resolvingAgainstBaseURL: false) else {
-            throw LearningBackendError(localizedKey: "error.tus.location_invalid")
-        }
-        let endpointPath = components.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        let locationPath = locationComponents.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        let endpointSegments = endpointPath.split(separator: "/").map(String.init)
-        let locationSegments = locationPath.split(separator: "/").map(String.init)
-
-        if locationSegments.starts(with: endpointSegments) {
-            components.path = "/\(locationPath)"
-        } else if let filesIndex = endpointSegments.lastIndex(of: "files"),
-                  locationSegments.first == "files" {
-            let proxyPrefix = endpointSegments[..<filesIndex]
-            components.path = "/\((Array(proxyPrefix) + locationSegments).joined(separator: "/"))"
-        } else {
-            components.path = "/\(locationPath)"
-        }
-        components.query = locationComponents.query
-        components.fragment = locationComponents.fragment
-        guard let resolved = components.url else {
-            throw LearningBackendError(localizedKey: "error.tus.location_invalid")
-        }
-        return resolved.absoluteString
-    }
-
     static func extractTusUploadId(_ uploadURL: String) -> String? {
-        uploadURL.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-            .split(separator: "/")
-            .last
-            .map(String.init)
-            .flatMap { $0.isEmpty ? nil : $0 }
+        guard let url = URL(string: uploadURL) else { return nil }
+        let value = url.lastPathComponent
+        return value.isEmpty ? nil : value
     }
 
     private static func validate(response: URLResponse, data: Data) throws {
