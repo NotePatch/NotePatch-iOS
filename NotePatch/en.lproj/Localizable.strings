@@ -386,6 +386,11 @@
 "note.editor.heading" = "Heading";
 "note.editor.bullet_list" = "Bulleted list";
 "note.editor.numbered_list" = "Numbered list";
+"note.editor.font_size.decrease" = "Decrease font size";
+"note.editor.font_size.decrease.short" = "A−";
+"note.editor.font_size.current" = "Font size %@";
+"note.editor.font_size.increase" = "Increase font size";
+"note.editor.font_size.increase.short" = "A+";
 "note.generation.noKnowledge.title" = "No knowledge yet";
 "note.generation.noKnowledge.message" = "Process courseware, notes, or exam documents for this unit first.";
 "note.generation.generating.title" = "Organizing notes";

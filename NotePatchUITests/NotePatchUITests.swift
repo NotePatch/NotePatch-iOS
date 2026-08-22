@@ -652,6 +652,19 @@ final class NotePatchUITests: XCTestCase {
         XCTAssertTrue(app.textFields["studyNoteEditorTitle"].waitForExistence(timeout: 3))
         XCTAssertTrue(app.descendants(matching: .any)["studyNoteEditorHTML"].exists)
         XCTAssertTrue(app.textFields["studyNoteEditorSummary"].exists)
+        let decreaseFontSize = app.buttons["studyNoteEditorFontSizeDecrease"]
+        let fontSizeMenu = app.buttons["studyNoteEditorFontSizeMenu"]
+        let increaseFontSize = app.buttons["studyNoteEditorFontSizeIncrease"]
+        XCTAssertTrue(decreaseFontSize.waitForExistence(timeout: 3))
+        XCTAssertTrue(fontSizeMenu.exists)
+        XCTAssertTrue(increaseFontSize.exists)
+        assertMinimumHitSize(decreaseFontSize)
+        assertMinimumHitSize(fontSizeMenu)
+        assertMinimumHitSize(increaseFontSize)
+        let previousFontSizeLabel = fontSizeMenu.label
+        XCTAssertTrue(increaseFontSize.isEnabled)
+        increaseFontSize.tap()
+        XCTAssertNotEqual(fontSizeMenu.label, previousFontSizeLabel)
         app.buttons["取消"].tap()
     }
 

@@ -368,6 +368,9 @@ type UploadSessionResponse = {
     retention_scope: "workspace" | "conversation";
     chat_conversation_id: string | null;
     save_to_documents: boolean;
+    ai_image_name: string | null;
+    ai_image_naming_status: "waiting_upload" | "queued" | "running" | "succeeded" | "failed" | null;
+    ai_image_naming_task_id: string | null;
     bucket: string;
     object_key: string;
   };
@@ -460,6 +463,10 @@ tusd 也会通过 webhook 自动完成上传；前端主动调用 `complete-uplo
 `complete-upload`，应让 tus SDK 重新上传或恢复该 URL。
 
 上传成功后，重新读取 document 详情或列表。`complete-upload` 返回最新 `Document`：显式学习类型在 `AUTO_LEARNING_PIPELINE=true` 时会自动排入处理队列；`chat_attachment` 和未自动处理的 `other` 通常直接为 `ready`。若客户端需要取得自动任务 ID，可在完成上传后立即调用一次 `process`，后端会复用同文档仍在 queued/running 的处理任务；已经 `ready` 的文档不要无条件再次调用，除非用户明确要求重处理。
+
+图片完成上传后还会异步创建 `name_image` AI 任务。它固定使用部署级 `AI_IMAGE_NAMING_MODEL=openai/gpt-5.6-luna` 和 `minimal` 思考强度，不跟随用户选择的聊天模型。客户端可以立即显示上传文件名，并根据 `ai_image_naming_task_id` 轮询现有 task/events；`ai_image_naming_status=succeeded` 后改为展示 `ai_image_name`。用户在 upload-session 传入的 `title` 永远不会被 AI 覆盖；未传标题时，成功生成的名称会同时成为 document `title`。命名失败不影响图片上传、聊天或 OCR。
+
+学习资料图片的命名输入严格使用 DocTr `deskewed_image`；缺失时后端自动补跑 DocTr，绝不把原始文档图发给命名模型。`chat_attachment` 不属于文档 Skill，命名和聊天都继续使用用户原图。图片命名只写 Document metadata，不触发知识库，也不会把任何原图或矫正图插入电子笔记。
 
 ## Documents
 
@@ -1014,9 +1021,11 @@ POST /api/v1/workspaces/{workspace_id}/learning-units/{unit_id}/notes/{latest_ve
 GET  /api/v1/workspaces/{workspace_id}/learning-units/{unit_id}/flashcard-decks/latest
 ```
 
-优先在 sandboxed WebView 加载 `download_urls.rendered_html`；它会套用版本化 CSS，并可能包含服务端签名渲染的低置信原稿裁剪。不要自行执行 fragment 中的脚本或外部资源。手工编辑创建新版本；高亮只更新最新版本。历史超限删除是异步的，UI 不应假设版本号连续。
+优先在 sandboxed WebView 加载 `download_urls.rendered_html`；它会套用版本化 CSS，但不会自动嵌入、裁剪或复制用户上传的原图/DocTr 矫正图。不要自行执行 fragment 中的脚本或外部资源。手工编辑创建新版本；高亮只更新最新版本。历史超限删除是异步的，UI 不应假设版本号连续。
 
-图片 note 同时使用 OCR 和原图：OCR 是文字基线，原图用于确认代码、公式、圈选/箭头及布局。模型不支持多模态时会 OCR-only 完成。课件知识库只能作为概念纠错证据，不会被悄悄写入笔记；缺失内容通过 gap UI 由用户确认。
+图片 note 同时使用 OCR 和 DocTr 矫正图：OCR 是文字事实基线，`deskewed_image` 用于确认代码、公式、圈选/箭头及布局。后端不会把原始上传图作为文档 Skill 的 `image_url`；矫正 artifact 缺失时会自动补跑 DocTr，失败则重试且不会偷偷回退原图。只有模型明确不支持多模态时才会 OCR-only 完成。课件知识库只能作为概念纠错证据，不会被悄悄写入笔记；缺失内容通过 gap UI 由用户确认。
+
+前端无需新增参数或调用 DocTr。可在 workflow/task events 中展示 `ai_visual_deskewed_reused`、`ai_visual_deskewed_regeneration_started`、`ai_visual_deskewed_regenerated` 和 `ai_visual_deskewed_original_missing` 的通用进度或错误摘要。普通 AI 聊天附件不属于文档 Skill，仍按用户原图发送和显示。
 
 ### Workflow Tracking
 

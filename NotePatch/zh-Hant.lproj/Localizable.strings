@@ -386,6 +386,11 @@
 "note.editor.heading" = "標題";
 "note.editor.bullet_list" = "項目符號清單";
 "note.editor.numbered_list" = "編號清單";
+"note.editor.font_size.decrease" = "縮小字號";
+"note.editor.font_size.decrease.short" = "A−";
+"note.editor.font_size.current" = "目前字號 %@";
+"note.editor.font_size.increase" = "放大字號";
+"note.editor.font_size.increase.short" = "A+";
 "note.generation.noKnowledge.title" = "暫無知識內容";
 "note.generation.noKnowledge.message" = "請先處理該單元的課件、筆記或試卷文件。";
 "note.generation.generating.title" = "正在整理筆記";

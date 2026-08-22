@@ -386,6 +386,11 @@
 "note.editor.heading" = "标题";
 "note.editor.bullet_list" = "无序列表";
 "note.editor.numbered_list" = "有序列表";
+"note.editor.font_size.decrease" = "减小字号";
+"note.editor.font_size.decrease.short" = "A−";
+"note.editor.font_size.current" = "当前字号 %@";
+"note.editor.font_size.increase" = "增大字号";
+"note.editor.font_size.increase.short" = "A+";
 "note.generation.noKnowledge.title" = "暂无知识内容";
 "note.generation.noKnowledge.message" = "请先处理该单元的课件、笔记或试卷文档。";
 "note.generation.generating.title" = "正在整理笔记";

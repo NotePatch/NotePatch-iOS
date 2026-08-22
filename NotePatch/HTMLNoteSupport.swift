@@ -54,6 +54,7 @@ enum HTMLNoteCommand: Equatable {
     case heading2
     case unorderedList
     case orderedList
+    case fontSize(Int)
 
     var javascriptArguments: (command: String, value: String?) {
         switch self {
@@ -64,7 +65,27 @@ enum HTMLNoteCommand: Equatable {
         case .heading2: return ("formatBlock", "h2")
         case .unorderedList: return ("insertUnorderedList", nil)
         case .orderedList: return ("insertOrderedList", nil)
+        case let .fontSize(size): return ("fontSizePx", String(HTMLNoteFontSize.normalized(size)))
         }
+    }
+}
+
+enum HTMLNoteFontSize {
+    static let presets = [12, 14, 17, 20, 24, 28, 32, 40]
+    static let defaultSize = 17
+
+    static func normalized(_ size: Int) -> Int {
+        presets.min(by: { abs($0 - size) < abs($1 - size) }) ?? defaultSize
+    }
+
+    static func smaller(than size: Int) -> Int? {
+        let current = normalized(size)
+        return presets.last(where: { $0 < current })
+    }
+
+    static func larger(than size: Int) -> Int? {
+        let current = normalized(size)
+        return presets.first(where: { $0 > current })
     }
 }
 
@@ -116,6 +137,14 @@ enum HTMLNoteSecurity {
             img { max-width: 100%; height: auto; }
             pre, code { white-space: pre-wrap; overflow-wrap: anywhere; font-family: ui-monospace, Menlo, monospace; }
             blockquote { margin-left: 0; padding-left: 12px; border-left: 3px solid #0a9bf5; }
+            font[face="notepatch-size-12"] { font-family: inherit; font-size: 12px; }
+            font[face="notepatch-size-14"] { font-family: inherit; font-size: 14px; }
+            font[face="notepatch-size-17"] { font-family: inherit; font-size: 17px; }
+            font[face="notepatch-size-20"] { font-family: inherit; font-size: 20px; }
+            font[face="notepatch-size-24"] { font-family: inherit; font-size: 24px; }
+            font[face="notepatch-size-28"] { font-family: inherit; font-size: 28px; }
+            font[face="notepatch-size-32"] { font-family: inherit; font-size: 32px; }
+            font[face="notepatch-size-40"] { font-family: inherit; font-size: 40px; }
           </style>
         </head>
         <body contenteditable="true" spellcheck="true"></body>
@@ -137,7 +166,79 @@ enum HTMLNoteSecurity {
 
     nonisolated static let editorUserScript = #"""
     (() => {
+      const allowedFontSizes = [12, 14, 17, 20, 24, 28, 32, 40];
+      const fontSizeMarkerPrefix = 'notepatch-size-';
       const blockedTags = new Set(['SCRIPT','IFRAME','OBJECT','EMBED','LINK','META','BASE','FORM','INPUT','BUTTON','TEXTAREA','SELECT','OPTION','STYLE','SVG','MATH']);
+      let savedRange = null;
+      let formatTimer = null;
+
+      function normalizedFontSize(value) {
+        const parsed = Number.parseFloat(value);
+        if (!Number.isFinite(parsed)) return 17;
+        return allowedFontSizes.reduce((best, candidate) =>
+          Math.abs(candidate - parsed) < Math.abs(best - parsed) ? candidate : best, 17);
+      }
+
+      function isRangeInsideEditor(range) {
+        const node = range && range.commonAncestorContainer;
+        return !!node && (node === document.body || document.body.contains(node));
+      }
+
+      function captureSelection() {
+        const selection = window.getSelection();
+        if (!selection || selection.rangeCount === 0) return false;
+        const range = selection.getRangeAt(0);
+        if (!isRangeInsideEditor(range)) return false;
+        savedRange = range.cloneRange();
+        return true;
+      }
+
+      function restoreSelection() {
+        if (!savedRange || !isRangeInsideEditor(savedRange)) return false;
+        document.body.focus({preventScroll: true});
+        const selection = window.getSelection();
+        selection.removeAllRanges();
+        selection.addRange(savedRange);
+        return true;
+      }
+
+      function selectionStartElement() {
+        const range = savedRange || (() => {
+          const selection = window.getSelection();
+          return selection && selection.rangeCount ? selection.getRangeAt(0) : null;
+        })();
+        if (!range || !isRangeInsideEditor(range)) return document.body;
+        const node = range.startContainer;
+        return node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement || document.body;
+      }
+
+      function currentFontSize() {
+        const element = selectionStartElement();
+        const marker = element.closest && element.closest('font[face^="' + fontSizeMarkerPrefix + '"]');
+        if (marker) {
+          return normalizedFontSize(marker.getAttribute('face').slice(fontSizeMarkerPrefix.length));
+        }
+        return normalizedFontSize(window.getComputedStyle(element).fontSize);
+      }
+
+      function publishFormat() {
+        clearTimeout(formatTimer);
+        formatTimer = setTimeout(() => {
+          window.webkit.messageHandlers.noteFormatChanged.postMessage({fontSize: currentFontSize()});
+        }, 30);
+      }
+
+      function normalizeFontSizeMarkers(root) {
+        const markers = Array.from(root.querySelectorAll('font[face^="' + fontSizeMarkerPrefix + '"]'));
+        for (const marker of markers) {
+          const size = normalizedFontSize(marker.getAttribute('face').slice(fontSizeMarkerPrefix.length));
+          const span = document.createElement('span');
+          span.style.fontSize = size + 'px';
+          while (marker.firstChild) span.appendChild(marker.firstChild);
+          marker.replaceWith(span);
+        }
+      }
+
       function safeURL(value, isImage) {
         const candidate = (value || '').trim();
         if (!candidate) return '';
@@ -147,6 +248,7 @@ enum HTMLNoteSecurity {
       function sanitize(html) {
         const template = document.createElement('template');
         template.innerHTML = html || '';
+        normalizeFontSizeMarkers(template.content);
         const elements = Array.from(template.content.querySelectorAll('*'));
         for (const element of elements) {
           if (blockedTags.has(element.tagName)) {
@@ -180,16 +282,33 @@ enum HTMLNoteSecurity {
         }, 120);
       }
       document.addEventListener('input', publish);
+      document.addEventListener('selectionchange', () => {
+        if (captureSelection()) publishFormat();
+      });
       document.addEventListener('paste', () => setTimeout(() => {
         document.body.innerHTML = sanitize(document.body.innerHTML);
+        captureSelection();
+        publishFormat();
         publish();
       }, 0));
       window.__notePatchEditor = {
-        setHTML: html => { document.body.innerHTML = sanitize(html); },
+        setHTML: html => {
+          document.body.innerHTML = sanitize(html);
+          savedRange = null;
+          publishFormat();
+        },
         getHTML: () => sanitize(document.body.innerHTML),
         command: (command, value) => {
-          document.body.focus();
-          document.execCommand(command, false, value || null);
+          restoreSelection() || document.body.focus({preventScroll: true});
+          if (command === 'fontSizePx') {
+            const size = normalizedFontSize(value);
+            document.execCommand('styleWithCSS', false, false);
+            document.execCommand('fontName', false, fontSizeMarkerPrefix + size);
+          } else {
+            document.execCommand(command, false, value || null);
+          }
+          captureSelection();
+          publishFormat();
           publish();
         }
       };
@@ -364,10 +483,11 @@ struct SafeRenderedHTMLNoteView: UIViewRepresentable {
 struct RichHTMLNoteEditor: UIViewRepresentable {
     @Environment(\.colorScheme) private var colorScheme
     @Binding var html: String
+    @Binding var selectedFontSize: Int
     let command: HTMLNoteCommand?
     let commandToken: Int
 
-    func makeCoordinator() -> Coordinator { Coordinator(html: $html) }
+    func makeCoordinator() -> Coordinator { Coordinator(html: $html, selectedFontSize: $selectedFontSize) }
 
     func makeUIView(context: Context) -> WKWebView {
         let configuration = NoteWebViewRuntime.shared.configuration(allowsContentJavaScript: true)
@@ -379,6 +499,7 @@ struct RichHTMLNoteEditor: UIViewRepresentable {
             )
         )
         configuration.userContentController.add(context.coordinator, name: "noteHTMLChanged")
+        configuration.userContentController.add(context.coordinator, name: "noteFormatChanged")
 
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.isOpaque = false
@@ -394,6 +515,7 @@ struct RichHTMLNoteEditor: UIViewRepresentable {
     func updateUIView(_ webView: WKWebView, context: Context) {
         webView.overrideUserInterfaceStyle = colorScheme == .dark ? .dark : .light
         context.coordinator.binding = $html
+        context.coordinator.selectedFontSizeBinding = $selectedFontSize
         if context.coordinator.isReady,
            context.coordinator.lastHTML != html {
             context.coordinator.setHTML(html)
@@ -411,6 +533,7 @@ struct RichHTMLNoteEditor: UIViewRepresentable {
 
     static func dismantleUIView(_ webView: WKWebView, coordinator: Coordinator) {
         webView.configuration.userContentController.removeScriptMessageHandler(forName: "noteHTMLChanged")
+        webView.configuration.userContentController.removeScriptMessageHandler(forName: "noteFormatChanged")
         webView.navigationDelegate = nil
     }
 
@@ -422,14 +545,16 @@ struct RichHTMLNoteEditor: UIViewRepresentable {
 
     final class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
         var binding: Binding<String>
+        var selectedFontSizeBinding: Binding<Int>
         weak var webView: WKWebView?
         var pendingHTML: String
         var lastHTML: String
         var lastCommandToken = -1
         var isReady = false
 
-        init(html: Binding<String>) {
+        init(html: Binding<String>, selectedFontSize: Binding<Int>) {
             binding = html
+            selectedFontSizeBinding = selectedFontSize
             pendingHTML = html.wrappedValue
             lastHTML = html.wrappedValue
         }
@@ -448,10 +573,18 @@ struct RichHTMLNoteEditor: UIViewRepresentable {
         }
 
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
-            guard message.name == "noteHTMLChanged", let html = message.body as? String else { return }
-            lastHTML = html
-            if binding.wrappedValue != html {
-                binding.wrappedValue = html
+            if message.name == "noteHTMLChanged", let html = message.body as? String {
+                lastHTML = html
+                if binding.wrappedValue != html {
+                    binding.wrappedValue = html
+                }
+            } else if message.name == "noteFormatChanged",
+                      let state = message.body as? [String: Any],
+                      let rawSize = state["fontSize"] as? NSNumber {
+                let size = HTMLNoteFontSize.normalized(rawSize.intValue)
+                if selectedFontSizeBinding.wrappedValue != size {
+                    selectedFontSizeBinding.wrappedValue = size
+                }
             }
         }
 

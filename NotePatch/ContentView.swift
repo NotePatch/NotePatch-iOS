@@ -1533,6 +1533,7 @@ private struct NoteGapsSheet: View {
     @ObservedObject var model: NotePatchViewModel
     @State private var editorCommand: HTMLNoteCommand?
     @State private var editorCommandToken = 0
+    @State private var selectedFontSize = HTMLNoteFontSize.defaultSize
 
     var body: some View {
         NavigationView {
@@ -1682,6 +1683,7 @@ private struct NoteGapsSheet: View {
                 gapEditorToolbar
                 RichHTMLNoteEditor(
                     html: $model.noteGapDraftHTML,
+                    selectedFontSize: $selectedFontSize,
                     command: editorCommand,
                     commandToken: editorCommandToken
                 )
@@ -1721,31 +1723,13 @@ private struct NoteGapsSheet: View {
     }
 
     private var gapEditorToolbar: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 6) {
-                gapEditorButton(.undo, "arrow.uturn.backward", "note.editor.undo")
-                gapEditorButton(.redo, "arrow.uturn.forward", "note.editor.redo")
-                gapEditorButton(.bold, "bold", "note.editor.bold")
-                gapEditorButton(.italic, "italic", "note.editor.italic")
-                gapEditorButton(.heading2, "textformat.size", "note.editor.heading")
-                gapEditorButton(.unorderedList, "list.bullet", "note.editor.bullet_list")
-                gapEditorButton(.orderedList, "list.number", "note.editor.numbered_list")
-            }
-        }
-        .frame(height: 44)
-    }
-
-    private func gapEditorButton(_ command: HTMLNoteCommand, _ image: String, _ label: String) -> some View {
-        Button {
+        RichTextEditorToolbar(
+            selectedFontSize: $selectedFontSize,
+            accessibilityPrefix: "noteGapEditor"
+        ) { command in
             editorCommand = command
             editorCommandToken += 1
-        } label: {
-            Image(systemName: image).frame(width: 44, height: 44)
         }
-        .buttonStyle(.plain)
-        .background(NPColors.surface)
-        .clipShape(RoundedRectangle(cornerRadius: NPRadius.xs, style: .continuous))
-        .accessibilityLabel(localized(label))
     }
 }
 
@@ -1801,6 +1785,7 @@ private struct StudyNoteEditor: View {
     @ObservedObject var model: NotePatchViewModel
     @State private var editorCommand: HTMLNoteCommand?
     @State private var editorCommandToken = 0
+    @State private var selectedFontSize = HTMLNoteFontSize.defaultSize
 
     var body: some View {
         VStack(spacing: 0) {
@@ -1821,6 +1806,7 @@ private struct StudyNoteEditor: View {
             } else {
                 RichHTMLNoteEditor(
                     html: $model.studyNoteDraftHTML,
+                    selectedFontSize: $selectedFontSize,
                     command: editorCommand,
                     commandToken: editorCommandToken
                 )
@@ -1896,25 +1882,118 @@ private struct StudyNoteEditor: View {
     }
 
     private var richTextToolbar: some View {
+        RichTextEditorToolbar(
+            selectedFontSize: $selectedFontSize,
+            accessibilityPrefix: "studyNoteEditor"
+        ) { command in
+            editorCommand = command
+            editorCommandToken += 1
+        }
+    }
+}
+
+private struct RichTextEditorToolbar: View {
+    @Binding var selectedFontSize: Int
+    let accessibilityPrefix: String
+    let perform: (HTMLNoteCommand) -> Void
+
+    var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
-                editorButton(.undo, systemImage: "arrow.uturn.backward", label: "note.editor.undo")
-                editorButton(.redo, systemImage: "arrow.uturn.forward", label: "note.editor.redo")
+                commandButton(.undo, systemImage: "arrow.uturn.backward", label: "note.editor.undo", identifier: "undo")
+                commandButton(.redo, systemImage: "arrow.uturn.forward", label: "note.editor.redo", identifier: "redo")
                 Divider().frame(height: 24)
-                editorButton(.bold, systemImage: "bold", label: "note.editor.bold")
-                editorButton(.italic, systemImage: "italic", label: "note.editor.italic")
-                editorButton(.heading2, systemImage: "textformat.size", label: "note.editor.heading")
-                editorButton(.unorderedList, systemImage: "list.bullet", label: "note.editor.bullet_list")
-                editorButton(.orderedList, systemImage: "list.number", label: "note.editor.numbered_list")
+                fontSizeControls
+                Divider().frame(height: 24)
+                commandButton(.bold, systemImage: "bold", label: "note.editor.bold", identifier: "bold")
+                commandButton(.italic, systemImage: "italic", label: "note.editor.italic", identifier: "italic")
+                commandButton(.heading2, systemImage: "textformat.size", label: "note.editor.heading", identifier: "heading")
+                commandButton(.unorderedList, systemImage: "list.bullet", label: "note.editor.bullet_list", identifier: "unorderedList")
+                commandButton(.orderedList, systemImage: "list.number", label: "note.editor.numbered_list", identifier: "orderedList")
             }
         }
         .frame(height: 44)
     }
 
-    private func editorButton(_ command: HTMLNoteCommand, systemImage: String, label: String) -> some View {
+    private var fontSizeControls: some View {
+        HStack(spacing: 0) {
+            Button {
+                guard let size = HTMLNoteFontSize.smaller(than: selectedFontSize) else { return }
+                selectedFontSize = size
+                perform(.fontSize(size))
+            } label: {
+                Text(localized("note.editor.font_size.decrease.short"))
+                    .font(.system(size: 14, weight: .semibold))
+                    .frame(width: 44, height: 44)
+            }
+            .buttonStyle(.plain)
+            .frame(width: 44, height: 44)
+            .contentShape(Rectangle())
+            .disabled(HTMLNoteFontSize.smaller(than: selectedFontSize) == nil)
+            .accessibilityLabel(localized("note.editor.font_size.decrease"))
+            .accessibilityIdentifier("\(accessibilityPrefix)FontSizeDecrease")
+
+            Menu {
+                ForEach(HTMLNoteFontSize.presets, id: \.self) { size in
+                    Button {
+                        selectedFontSize = size
+                        perform(.fontSize(size))
+                    } label: {
+                        if selectedFontSize == size {
+                            Label(String(size), systemImage: "checkmark")
+                        } else {
+                            Text(String(size))
+                        }
+                    }
+                }
+            } label: {
+                HStack(spacing: 3) {
+                    Text(String(selectedFontSize))
+                        .font(.system(.body, design: .rounded).weight(.semibold))
+                        .monospacedDigit()
+                    Image(systemName: "chevron.down")
+                        .font(.caption2.weight(.bold))
+                }
+                .frame(minWidth: 58, minHeight: 44)
+                .contentShape(Rectangle())
+            }
+            .frame(minWidth: 58, minHeight: 44)
+            .contentShape(Rectangle())
+            .accessibilityLabel(localizedFormat("note.editor.font_size.current", String(selectedFontSize)))
+            .accessibilityIdentifier("\(accessibilityPrefix)FontSizeMenu")
+
+            Button {
+                guard let size = HTMLNoteFontSize.larger(than: selectedFontSize) else { return }
+                selectedFontSize = size
+                perform(.fontSize(size))
+            } label: {
+                Text(localized("note.editor.font_size.increase.short"))
+                    .font(.system(size: 14, weight: .semibold))
+                    .frame(width: 44, height: 44)
+            }
+            .buttonStyle(.plain)
+            .frame(width: 44, height: 44)
+            .contentShape(Rectangle())
+            .disabled(HTMLNoteFontSize.larger(than: selectedFontSize) == nil)
+            .accessibilityLabel(localized("note.editor.font_size.increase"))
+            .accessibilityIdentifier("\(accessibilityPrefix)FontSizeIncrease")
+        }
+        .background(NPColors.surface)
+        .clipShape(RoundedRectangle(cornerRadius: NPRadius.xs, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: NPRadius.xs, style: .continuous)
+                .stroke(NPColors.border.opacity(0.7), lineWidth: 1)
+        )
+    }
+
+    private func commandButton(
+        _ command: HTMLNoteCommand,
+        systemImage: String,
+        label: String,
+        identifier: String
+    ) -> some View {
         Button {
-            editorCommand = command
-            editorCommandToken += 1
+            perform(command)
         } label: {
             Image(systemName: systemImage)
                 .frame(width: 44, height: 44)
@@ -1923,6 +2002,7 @@ private struct StudyNoteEditor: View {
         .background(NPColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: NPRadius.xs, style: .continuous))
         .accessibilityLabel(localized(label))
+        .accessibilityIdentifier("\(accessibilityPrefix)\(identifier.prefix(1).uppercased())\(identifier.dropFirst())")
     }
 }
 

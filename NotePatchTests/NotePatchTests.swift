@@ -35,8 +35,8 @@ struct NotePatchTests {
         let data = try Data(contentsOf: documentURL)
         let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
 
-        #expect(data.split(separator: 0x0A, omittingEmptySubsequences: false).count == 1_385)
-        #expect(digest == "eaf17bdeaaf23f15faf8688e3ede1802f579b01cf5baf6dd6b58e03274d32e5f")
+        #expect(data.split(separator: 0x0A, omittingEmptySubsequences: false).count == 1_394)
+        #expect(digest == "31455ff3fdbb1cef53d39014d00db78e04a4b954c30e4fe922870f08ade21a22")
     }
 
     @MainActor
@@ -4137,6 +4137,68 @@ struct NotePatchTests {
         #expect(HTMLNoteSecurity.hasVisibleContent("<p>Visible</p>"))
     }
 
+    @Test func htmlNoteFontSizeUsesStablePresetsAndBounds() {
+        #expect(HTMLNoteFontSize.presets == [12, 14, 17, 20, 24, 28, 32, 40])
+        #expect(HTMLNoteFontSize.normalized(16) == 17)
+        #expect(HTMLNoteFontSize.normalized(22) == 20)
+        #expect(HTMLNoteFontSize.smaller(than: 12) == nil)
+        #expect(HTMLNoteFontSize.smaller(than: 17) == 14)
+        #expect(HTMLNoteFontSize.larger(than: 17) == 20)
+        #expect(HTMLNoteFontSize.larger(than: 40) == nil)
+        #expect(HTMLNoteCommand.fontSize(19).javascriptArguments.command == "fontSizePx")
+        #expect(HTMLNoteCommand.fontSize(19).javascriptArguments.value == "20")
+    }
+
+    @Test @MainActor func richHTMLNoteEditorRestoresSelectionAndEmitsInlineFontSize() async throws {
+        let configuration = NoteWebViewRuntime.shared.configuration(allowsContentJavaScript: true)
+        let messageSink = TestScriptMessageSink()
+        configuration.userContentController.addUserScript(
+            WKUserScript(
+                source: HTMLNoteSecurity.editorUserScript,
+                injectionTime: .atDocumentEnd,
+                forMainFrameOnly: true
+            )
+        )
+        configuration.userContentController.add(messageSink, name: "noteHTMLChanged")
+        configuration.userContentController.add(messageSink, name: "noteFormatChanged")
+        defer {
+            configuration.userContentController.removeScriptMessageHandler(forName: "noteHTMLChanged")
+            configuration.userContentController.removeScriptMessageHandler(forName: "noteFormatChanged")
+        }
+
+        let webView = WKWebView(frame: CGRect(x: 0, y: 0, width: 390, height: 500), configuration: configuration)
+        let probe = TestWebViewNavigationProbe()
+        try await probe.load(HTMLNoteSecurity.editorDocument(), in: webView)
+        _ = try await evaluateJavaScript(
+            "window.__notePatchEditor.setHTML('<p>Hello world</p>');",
+            in: webView
+        )
+        let output = try #require(try await evaluateJavaScript(
+            """
+            (() => {
+              const text = document.querySelector('p').firstChild;
+              const range = document.createRange();
+              range.setStart(text, 0);
+              range.setEnd(text, 5);
+              const selection = window.getSelection();
+              selection.removeAllRanges();
+              selection.addRange(range);
+              document.dispatchEvent(new Event('selectionchange'));
+              selection.removeAllRanges();
+              window.__notePatchEditor.command('fontSizePx', '24');
+              return window.__notePatchEditor.getHTML();
+            })();
+            """,
+            in: webView
+        ) as? String)
+
+        #expect(output.contains("font-size: 24px"))
+        #expect(output.contains("Hello"))
+        #expect(!output.lowercased().contains("<font"))
+        #expect(HTMLNoteSecurity.editorUserScript.contains("savedRange"))
+        #expect(HTMLNoteSecurity.editorUserScript.contains("noteFormatChanged"))
+    }
+
     @Test func latexMathRendererConvertsCommonNoteFormulasToMathML() throws {
         let context = try #require(JSContext())
         context.exceptionHandler = { _, exception in
@@ -4766,6 +4828,11 @@ private final class TestWebViewNavigationProbe: NSObject, WKNavigationDelegate {
         continuation?.resume(throwing: error)
         continuation = nil
     }
+}
+
+@MainActor
+private final class TestScriptMessageSink: NSObject, WKScriptMessageHandler {
+    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {}
 }
 
     @Test @MainActor func openClawChatAttachment_sendsDocumentIdOnly() async throws {
