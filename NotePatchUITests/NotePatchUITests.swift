@@ -528,6 +528,89 @@ final class NotePatchUITests: XCTestCase {
     }
 
     @MainActor
+    func testOpenClawBubbleLongPressSeparatesActionsFromTextSelection() throws {
+        let app = makeApp(["-NotePatchUITestWorkbench", "-NotePatchUITestLongChat"])
+        app.launch()
+
+        XCTAssertTrue(app.otherElements["workbenchTabs"].waitForExistence(timeout: 5))
+        app.buttons["tab.ai"].tap()
+        let messages = app.scrollViews["openClawMessages"]
+        XCTAssertTrue(messages.waitForExistence(timeout: 3))
+
+        let assistantBubble = app.descendants(matching: .any)["chatMessageBubble.ui-chat-1"]
+        XCTAssertTrue(assistantBubble.waitForExistence(timeout: 3))
+        assistantBubble.press(forDuration: 1.1)
+        XCTAssertTrue(app.buttons["复制消息"].waitForExistence(timeout: 2))
+        XCTAssertTrue(app.buttons["选择文本"].exists)
+        XCTAssertFalse(app.buttons["修改消息"].exists)
+        keepScreenshot(app, name: "chat-assistant-whole-bubble-context-menu")
+        app.tap()
+
+        let userBubble = app.descendants(matching: .any)["chatMessageBubble.ui-chat-0"]
+        XCTAssertTrue(userBubble.waitForExistence(timeout: 3))
+        XCTAssertTrue(userBubble.isHittable)
+        userBubble.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            .press(forDuration: 1.1)
+        XCTAssertTrue(app.buttons["复制消息"].waitForExistence(timeout: 2))
+        XCTAssertTrue(app.buttons["修改消息"].exists)
+        XCTAssertTrue(app.buttons["选择文本"].exists)
+        keepScreenshot(app, name: "chat-user-whole-bubble-context-menu")
+        app.buttons["选择文本"].tap()
+        XCTAssertTrue(app.otherElements["chatTextSelectionScreen"].waitForExistence(timeout: 3))
+        let userSelection = app.textViews["chatSelectableFullScreenText"]
+        XCTAssertTrue(userSelection.waitForExistence(timeout: 3))
+        XCTAssertEqual(userSelection.value as? String, "Test prompt 0")
+        userSelection.press(forDuration: 1.1)
+        let nativeCopy = app.menuItems.matching(
+            NSPredicate(format: "label IN %@", ["拷贝", "复制", "Copy"])
+        ).firstMatch
+        XCTAssertTrue(nativeCopy.waitForExistence(timeout: 2))
+        keepScreenshot(app, name: "chat-user-full-screen-text-selection")
+        app.tap()
+        app.buttons["chatTextSelectionDoneButton"].tap()
+
+        XCTAssertFalse(app.buttons["chatCopyMessageButton.ui-chat-0"].exists)
+        XCTAssertFalse(app.buttons["chatEditMessageButton.ui-chat-0"].exists)
+        keepScreenshot(app, name: "chat-bubble-long-press-actions")
+    }
+
+    @MainActor
+    func testOpenClawBubblesGrowFromTheirScreenEdgeUntilMaximumWidth() throws {
+        let app = makeApp(["-NotePatchUITestWorkbench", "-NotePatchUITestBubbleSizing"])
+        app.launch()
+
+        XCTAssertTrue(app.otherElements["workbenchTabs"].waitForExistence(timeout: 5))
+        app.buttons["tab.ai"].tap()
+        let messages = app.scrollViews["openClawMessages"]
+        XCTAssertTrue(messages.waitForExistence(timeout: 3))
+
+        let shortUser = app.descendants(matching: .any)["chatMessageBubble.ui-sizing-user-short"]
+        let shortAssistant = app.descendants(matching: .any)["chatMessageBubble.ui-sizing-assistant-short"]
+        XCTAssertTrue(shortUser.waitForExistence(timeout: 3))
+        XCTAssertTrue(shortAssistant.waitForExistence(timeout: 3))
+        XCTAssertLessThan(shortUser.frame.width, 120)
+        XCTAssertLessThan(shortAssistant.frame.width, 220)
+        XCTAssertLessThanOrEqual(app.frame.maxX - shortUser.frame.maxX, 24)
+        XCTAssertLessThanOrEqual(shortAssistant.frame.minX - app.frame.minX, 24)
+
+        let longUser = app.descendants(matching: .any)["chatMessageBubble.ui-sizing-user-long"]
+        let longAssistant = app.descendants(matching: .any)["chatMessageBubble.ui-sizing-assistant-long"]
+        for _ in 0..<4 where !longUser.exists || !longAssistant.exists {
+            messages.swipeUp()
+        }
+        XCTAssertTrue(longUser.waitForExistence(timeout: 3))
+        XCTAssertTrue(longAssistant.waitForExistence(timeout: 3))
+        XCTAssertGreaterThan(longUser.frame.width, shortUser.frame.width + 120)
+        XCTAssertGreaterThan(longAssistant.frame.width, shortAssistant.frame.width + 80)
+        XCTAssertLessThanOrEqual(longUser.frame.width, 320.5)
+        XCTAssertLessThanOrEqual(longAssistant.frame.width, 320.5)
+        XCTAssertLessThanOrEqual(app.frame.maxX - longUser.frame.maxX, 24)
+        XCTAssertLessThanOrEqual(longAssistant.frame.minX - app.frame.minX, 24)
+        XCTAssertGreaterThan(app.staticTexts["Hi"].frame.minX, shortUser.frame.minX)
+        keepScreenshot(app, name: "chat-bubble-content-sizing")
+    }
+
+    @MainActor
     func testOfflineStudyNoteCanBeReadInsideTheApp() throws {
         let app = makeApp(["-NotePatchUITestWorkbench"])
         app.launch()
@@ -679,6 +762,80 @@ final class NotePatchUITests: XCTestCase {
             evaluatedWith: app.buttons["uploadQueueThumbnail"]
         )
         wait(for: [thumbnailRemoved], timeout: 3)
+    }
+
+    @MainActor
+    func testUploadOptionsRemainCompleteOnSmallScreen() throws {
+        let app = makeApp(["-NotePatchUITestWorkbench", "-NotePatchUITestPendingImage"])
+        app.launch()
+
+        XCTAssertTrue(app.otherElements["workbenchTabs"].waitForExistence(timeout: 5))
+        app.buttons["uploadFAB"].tap()
+        assertBecomesHittable(app.buttons["closeUploadScreenButton"])
+
+        let kinds = [
+            "homework", "corrected_homework", "courseware", "note",
+            "exam", "answer_key", "rubric", "other"
+        ]
+        for kind in kinds {
+            let button = app.buttons["uploadKind.\(kind)"]
+            XCTAssertTrue(button.waitForExistence(timeout: 3), "Missing upload kind: \(kind)")
+            XCTAssertTrue(button.isHittable, "Upload kind is clipped: \(kind)")
+            XCTAssertGreaterThanOrEqual(button.frame.height, 48)
+        }
+        XCTAssertEqual(app.buttons["uploadKind.corrected_homework"].label, "已批改作业")
+
+        for identifier in ["uploadSource.camera", "uploadSource.photos", "uploadSource.file"] {
+            let button = app.buttons[identifier]
+            XCTAssertTrue(button.exists)
+            XCTAssertGreaterThanOrEqual(button.frame.width, 44)
+            XCTAssertGreaterThanOrEqual(button.frame.height, 44)
+        }
+
+        let filename = app.staticTexts["queuedUploadFilename"]
+        XCTAssertTrue(filename.waitForExistence(timeout: 3))
+        XCTAssertGreaterThanOrEqual(filename.frame.width, 120)
+        keepScreenshot(app, name: "upload-options-small-screen")
+
+        let disclosure = app.buttons["uploadLearningInfoDisclosure"]
+        if disclosure.exists {
+            disclosure.tap()
+        } else {
+            app.staticTexts["学习信息"].tap()
+        }
+        let gradeLabel = app.staticTexts["年级"]
+        let topicLabel = app.staticTexts["主题"]
+        for _ in 0..<5 where !gradeLabel.isHittable || !topicLabel.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(gradeLabel.exists)
+        XCTAssertTrue(topicLabel.exists)
+        keepScreenshot(app, name: "upload-learning-fields-small-screen")
+    }
+
+    @MainActor
+    func testLongestUploadKindFitsInAllSupportedLanguages() throws {
+        let expectations = [
+            ("simplifiedChinese", "已批改作业"),
+            ("traditionalChinese", "已批改作業"),
+            ("english", "Graded Work")
+        ]
+
+        for (language, expectedLabel) in expectations {
+            let app = makeApp(["-NotePatchUITestWorkbench"], language: language)
+            app.launch()
+            XCTAssertTrue(app.otherElements["workbenchTabs"].waitForExistence(timeout: 5))
+            app.buttons["uploadFAB"].tap()
+            assertBecomesHittable(app.buttons["closeUploadScreenButton"])
+
+            let correctedHomework = app.buttons["uploadKind.corrected_homework"]
+            XCTAssertTrue(correctedHomework.waitForExistence(timeout: 3))
+            XCTAssertEqual(correctedHomework.label, expectedLabel)
+            XCTAssertGreaterThanOrEqual(correctedHomework.frame.height, 48)
+            XCTAssertTrue(correctedHomework.isHittable)
+            keepScreenshot(app, name: "upload-options-\(language)")
+            app.terminate()
+        }
     }
 
     @MainActor
@@ -868,21 +1025,22 @@ final class NotePatchUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["98"].exists)
         XCTAssertTrue(app.staticTexts["let value = 42\nprint(value)"].exists)
         let copyCode = app.buttons["markdownCodeCopyButton"]
-        for _ in 0..<4 where !copyCode.exists || !copyCode.isHittable {
+        for _ in 0..<14 where !copyCode.exists || !copyCode.isHittable {
             messages.swipeUp()
         }
         XCTAssertTrue(copyCode.waitForExistence(timeout: 3))
         XCTAssertTrue(copyCode.isHittable)
         copyCode.tap()
         XCTAssertTrue(app.buttons["markdownCodeCopyButton"].label.contains("已复制"))
-        let selectableText = app.staticTexts["Final heading"]
-        XCTAssertTrue(selectableText.exists)
-        selectableText.press(forDuration: 1.1)
-        let selectionCopy = app.descendants(matching: .any).matching(
-            NSPredicate(format: "label == 'Copy' OR label == '复制' OR label == '拷贝'")
-        ).firstMatch
-        XCTAssertTrue(selectionCopy.waitForExistence(timeout: 2))
-        app.tap()
+        let markdownBubble = app.descendants(matching: .any)["chatMessageBubble.ui-full-markdown"]
+        XCTAssertTrue(markdownBubble.waitForExistence(timeout: 3))
+        markdownBubble.press(forDuration: 1.1)
+        XCTAssertTrue(app.buttons["选择文本"].waitForExistence(timeout: 2))
+        app.buttons["选择文本"].tap()
+        let selectionView = app.textViews["chatSelectableFullScreenText"]
+        XCTAssertTrue(selectionView.waitForExistence(timeout: 3))
+        XCTAssertTrue((selectionView.value as? String)?.contains("Final heading") == true)
+        app.buttons["chatTextSelectionDoneButton"].tap()
         keepScreenshot(app, name: "full-markdown-renderer")
     }
 
@@ -898,7 +1056,11 @@ final class NotePatchUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["包含思考摘要的最终回答。"].waitForExistence(timeout: 3))
         XCTAssertTrue(app.descendants(matching: .any)["chatReasoningDisclosure.ui-reasoning-present"].exists)
         XCTAssertFalse(app.descendants(matching: .any)["chatReasoningDisclosure.ui-reasoning-absent"].exists)
-        XCTAssertTrue(app.staticTexts["先确认问题，再组织最终答案。"].exists)
+        let reasoningText = app.staticTexts["先确认问题，再组织最终答案。"]
+        XCTAssertTrue(reasoningText.exists)
+        reasoningText.press(forDuration: 1.1)
+        XCTAssertFalse(app.buttons["修改消息"].exists)
+        app.tap()
 
         for _ in 0..<3 where !app.staticTexts["模型未提供摘要时的最终回答。"].exists {
             messages.swipeUp()

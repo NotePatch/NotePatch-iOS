@@ -1846,7 +1846,7 @@ private struct UploadDocumentScreen: View {
             .ignoresSafeArea()
         }
         .sheet(isPresented: $isShowingPhotoLibrary) {
-            PhotoLibraryPicker(cacheDirectory: model.uploadCacheDirectory, selectionLimit: 1) { result in
+            PhotoLibraryPicker(cacheDirectory: model.uploadCacheDirectory) { result in
                 isShowingPhotoLibrary = false
                 guard let result else { return }
                 switch result {
@@ -2032,38 +2032,34 @@ private struct QueuedUploadRow: View {
                     .font(.body.weight(.medium))
                     .foregroundStyle(NPColors.textPrimary)
                     .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("queuedUploadFilename")
                 Text("\(documentKindLabel(item.documentKind)) · \(formatBytes(item.file.fileSize))")
                     .npCaption()
                 queueStateView
-            }
 
-            Spacer(minLength: 0)
+                HStack(spacing: 4) {
+                    Spacer(minLength: 0)
+                    Button(action: onPreview) {
+                        Image(systemName: "eye")
+                            .frame(width: 44, height: 44)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(isBusy)
+                    .accessibilityLabel(localizedFormat("accessibility.preview_file", item.file.filename))
 
-            Button(action: onPreview) {
-                ZStack {
-                    Color.clear
-                    Image(systemName: "eye")
+                    Button(role: .destructive, action: onRemove) {
+                        Image(systemName: "trash")
+                            .frame(width: 44, height: 44)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(isBusy)
+                    .accessibilityLabel(localizedFormat("accessibility.remove_file", item.file.filename))
                 }
-                .frame(width: 44, height: 44)
             }
-            .frame(width: 44, height: 44)
-            .contentShape(Rectangle())
-            .buttonStyle(.plain)
-            .disabled(isBusy)
-            .accessibilityLabel(localizedFormat("accessibility.preview_file", item.file.filename))
-
-            Button(role: .destructive, action: onRemove) {
-                ZStack {
-                    Color.clear
-                    Image(systemName: "trash")
-                }
-                .frame(width: 44, height: 44)
-            }
-            .frame(width: 44, height: 44)
-            .contentShape(Rectangle())
-            .buttonStyle(.plain)
-            .disabled(isBusy)
-            .accessibilityLabel(localizedFormat("accessibility.remove_file", item.file.filename))
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(NPSpacing.small)
         .background(NPColors.surface)
@@ -2103,18 +2099,23 @@ private struct UploadPanel: View {
         VStack(alignment: .leading, spacing: 12) {
             SectionLabel(localized("upload.document_type"))
 
-            ChoiceGrid(minimum: 76) {
+            ChoiceGrid(minimum: 108) {
                 ForEach(["homework", "corrected_homework", "courseware", "note", "exam", "answer_key", "rubric", "other"], id: \.self) { kind in
-                    ChoiceButton(text: documentKindLabel(kind), selected: model.uploadDocumentKind == kind, enabled: !model.isBusy) {
+                    UploadKindButton(
+                        title: documentKindLabel(kind),
+                        selected: model.uploadDocumentKind == kind,
+                        enabled: !model.isBusy
+                    ) {
                         model.uploadDocumentKind = kind
                     }
+                    .accessibilityIdentifier("uploadKind.\(kind)")
                 }
             }
 
             HStack(spacing: NPSpacing.small) {
-                UploadSourceButton(title: "upload.source.camera", systemImage: "camera.fill", emphasized: true, enabled: !model.isBusy && UIImagePickerController.isSourceTypeAvailable(.camera), action: onCameraUpload)
-                UploadSourceButton(title: "upload.source.photos", systemImage: "photo.on.rectangle", emphasized: false, enabled: !model.isBusy, action: onGalleryUpload)
-                UploadSourceButton(title: "upload.source.file", systemImage: "folder", emphasized: false, enabled: !model.isBusy, action: onFileUpload)
+                UploadSourceButton(title: "upload.source.camera", systemImage: "camera.fill", accessibilityIdentifier: "uploadSource.camera", emphasized: true, enabled: !model.isBusy && UIImagePickerController.isSourceTypeAvailable(.camera), action: onCameraUpload)
+                UploadSourceButton(title: "upload.source.photos", systemImage: "photo.on.rectangle", accessibilityIdentifier: "uploadSource.photos", emphasized: false, enabled: !model.isBusy, action: onGalleryUpload)
+                UploadSourceButton(title: "upload.source.file", systemImage: "folder", accessibilityIdentifier: "uploadSource.file", emphasized: false, enabled: !model.isBusy, action: onFileUpload)
             }
 
             if let progress = model.uploadProgressPercent {
@@ -2140,20 +2141,25 @@ private struct UploadPanel: View {
                         }
                     }
                     .pickerStyle(.menu)
+                    .accessibilityIdentifier("uploadLearningUnitPicker")
                     if model.uploadLearningUnitId.isEmpty {
                         LabeledField(title: "upload.unit_title") {
                             TextField(localized("upload.unit_title_placeholder"), text: $model.uploadLearningUnitTitle)
+                                .accessibilityIdentifier("uploadLearningUnitTitleField")
                         }
                     }
                     LabeledField(title: "upload.subject") {
                         TextField(localized("upload.subject_placeholder"), text: $model.uploadSubject)
+                            .accessibilityIdentifier("uploadSubjectField")
                     }
-                    HStack(spacing: 10) {
+                    VStack(spacing: 10) {
                         LabeledField(title: "upload.grade") {
                             TextField(localized("upload.grade_placeholder"), text: $model.uploadGradeLevel)
+                                .accessibilityIdentifier("uploadGradeField")
                         }
                         LabeledField(title: "upload.topic") {
                             TextField(localized("upload.topic_placeholder"), text: $model.uploadTopic)
+                                .accessibilityIdentifier("uploadTopicField")
                         }
                     }
                 }
@@ -2161,13 +2167,47 @@ private struct UploadPanel: View {
             }
             .font(.body.weight(.medium))
             .foregroundStyle(NPColors.textPrimary)
+            .accessibilityIdentifier("uploadLearningInfoDisclosure")
         }
+    }
+}
+
+private struct UploadKindButton: View {
+    let title: String
+    let selected: Bool
+    let enabled: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 15, weight: .regular))
+                .foregroundStyle(NPColors.brandDark)
+                .multilineTextAlignment(.center)
+                .lineLimit(2)
+                .minimumScaleFactor(0.9)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, minHeight: 48)
+                .padding(.horizontal, 8)
+                .background {
+                    RoundedRectangle(cornerRadius: 24, style: .continuous)
+                        .fill(selected ? NPColors.brandLight.opacity(0.6) : NPColors.interactive)
+                }
+                .overlay {
+                    RoundedRectangle(cornerRadius: 24, style: .continuous)
+                        .stroke(selected ? NPColors.brand : NPColors.border, lineWidth: selected ? 1 : 0.5)
+                }
+        }
+        .buttonStyle(.plain)
+        .disabled(!enabled)
+        .opacity(enabled ? 1 : 0.5)
     }
 }
 
 private struct UploadSourceButton: View {
     let title: String
     let systemImage: String
+    let accessibilityIdentifier: String
     let emphasized: Bool
     let enabled: Bool
     let action: () -> Void
@@ -2178,6 +2218,7 @@ private struct UploadSourceButton: View {
         }
         .buttonStyle(UploadSourceButtonStyle(emphasized: emphasized))
         .disabled(!enabled)
+        .accessibilityIdentifier(accessibilityIdentifier)
     }
 }
 
@@ -2191,9 +2232,12 @@ private struct UploadSourceLabel: View {
                 .font(.system(size: 19, weight: .medium))
             Text(localized(title))
                 .font(.caption.weight(.medium))
+                .multilineTextAlignment(.center)
+                .lineLimit(2)
+                .minimumScaleFactor(0.85)
         }
         .frame(maxWidth: .infinity)
-        .frame(height: 62)
+        .frame(minHeight: 64)
     }
 }
 
@@ -2621,6 +2665,7 @@ private struct OpenClawChatTab: View {
     @Environment(\.workbenchBottomObstruction) private var bottomObstruction
     @State private var renamingConversation: ChatConversation?
     @State private var editingMessage: OpenClawChatMessage?
+    @State private var textSelectionMessage: OpenClawChatMessage?
     @State private var titleDraft = ""
     @State private var messageRevisionDraft = ""
     @State private var isConversationDrawerOpen = false
@@ -2762,6 +2807,7 @@ private struct OpenClawChatTab: View {
                                     OpenClawMessageBubble(
                                         message: message,
                                         onCopy: { model.copyOpenClawMessage(message) },
+                                        onSelectText: { textSelectionMessage = message },
                                         onEdit: canEdit(message) ? {
                                             messageRevisionDraft = message.content
                                             editingMessage = message
@@ -2905,6 +2951,11 @@ private struct OpenClawChatTab: View {
                     }
                 }
             )
+        }
+        .fullScreenCover(item: $textSelectionMessage) { message in
+            ChatMessageTextSelectionScreen(message: message) {
+                textSelectionMessage = nil
+            }
         }
         .alert(
             localized("chat.rename_title"),
@@ -4512,6 +4563,7 @@ private struct LearningEmptyState: View {
 private struct OpenClawMessageBubble: View {
     let message: OpenClawChatMessage
     let onCopy: () -> Void
+    let onSelectText: () -> Void
     let onEdit: (() -> Void)?
     @State private var isReasoningExpanded = true
 
@@ -4579,7 +4631,7 @@ private struct OpenClawMessageBubble: View {
                                 Text(message.reasoningContent)
                                     .font(.subheadline)
                                     .foregroundStyle(NPColors.textSecondary)
-                                    .textSelection(.enabled)
+                                    .textSelection(.disabled)
                             }
 
                             if message.reasoningUnavailable {
@@ -4595,39 +4647,51 @@ private struct OpenClawMessageBubble: View {
                             .foregroundStyle(NPColors.textSecondary)
                     }
                 }
-                switch message.status {
-                case .sending:
-                    VStack(alignment: .leading, spacing: NPSpacing.small) {
-                        SmoothStreamingText(target: message.streamingContent)
-                        if message.streamingContent.isEmpty {
-                            ProgressView(value: Double(message.progress ?? 0), total: 100)
-                        }
-                    }
-                case .stopped:
-                    VStack(alignment: .leading, spacing: NPSpacing.small) {
-                        if !message.streamingContent.isEmpty {
-                            LightweightMarkdownText(
-                                markdown: message.streamingContent,
-                                color: foregroundColor
-                            )
-                        } else if !displayedContent.isEmpty,
-                                  displayedContent != "Thinking...",
-                                  displayedContent != localized("chat.thinking") {
+                Group {
+                    if message.role == .assistant {
+                        switch message.status {
+                        case .sending:
+                            VStack(alignment: .leading, spacing: NPSpacing.small) {
+                                SmoothStreamingText(target: message.streamingContent)
+                                if message.streamingContent.isEmpty {
+                                    ProgressView(value: Double(message.progress ?? 0), total: 100)
+                                }
+                            }
+                        case .stopped:
+                            VStack(alignment: .leading, spacing: NPSpacing.small) {
+                                if !message.streamingContent.isEmpty {
+                                    LightweightMarkdownText(
+                                    markdown: message.streamingContent,
+                                    color: foregroundColor,
+                                    expandsHorizontally: false,
+                                    allowsTextSelection: false
+                                    )
+                                } else if !displayedContent.isEmpty,
+                                          displayedContent != "Thinking...",
+                                          displayedContent != localized("chat.thinking") {
+                                    LightweightMarkdownText(
+                                        markdown: displayedContent,
+                                        color: foregroundColor,
+                                        expandsHorizontally: false,
+                                        allowsTextSelection: false
+                                    )
+                                }
+                                Label(localized("chat.stopped"), systemImage: "stop.circle")
+                                    .npCaption()
+                                    .foregroundStyle(NPColors.warning)
+                            }
+                        default:
                             LightweightMarkdownText(
                                 markdown: displayedContent,
-                                color: foregroundColor
+                                color: foregroundColor,
+                                expandsHorizontally: false,
+                                allowsTextSelection: false
                             )
                         }
-                        Label(localized("chat.stopped"), systemImage: "stop.circle")
-                            .npCaption()
-                            .foregroundStyle(NPColors.warning)
-                    }
-                default:
-                    if message.role == .assistant {
-                        LightweightMarkdownText(markdown: displayedContent, color: foregroundColor)
                     } else {
                         Text(displayedContent)
                             .foregroundStyle(foregroundColor)
+                            .textSelection(.disabled)
                     }
                 }
                 if message.streamTruncated {
@@ -4671,46 +4735,40 @@ private struct OpenClawMessageBubble: View {
                         .foregroundStyle(NPColors.textSecondary)
                         .accessibilityIdentifier("chatModelLabel")
                 }
-                if message.role != .system {
-                    HStack(spacing: 2) {
-                        Spacer(minLength: 0)
-                        Button(action: onCopy) {
-                            Image(systemName: "doc.on.doc")
-                                .frame(width: 44, height: 44)
-                                .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(NPColors.textSecondary)
-                        .accessibilityLabel(localized("chat.copy.message"))
-                        .accessibilityIdentifier("chatCopyMessageButton.\(message.id)")
-
-                        if let onEdit {
-                            Button(action: onEdit) {
-                                Image(systemName: "pencil")
-                                    .frame(width: 44, height: 44)
-                                    .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
-                            .foregroundStyle(NPColors.textSecondary)
-                            .accessibilityLabel(localized("chat.revision.action"))
-                            .accessibilityIdentifier("chatEditMessageButton.\(message.id)")
-                        }
-                    }
-                    .frame(height: 32)
-                }
             }
-            .textSelection(.enabled)
             .padding(NPSpacing.card)
-            .frame(maxWidth: message.role == .system ? .infinity : 320, alignment: .leading)
+            .frame(maxWidth: message.role == .system ? .infinity : nil, alignment: .leading)
             .background(bubbleBackground)
             .clipShape(RoundedRectangle(cornerRadius: NPRadius.card, style: .continuous))
             .overlay {
                 if message.role != .user {
                     RoundedRectangle(cornerRadius: NPRadius.card, style: .continuous)
                         .stroke(NPColors.border, lineWidth: 1)
-                }
+                    }
             }
-            .accessibilityAction(named: Text(localized("chat.copy.message")), onCopy)
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("chatMessageBubble.\(message.id)")
+            .modifier(MessageContextMenuModifier(
+                enabled: message.role != .system,
+                copyTitle: localized("chat.copy.message"),
+                selectTextTitle: localized("chat.select_text.action"),
+                editTitle: onEdit == nil ? nil : localized("chat.revision.action"),
+                onCopy: onCopy,
+                onSelectText: onSelectText,
+                onEdit: onEdit
+            ))
+            .modifier(MessageBubbleAccessibilityActions(
+                copyTitle: localized("chat.copy.message"),
+                selectTextTitle: localized("chat.select_text.action"),
+                editTitle: localized("chat.revision.action"),
+                onCopy: message.role == .system ? nil : onCopy,
+                onSelectText: message.role == .system ? nil : onSelectText,
+                onEdit: message.role == .user ? onEdit : nil
+            ))
+            .frame(
+                maxWidth: message.role == .system ? .infinity : 320,
+                alignment: message.role == .user ? .trailing : .leading
+            )
             if message.role != .user {
                 Spacer(minLength: 28)
             }
@@ -4735,6 +4793,179 @@ private struct OpenClawMessageBubble: View {
         }
         return NPColors.textPrimary
     }
+
+}
+
+private struct MessageContextMenuModifier: ViewModifier {
+    let enabled: Bool
+    let copyTitle: String
+    let selectTextTitle: String
+    let editTitle: String?
+    let onCopy: () -> Void
+    let onSelectText: () -> Void
+    let onEdit: (() -> Void)?
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if enabled {
+            content.contextMenu {
+                if let editTitle, let onEdit {
+                    Button(action: onEdit) {
+                        Label(editTitle, systemImage: "pencil")
+                    }
+                }
+                Button(action: onCopy) {
+                    Label(copyTitle, systemImage: "doc.on.doc")
+                }
+                Button(action: onSelectText) {
+                    Label(selectTextTitle, systemImage: "textformat")
+                }
+                .accessibilityIdentifier("chatSelectTextAction")
+            }
+        } else {
+            content
+        }
+    }
+}
+
+private struct MessageBubbleAccessibilityActions: ViewModifier {
+    let copyTitle: String
+    let selectTextTitle: String
+    let editTitle: String
+    let onCopy: (() -> Void)?
+    let onSelectText: (() -> Void)?
+    let onEdit: (() -> Void)?
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if let onCopy {
+            if let onEdit {
+                content
+                    .accessibilityAction(named: Text(copyTitle), onCopy)
+                    .accessibilityAction(named: Text(selectTextTitle), onSelectText ?? {})
+                    .accessibilityAction(named: Text(editTitle), onEdit)
+            } else {
+                content
+                    .accessibilityAction(named: Text(copyTitle), onCopy)
+                    .accessibilityAction(named: Text(selectTextTitle), onSelectText ?? {})
+            }
+        } else {
+            content
+        }
+    }
+}
+
+private struct ChatMessageTextSelectionScreen: View {
+    let message: OpenClawChatMessage
+    let onDone: () -> Void
+
+    var body: some View {
+        NavigationView {
+            FullScreenSelectableTextView(
+                text: selectionText,
+                rendersMarkdown: message.role == .assistant
+            )
+            .background(NPColors.background)
+            .navigationTitle(localized("chat.select_text.title"))
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button(localized("common.done"), action: onDone)
+                        .accessibilityIdentifier("chatTextSelectionDoneButton")
+                }
+            }
+        }
+        .navigationViewStyle(.stack)
+        .accessibilityIdentifier("chatTextSelectionScreen")
+    }
+
+    private var selectionText: String {
+        if message.role == .assistant,
+           !message.streamingContent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           message.status == .sending || message.status == .stopped {
+            return message.streamingContent
+        }
+        return message.content
+    }
+}
+
+private struct FullScreenSelectableTextView: UIViewRepresentable {
+    let text: String
+    let rendersMarkdown: Bool
+
+    func makeUIView(context: Context) -> UITextView {
+        let textView = UITextView()
+        textView.isEditable = false
+        textView.isSelectable = true
+        textView.isScrollEnabled = true
+        textView.alwaysBounceVertical = true
+        textView.backgroundColor = .clear
+        textView.textColor = .label
+        textView.font = .preferredFont(forTextStyle: .body)
+        textView.adjustsFontForContentSizeCategory = true
+        textView.textContainerInset = UIEdgeInsets(top: 20, left: 16, bottom: 32, right: 16)
+        textView.textContainer.lineFragmentPadding = 0
+        textView.accessibilityIdentifier = "chatSelectableFullScreenText"
+        return textView
+    }
+
+    func updateUIView(_ textView: UITextView, context: Context) {
+        let attributedText = messageSelectionAttributedText(text, rendersMarkdown: rendersMarkdown)
+        guard textView.attributedText != attributedText else { return }
+        textView.attributedText = attributedText
+    }
+}
+
+private func messageSelectionAttributedText(_ text: String, rendersMarkdown: Bool) -> NSAttributedString {
+    let displayText = rendersMarkdown ? markdownSelectionDisplayText(text) : text
+    let attributed: NSMutableAttributedString
+    if rendersMarkdown,
+       let parsed = try? AttributedString(
+           markdown: displayText,
+           options: AttributedString.MarkdownParsingOptions(
+               interpretedSyntax: .inlineOnlyPreservingWhitespace,
+               failurePolicy: .returnPartiallyParsedIfPossible
+           )
+       ) {
+        attributed = NSMutableAttributedString(parsed)
+    } else {
+        attributed = NSMutableAttributedString(string: displayText)
+    }
+
+    let fullRange = NSRange(location: 0, length: attributed.length)
+    attributed.addAttribute(.foregroundColor, value: UIColor.label, range: fullRange)
+    attributed.enumerateAttribute(.font, in: fullRange) { value, range, _ in
+        if value == nil {
+            attributed.addAttribute(.font, value: UIFont.preferredFont(forTextStyle: .body), range: range)
+        }
+    }
+    return attributed
+}
+
+private func markdownSelectionDisplayText(_ markdown: String) -> String {
+    markdown
+        .components(separatedBy: .newlines)
+        .compactMap { line -> String? in
+            let leadingWhitespace = line.prefix { $0 == " " || $0 == "\t" }
+            var content = String(line.dropFirst(leadingWhitespace.count))
+            if content.hasPrefix("```") {
+                return nil
+            }
+            for level in stride(from: 6, through: 1, by: -1) {
+                let prefix = String(repeating: "#", count: level) + " "
+                if content.hasPrefix(prefix) {
+                    content.removeFirst(prefix.count)
+                    break
+                }
+            }
+            if content.hasPrefix("- ") || content.hasPrefix("* ") || content.hasPrefix("+ ") {
+                content = "• " + content.dropFirst(2)
+            } else if content.hasPrefix("> ") {
+                content = "│ " + content.dropFirst(2)
+            }
+            return String(leadingWhitespace) + content
+        }
+        .joined(separator: "\n")
 }
 
 private struct ChatProcessingStep: Identifiable {
@@ -4754,11 +4985,13 @@ private struct SmoothStreamingText: View {
             } else {
                 LightweightMarkdownText(
                     markdown: target,
-                    color: NPColors.textPrimary
+                    color: NPColors.textPrimary,
+                    expandsHorizontally: false,
+                    allowsTextSelection: false
                 )
             }
         }
-        .textSelection(.enabled)
+        .textSelection(.disabled)
         .accessibilityIdentifier("chatStreamingContent")
     }
 }
@@ -4945,7 +5178,7 @@ private struct ProfileTab: View {
             )
         }
         .sheet(isPresented: $isShowingAvatarPicker) {
-            PhotoLibraryPicker(cacheDirectory: model.uploadCacheDirectory) { result in
+            PhotoLibraryPicker(cacheDirectory: model.uploadCacheDirectory, selectionMode: .single) { result in
                 isShowingAvatarPicker = false
                 guard let result else { return }
                 switch result {
@@ -5345,6 +5578,8 @@ private struct LightweightMarkdownText: View {
     var horizontalAlignment: HorizontalAlignment = .leading
     var textAlignment: TextAlignment = .leading
     var paragraphFont: Font = .body
+    var expandsHorizontally = true
+    var allowsTextSelection = true
 
     @ViewBuilder
     var body: some View {
@@ -5366,16 +5601,21 @@ private struct LightweightMarkdownText: View {
                 }
                 .font(paragraphFont)
                 .tint(NPColors.brand)
-                .textSelection(.enabled)
+                .modifier(ConditionalTextSelectionModifier(enabled: allowsTextSelection))
                 .multilineTextAlignment(textAlignment)
-                .frame(maxWidth: .infinity, alignment: contentAlignment)
+                .frame(
+                    maxWidth: expandsHorizontally ? .infinity : nil,
+                    alignment: contentAlignment
+                )
         } else {
             LegacyMarkdownText(
                 markdown: markdown,
                 color: color,
                 horizontalAlignment: horizontalAlignment,
                 textAlignment: textAlignment,
-                paragraphFont: paragraphFont
+                paragraphFont: paragraphFont,
+                expandsHorizontally: expandsHorizontally,
+                allowsTextSelection: allowsTextSelection
             )
         }
     }
@@ -5395,6 +5635,8 @@ private struct LegacyMarkdownText: View {
     let horizontalAlignment: HorizontalAlignment
     let textAlignment: TextAlignment
     let paragraphFont: Font
+    let expandsHorizontally: Bool
+    let allowsTextSelection: Bool
     @StateObject private var renderer = MarkdownRenderState()
 
     var body: some View {
@@ -5405,21 +5647,21 @@ private struct LegacyMarkdownText: View {
                     Text(block.text)
                         .font(block.level == 1 ? .title3.weight(.semibold) : .subheadline.weight(.semibold))
                         .foregroundStyle(color)
-                        .frame(maxWidth: .infinity, alignment: contentAlignment)
+                        .frame(maxWidth: expandsHorizontally ? .infinity : nil, alignment: contentAlignment)
                 case .bullet:
                     HStack(alignment: .firstTextBaseline, spacing: 5) {
                         Text("•")
                         MarkdownInlineText(tokens: block.inlineTokens, color: color)
                     }
                     .font(paragraphFont)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .frame(maxWidth: expandsHorizontally ? .infinity : nil, alignment: .leading)
                 case .ordered:
                     HStack(alignment: .firstTextBaseline, spacing: 5) {
                         Text("\(max(1, block.level)).")
                         MarkdownInlineText(tokens: block.inlineTokens, color: color)
                     }
                     .font(paragraphFont)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .frame(maxWidth: expandsHorizontally ? .infinity : nil, alignment: .leading)
                 case .quote:
                     HStack(spacing: NPSpacing.small) {
                         RoundedRectangle(cornerRadius: 2)
@@ -5445,11 +5687,11 @@ private struct LegacyMarkdownText: View {
                 case .paragraph:
                     MarkdownInlineText(tokens: block.inlineTokens, color: color)
                         .font(paragraphFont)
-                        .frame(maxWidth: .infinity, alignment: contentAlignment)
+                        .frame(maxWidth: expandsHorizontally ? .infinity : nil, alignment: contentAlignment)
                 }
             }
         }
-        .textSelection(.enabled)
+        .modifier(ConditionalTextSelectionModifier(enabled: allowsTextSelection))
         .multilineTextAlignment(textAlignment)
         .task(id: markdown) {
             renderer.load(markdown)
@@ -5464,6 +5706,19 @@ private struct LegacyMarkdownText: View {
             return .trailing
         default:
             return .leading
+        }
+    }
+}
+
+private struct ConditionalTextSelectionModifier: ViewModifier {
+    let enabled: Bool
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if enabled {
+            content.textSelection(.enabled)
+        } else {
+            content.textSelection(.disabled)
         }
     }
 }
@@ -5714,9 +5969,11 @@ private struct LabeledField<Field: View>: View {
                 .npCaption()
             field
                 .padding(.horizontal, 11)
+                .frame(maxWidth: .infinity)
                 .frame(height: 42)
                 .npInputField()
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -6302,25 +6559,37 @@ enum ComposerTextLayout {
 
 // MARK: - Photo Library Picker
 
+enum PhotoLibrarySelectionMode {
+    case multiple
+    case single
+
+    var selectionLimit: Int {
+        switch self {
+        case .multiple: return 0
+        case .single: return 1
+        }
+    }
+}
+
 private struct PhotoLibraryPicker: UIViewControllerRepresentable {
     let cacheDirectory: URL
-    let selectionLimit: Int
+    let selectionMode: PhotoLibrarySelectionMode
     let onComplete: (Result<[LocalUploadFile], Error>?) -> Void
 
     init(
         cacheDirectory: URL,
-        selectionLimit: Int = 0,
+        selectionMode: PhotoLibrarySelectionMode = .multiple,
         onComplete: @escaping (Result<[LocalUploadFile], Error>?) -> Void
     ) {
         self.cacheDirectory = cacheDirectory
-        self.selectionLimit = selectionLimit
+        self.selectionMode = selectionMode
         self.onComplete = onComplete
     }
 
     func makeUIViewController(context: Context) -> PHPickerViewController {
         var configuration = PHPickerConfiguration(photoLibrary: .shared())
         configuration.filter = .images
-        configuration.selectionLimit = selectionLimit
+        configuration.selectionLimit = selectionMode.selectionLimit
         let picker = PHPickerViewController(configuration: configuration)
         picker.delegate = context.coordinator
         return picker

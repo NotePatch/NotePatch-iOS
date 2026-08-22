@@ -832,6 +832,8 @@
 "review.section.homework" = "Homework";
 "chat.copy.conversation" = "Copy conversation";
 "chat.copy.message" = "Copy message";
+"chat.select_text.action" = "Select text";
+"chat.select_text.title" = "Select text";
 "chat.copy.role.user" = "You";
 "chat.copy.role.assistant" = "NotePatch";
 "chat.copy.attachment" = "Attachment: %@";

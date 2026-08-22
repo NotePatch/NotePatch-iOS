@@ -4241,7 +4241,47 @@ final class NotePatchViewModel: ObservableObject {
                 )
             ]
         }
-        if ProcessInfo.processInfo.arguments.contains("-NotePatchUITestReasoningStates") {
+        if ProcessInfo.processInfo.arguments.contains("-NotePatchUITestBubbleSizing") {
+            openClawMessages = [
+                OpenClawChatMessage(
+                    id: "ui-sizing-user-short",
+                    role: .user,
+                    content: "Hi",
+                    status: .done,
+                    taskId: nil,
+                    progress: nil,
+                    events: []
+                ),
+                OpenClawChatMessage(
+                    id: "ui-sizing-assistant-short",
+                    role: .assistant,
+                    content: "OK",
+                    status: .done,
+                    taskId: nil,
+                    progress: nil,
+                    events: [],
+                    modelId: "openai/gpt-5.6-terra"
+                ),
+                OpenClawChatMessage(
+                    id: "ui-sizing-user-long",
+                    role: .user,
+                    content: "This is a deliberately long message that should grow from the screen edge toward the opposite side and wrap only after reaching the maximum bubble width.",
+                    status: .done,
+                    taskId: nil,
+                    progress: nil,
+                    events: []
+                ),
+                OpenClawChatMessage(
+                    id: "ui-sizing-assistant-long",
+                    role: .assistant,
+                    content: "A longer assistant response should expand from the leading edge and then wrap naturally when it reaches the same maximum width.",
+                    status: .done,
+                    taskId: nil,
+                    progress: nil,
+                    events: []
+                )
+            ]
+        } else if ProcessInfo.processInfo.arguments.contains("-NotePatchUITestReasoningStates") {
             openClawMessages = [
                 OpenClawChatMessage(
                     id: "ui-reasoning-present",

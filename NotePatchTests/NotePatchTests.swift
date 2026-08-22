@@ -617,6 +617,11 @@ struct NotePatchTests {
         #expect(formatBytes(2048) == "2.0 KB")
     }
 
+    @Test func photoLibrarySelectionModes_allowBatchUploadsButKeepAvatarSingle() {
+        #expect(PhotoLibrarySelectionMode.multiple.selectionLimit == 0)
+        #expect(PhotoLibrarySelectionMode.single.selectionLimit == 1)
+    }
+
     @Test @MainActor func startupLoadsOnlyDocumentsAndDefersOtherTabs() async throws {
         let suiteName = "NotePatchTests.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suiteName))

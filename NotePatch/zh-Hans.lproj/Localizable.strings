@@ -832,6 +832,8 @@
 "review.section.homework" = "作业";
 "chat.copy.conversation" = "复制整段对话";
 "chat.copy.message" = "复制消息";
+"chat.select_text.action" = "选择文本";
+"chat.select_text.title" = "选择文本";
 "chat.copy.role.user" = "你";
 "chat.copy.role.assistant" = "NotePatch";
 "chat.copy.attachment" = "附件：%@";

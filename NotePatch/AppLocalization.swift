@@ -94,7 +94,7 @@ final class AppLocalization: ObservableObject {
         "notes.section.notes", "notes.section.review", "notes.section.picker",
         "documents.section.documents", "documents.section.tasks",
         "review.section.notes", "review.section.units", "review.section.search", "review.section.homework",
-        "chat.copy.conversation", "chat.copy.message", "chat.revision.action",
+        "chat.copy.conversation", "chat.copy.message", "chat.select_text.action", "chat.select_text.title", "chat.revision.action",
         "profile.edit", "profile.edit.title", "profile.avatar.choose",
         "profile.global_feedback", "profile.global_feedback_help",
         "feedback.accessibility.keep", "feedback.accessibility.pinned", "feedback.accessibility.dismiss_outside",
