@@ -1226,10 +1226,13 @@ final class NotePatchUITests: XCTestCase {
         let messages = app.scrollViews["openClawMessages"]
         XCTAssertTrue(messages.waitForExistence(timeout: 3))
         XCTAssertTrue(app.staticTexts["包含思考摘要的最终回答。"].waitForExistence(timeout: 3))
-        XCTAssertTrue(app.descendants(matching: .any)["chatReasoningDisclosure.ui-reasoning-present"].exists)
+        let reasoningDisclosure = app.descendants(matching: .any)["chatReasoningDisclosure.ui-reasoning-present"]
+        XCTAssertTrue(reasoningDisclosure.exists)
         XCTAssertFalse(app.descendants(matching: .any)["chatReasoningDisclosure.ui-reasoning-absent"].exists)
+        XCTAssertFalse(app.staticTexts["回答完成"].exists)
+        reasoningDisclosure.tap()
         let reasoningText = app.staticTexts["先确认问题，再组织最终答案。"]
-        XCTAssertTrue(reasoningText.exists)
+        XCTAssertTrue(reasoningText.waitForExistence(timeout: 2))
         reasoningText.press(forDuration: 1.1)
         XCTAssertFalse(app.buttons["修改消息"].exists)
         app.tap()
@@ -1238,8 +1241,10 @@ final class NotePatchUITests: XCTestCase {
             messages.swipeUp()
         }
         XCTAssertTrue(app.staticTexts["模型未提供摘要时的最终回答。"].waitForExistence(timeout: 3))
-        XCTAssertTrue(app.descendants(matching: .any)["chatReasoningDisclosure.ui-reasoning-unavailable"].exists)
-        XCTAssertTrue(app.staticTexts["该模型本次没有提供思考摘要。"].exists)
+        let unavailableDisclosure = app.descendants(matching: .any)["chatReasoningDisclosure.ui-reasoning-unavailable"]
+        XCTAssertTrue(unavailableDisclosure.exists)
+        unavailableDisclosure.tap()
+        XCTAssertTrue(app.staticTexts["该模型本次没有提供思考摘要。"].waitForExistence(timeout: 2))
     }
 
     @MainActor

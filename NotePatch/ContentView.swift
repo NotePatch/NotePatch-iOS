@@ -5769,12 +5769,12 @@ private struct OpenClawMessageBubble: View {
                                     .foregroundStyle(NPColors.textSecondary)
                             }
                         }
-                        .accessibilityIdentifier("chatReasoningDisclosure.\(message.id)")
                     } label: {
                         Label(localized("chat.process_summary"), systemImage: "brain")
                             .font(.caption.weight(.medium))
                             .foregroundStyle(NPColors.textSecondary)
                     }
+                    .accessibilityIdentifier("chatReasoningDisclosure.\(message.id)")
                 }
                 Group {
                     if message.role == .assistant {
