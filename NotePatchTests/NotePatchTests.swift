@@ -233,6 +233,7 @@ struct NotePatchTests {
         #expect(appActivityTopOffset(reportedSafeAreaTop: 59, windowSafeAreaTop: 0) == 61)
         #expect(appActivityTopOffset(reportedSafeAreaTop: 0, windowSafeAreaTop: 59) == 61)
         #expect(appActivityTopOffset(reportedSafeAreaTop: 20, windowSafeAreaTop: 20) == 22)
+        #expect(appActivityTopOffset(reportedSafeAreaTop: 0, windowSafeAreaTop: 0, statusBarHeight: 20) == 22)
         #expect(appActivityTopOffset(reportedSafeAreaTop: -10, windowSafeAreaTop: 0) == 2)
     }
 

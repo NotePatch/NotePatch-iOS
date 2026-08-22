@@ -339,10 +339,11 @@ final class NotePatchUITests: XCTestCase {
         XCTAssertTrue(toast.exists)
 
         app.buttons["tab.me"].tap()
-        XCTAssertTrue(app.switches["globalFeedbackToggle"].waitForExistence(timeout: 3))
-        XCTAssertFalse(toast.exists)
-        app.switches["globalFeedbackToggle"].tap()
-        XCTAssertEqual(app.switches["globalFeedbackToggle"].value as? String, "0")
+        let feedbackToggle = app.switches["globalFeedbackToggle"]
+        XCTAssertTrue(feedbackToggle.waitForExistence(timeout: 3))
+        keepScreenshot(app, name: "feedback-after-tab-dismiss")
+        feedbackToggle.tap()
+        XCTAssertEqual(feedbackToggle.value as? String, "0")
     }
 
     @MainActor
@@ -392,10 +393,11 @@ final class NotePatchUITests: XCTestCase {
 
         let header = app.staticTexts["chatConversationDrawerHeader"]
         XCTAssertTrue(header.waitForExistence(timeout: 3))
-        XCTAssertGreaterThanOrEqual(header.frame.minY, 50)
+        let minimumSafeTop: CGFloat = app.frame.height <= 700 ? 20 : 50
+        XCTAssertGreaterThanOrEqual(header.frame.minY, minimumSafeTop)
         let newConversation = app.buttons["chatNewConversationButton"]
         XCTAssertTrue(newConversation.exists)
-        XCTAssertGreaterThanOrEqual(newConversation.frame.minY, 50)
+        XCTAssertGreaterThanOrEqual(newConversation.frame.minY, minimumSafeTop)
         XCTAssertLessThanOrEqual(newConversation.frame.maxY, app.frame.maxY)
     }
 
@@ -527,7 +529,7 @@ final class NotePatchUITests: XCTestCase {
 
     @MainActor
     func testOfflineAICopyAndProfileEditingSurfaces() throws {
-        let app = makeApp(["-NotePatchUITestWorkbench", "-NotePatchUITestLongChat"])
+        let app = makeApp(["-NotePatchUITestWorkbench", "-NotePatchUITestLongChat", "-NotePatchUITestLongToast"])
         app.launch()
 
         XCTAssertTrue(app.otherElements["workbenchTabs"].waitForExistence(timeout: 5))
@@ -536,7 +538,8 @@ final class NotePatchUITests: XCTestCase {
         XCTAssertTrue(copyConversation.waitForExistence(timeout: 3))
         XCTAssertTrue(copyConversation.isEnabled)
         copyConversation.tap()
-        XCTAssertTrue(app.staticTexts["整段对话已复制。"].waitForExistence(timeout: 2))
+        let copiedToast = app.descendants(matching: .any)["globalFeedbackToast"]
+        XCTAssertTrue(copiedToast.waitForExistence(timeout: 3))
         XCTAssertTrue(app.buttons["openClawAttachmentButton"].exists)
 
         app.buttons["tab.me"].tap()

@@ -210,6 +210,7 @@ final class NotePatchViewModel: ObservableObject {
     @Published var fullNameText: String
     @Published var isBusy = false
     @Published private(set) var isGlobalFeedbackEnabled: Bool
+    @Published private(set) var feedbackDismissalRevision: UInt = 0
     @Published private var statusDisplayText: AppDisplayText = .raw("")
     @Published private var errorDisplayText: AppDisplayText?
     @Published var selectedDocumentsSection: DocumentsSection = .documents
@@ -602,6 +603,7 @@ final class NotePatchViewModel: ObservableObject {
         let arguments = ProcessInfo.processInfo.arguments
         guard arguments.contains(where: { $0.hasPrefix("-NotePatchUITestFeedback") }) else { return }
         didInstallFeedbackUITestFixture = true
+        if arguments.contains("-NotePatchUITestFeedbackSuccess") { return }
         try? await Task.sleep(nanoseconds: 350_000_000)
         if arguments.contains("-NotePatchUITestFeedbackBusy") {
             isBusy = true
@@ -749,6 +751,7 @@ final class NotePatchViewModel: ObservableObject {
     }
 
     func dismissGlobalFeedback() {
+        feedbackDismissalRevision &+= 1
         errorMessage = nil
         statusMessage = ""
     }
@@ -757,6 +760,10 @@ final class NotePatchViewModel: ObservableObject {
         guard enabled != isGlobalFeedbackEnabled else { return }
         isGlobalFeedbackEnabled = enabled
         settings.saveGlobalFeedbackEnabled(enabled)
+        if !enabled {
+            AppFeedbackDismissalCenter.shared.dismiss()
+            NotificationCenter.default.post(name: .notePatchDismissGlobalFeedback, object: nil)
+        }
         dismissGlobalFeedback()
     }
 
@@ -5346,7 +5353,14 @@ final class NotePatchViewModel: ObservableObject {
             isDocumentPurgeRetryAvailable = true
         }
         errorMessage = nil
-        setStatus("operation.offline_test_mode")
+        let launchArguments = ProcessInfo.processInfo.arguments
+        if launchArguments.contains("-NotePatchUITestFeedbackSuccess") {
+            presentStatus("operation.api_connected")
+        } else if !launchArguments.contains(where: { $0.hasPrefix("-NotePatchUITestFeedback") }) {
+            setStatus("operation.offline_test_mode")
+        } else {
+            statusMessage = ""
+        }
     }
 
 

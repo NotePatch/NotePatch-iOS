@@ -6,6 +6,21 @@ enum AppFeedbackCoordinateSpace {
     static let name = "appFeedback"
 }
 
+extension Notification.Name {
+    static let notePatchDismissGlobalFeedback = Notification.Name("NotePatchDismissGlobalFeedback")
+}
+
+@MainActor
+final class AppFeedbackDismissalCenter: ObservableObject {
+    static let shared = AppFeedbackDismissalCenter()
+
+    @Published private(set) var revision: UInt = 0
+
+    func dismiss() {
+        revision &+= 1
+    }
+}
+
 enum AppFeedbackKind: String, Equatable {
     case success
     case error
@@ -50,8 +65,16 @@ func appActivityPresentation(
     return .indeterminate(label)
 }
 
-func appActivityTopOffset(reportedSafeAreaTop: CGFloat, windowSafeAreaTop: CGFloat) -> CGFloat {
-    max(0, max(reportedSafeAreaTop, windowSafeAreaTop)) + 2
+func appActivityTopOffset(
+    reportedSafeAreaTop: CGFloat,
+    windowSafeAreaTop: CGFloat,
+    statusBarHeight: CGFloat = 0
+) -> CGFloat {
+    resolvedTopSafeAreaInset(
+        reportedSafeAreaTop: reportedSafeAreaTop,
+        windowSafeAreaTop: windowSafeAreaTop,
+        statusBarHeight: statusBarHeight
+    ) + 2
 }
 
 func appFeedbackBottomOffset(
@@ -88,6 +111,8 @@ func appFeedbackToastWidth(text: String, containerWidth: CGFloat) -> CGFloat {
 final class AppFeedbackPresentationState: ObservableObject {
     @Published private(set) var isVisible = false
     @Published private(set) var isPinned = false
+    @Published private(set) var originatingTab: WorkbenchTab?
+    @Published private(set) var originatingDismissalRevision: UInt = 0
 
     private let autoDismissNanoseconds: UInt64
     private var identity: String?
@@ -98,11 +123,18 @@ final class AppFeedbackPresentationState: ObservableObject {
         self.autoDismissNanoseconds = autoDismissNanoseconds
     }
 
-    func present(identity: String, onDismiss: @escaping () -> Void) {
+    func present(
+        identity: String,
+        originatingTab: WorkbenchTab? = nil,
+        originatingDismissalRevision: UInt = 0,
+        onDismiss: @escaping () -> Void
+    ) {
         guard self.identity != identity || !isVisible else { return }
         dismissTask?.cancel()
         self.identity = identity
         self.onDismiss = onDismiss
+        self.originatingTab = originatingTab
+        self.originatingDismissalRevision = originatingDismissalRevision
         isPinned = false
         isVisible = true
 
@@ -115,8 +147,9 @@ final class AppFeedbackPresentationState: ObservableObject {
     }
 
     func pin() {
-        guard isVisible, !isPinned else { return }
+        guard !isPinned else { return }
         dismissTask?.cancel()
+        isVisible = true
         isPinned = true
     }
 
@@ -129,6 +162,7 @@ final class AppFeedbackPresentationState: ObservableObject {
         dismissTask?.cancel()
         identity = nil
         onDismiss = nil
+        originatingTab = nil
         isPinned = false
         isVisible = false
     }
@@ -164,6 +198,7 @@ struct AppFeedbackOverlay: View {
     let safeAreaInsets: EdgeInsets
 
     @State private var toastFrame: CGRect = .null
+    @State private var suppressedItemID: String?
 
     private var isBusyUITestFixture: Bool {
         ProcessInfo.processInfo.arguments.contains("-NotePatchUITestFeedbackBusy")
@@ -173,10 +208,13 @@ struct AppFeedbackOverlay: View {
         ProcessInfo.processInfo.arguments.contains("-NotePatchUITestFeedbackUploadError")
     }
 
+
+
     private var activityTopOffset: CGFloat {
         appActivityTopOffset(
             reportedSafeAreaTop: safeAreaInsets.top,
-            windowSafeAreaTop: feedbackWindowSafeAreaInsets().top
+            windowSafeAreaTop: feedbackWindowSafeAreaInsets().top,
+            statusBarHeight: currentAppStatusBarHeight()
         )
     }
 
@@ -207,6 +245,11 @@ struct AppFeedbackOverlay: View {
         )
     }
 
+    private var visibleItem: AppFeedbackItem? {
+        guard let item, item.id != suppressedItemID else { return nil }
+        return item
+    }
+
     var body: some View {
         ZStack(alignment: .topLeading) {
             AppActivityLayer(
@@ -217,10 +260,17 @@ struct AppFeedbackOverlay: View {
                 .allowsHitTesting(false)
                 .zIndex(3)
 
-            if let item {
-                AppFeedbackToast(item: item, isPinned: presentation.isPinned) {
+            if let item = visibleItem {
+                AppFeedbackToast(
+                    item: item,
+                    isPinned: presentation.isPinned,
+                    originatingTab: presentation.originatingTab,
+                    originatingDismissalRevision: presentation.originatingDismissalRevision,
+                    navigationState: navigationState
+                ) {
                     presentation.pin()
                 }
+                .id(item.id)
                 .frame(width: appFeedbackToastWidth(text: item.text, containerWidth: containerSize.width))
                 .background {
                     GeometryReader { proxy in
@@ -239,7 +289,7 @@ struct AppFeedbackOverlay: View {
             AppInteractionTapObserver(
                 isEnabled: presentation.isPinned,
                 excludedFrame: toastFrame,
-                onOutsideTap: presentation.dismissFromOutsideTap
+                onOutsideTap: dismissVisibleFeedback
             )
             .frame(width: 0, height: 0)
             .accessibilityHidden(true)
@@ -252,6 +302,12 @@ struct AppFeedbackOverlay: View {
             if !enabled {
                 presentation.hide()
             }
+        }
+        .onReceive(navigationState.$selectedTab.dropFirst()) { _ in
+            dismissVisibleFeedback()
+        }
+        .onChange(of: model.feedbackDismissalRevision) { _ in
+            suppressedItemID = item?.id
         }
         .onPreferenceChange(AppFeedbackFramePreferenceKey.self) { toastFrame = $0 }
         .onDisappear { presentation.hide() }
@@ -270,10 +326,27 @@ struct AppFeedbackOverlay: View {
 
     private func updatePresentation(for item: AppFeedbackItem?) {
         guard let item else {
+            suppressedItemID = nil
             presentation.hide()
             return
         }
-        presentation.present(identity: item.id, onDismiss: model.dismissGlobalFeedback)
+        guard item.id != suppressedItemID else {
+            presentation.hide()
+            return
+        }
+        presentation.present(
+            identity: item.id,
+            originatingTab: model.session == nil ? nil : navigationState.selectedTab,
+            originatingDismissalRevision: AppFeedbackDismissalCenter.shared.revision,
+            onDismiss: model.dismissGlobalFeedback
+        )
+    }
+
+    private func dismissVisibleFeedback() {
+        AppFeedbackDismissalCenter.shared.dismiss()
+        NotificationCenter.default.post(name: .notePatchDismissGlobalFeedback, object: nil)
+        suppressedItemID = item?.id
+        model.dismissGlobalFeedback()
     }
 }
 
@@ -298,7 +371,12 @@ private struct AppActivityLayer: View {
 private struct AppFeedbackToast: View {
     let item: AppFeedbackItem
     let isPinned: Bool
+    let originatingTab: WorkbenchTab?
+    let originatingDismissalRevision: UInt
+    @ObservedObject var navigationState: WorkbenchNavigationState
+    @ObservedObject private var dismissalCenter = AppFeedbackDismissalCenter.shared
     let onTap: () -> Void
+    @State private var isLocallyDismissed = false
 
     var body: some View {
         Button(action: onTap) {
@@ -330,6 +408,18 @@ private struct AppFeedbackToast: View {
         .accessibilityIdentifier("globalFeedbackToast")
         .accessibilityValue(isPinned ? localized("feedback.accessibility.pinned") : "")
         .accessibilityHint(isPinned ? localized("feedback.accessibility.dismiss_outside") : localized("feedback.accessibility.keep"))
+        .opacity(isHidden ? 0 : 1)
+        .allowsHitTesting(!isHidden)
+        .accessibilityHidden(isHidden)
+        .onReceive(NotificationCenter.default.publisher(for: .notePatchDismissGlobalFeedback)) { _ in
+            isLocallyDismissed = true
+        }
+    }
+
+    private var isHidden: Bool {
+        isLocallyDismissed
+            || dismissalCenter.revision != originatingDismissalRevision
+            || (originatingTab != nil && navigationState.selectedTab != originatingTab)
     }
 
     private var semanticColor: Color {

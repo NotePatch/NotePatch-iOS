@@ -444,6 +444,14 @@ func workbenchBottomBarAdditionalPadding(safeAreaBottom: CGFloat) -> CGFloat {
     safeAreaBottom > 0.5 ? 0 : 8
 }
 
+func resolvedTopSafeAreaInset(
+    reportedSafeAreaTop: CGFloat,
+    windowSafeAreaTop: CGFloat,
+    statusBarHeight: CGFloat
+) -> CGFloat {
+    max(0, max(reportedSafeAreaTop, max(windowSafeAreaTop, statusBarHeight)))
+}
+
 @MainActor
 func currentAppWindowSafeAreaInsets() -> UIEdgeInsets {
     let windows = UIApplication.shared.connectedScenes
@@ -452,4 +460,14 @@ func currentAppWindowSafeAreaInsets() -> UIEdgeInsets {
     return windows.first(where: \.isKeyWindow)?.safeAreaInsets
         ?? windows.first?.safeAreaInsets
         ?? .zero
+}
+
+@MainActor
+func currentAppStatusBarHeight() -> CGFloat {
+    UIApplication.shared.connectedScenes
+        .compactMap { $0 as? UIWindowScene }
+        .first(where: { $0.activationState == .foregroundActive })?
+        .statusBarManager?
+        .statusBarFrame.height
+        ?? 0
 }

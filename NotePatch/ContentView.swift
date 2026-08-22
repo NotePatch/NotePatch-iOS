@@ -49,12 +49,23 @@ struct ContentView: View {
     @Environment(\.scenePhase) private var scenePhase
 
     init() {
-        let isFeedbackUITest = ProcessInfo.processInfo.arguments.contains {
+        let arguments = ProcessInfo.processInfo.arguments
+        let isFeedbackUITest = arguments.contains {
             $0.hasPrefix("-NotePatchUITestFeedback")
+        }
+        let isUploadErrorUITest = arguments.contains("-NotePatchUITestFeedbackUploadError")
+        let usesLongUITestToast = arguments.contains("-NotePatchUITestLongToast")
+        let dismissNanoseconds: UInt64
+        if isUploadErrorUITest {
+            dismissNanoseconds = 15_000_000_000
+        } else if isFeedbackUITest {
+            dismissNanoseconds = 8_000_000_000
+        } else {
+            dismissNanoseconds = usesLongUITestToast ? 5_000_000_000 : 2_000_000_000
         }
         _feedbackPresentation = StateObject(
             wrappedValue: AppFeedbackPresentationState(
-                autoDismissNanoseconds: isFeedbackUITest ? 15_000_000_000 : 2_000_000_000
+                autoDismissNanoseconds: dismissNanoseconds
             )
         )
     }
@@ -327,6 +338,8 @@ private struct WorkbenchScreen: View {
                 isKeyboardVisible: $navigationState.isBottomBarHiddenForKeyboard
             ) {
                 navigationState.isUploadPresented = true
+            } onSelection: { _ in
+                model.dismissGlobalFeedback()
             }
             .ignoresSafeArea(.keyboard, edges: .bottom)
             .padding(.horizontal, 16)
@@ -362,6 +375,9 @@ private struct WorkbenchScreen: View {
             navigationState.bottomBarFrame = frame
         }
         .onChange(of: navigationState.selectedTab) { newTab in
+            AppFeedbackDismissalCenter.shared.dismiss()
+            NotificationCenter.default.post(name: .notePatchDismissGlobalFeedback, object: nil)
+            model.dismissGlobalFeedback()
             if newTab != .openClaw {
                 dismissActiveKeyboard()
             }
@@ -407,11 +423,12 @@ private struct KeyboardAwareWorkbenchBottomBar: View {
     @Binding var selection: WorkbenchTab
     @Binding var isKeyboardVisible: Bool
     let uploadAction: () -> Void
+    let onSelection: (WorkbenchTab) -> Void
 
     var body: some View {
         WorkbenchBottomGlassGroup(spacing: 10) {
             HStack(spacing: 10) {
-                WorkbenchBottomNavigation(selection: $selection)
+                WorkbenchBottomNavigation(selection: $selection, onSelection: onSelection)
                 UploadActionButton(action: uploadAction)
             }
         }
@@ -487,6 +504,7 @@ private struct WorkbenchBottomGlassGroup26<Content: View>: View {
 
 private struct WorkbenchBottomNavigation: View {
     @Binding var selection: WorkbenchTab
+    let onSelection: (WorkbenchTab) -> Void
 
     @ViewBuilder
     var body: some View {
@@ -510,8 +528,14 @@ private struct WorkbenchBottomNavigation: View {
         HStack(spacing: 0) {
             ForEach(WorkbenchTab.allCases) { tab in
                 Button {
+                    AppFeedbackDismissalCenter.shared.dismiss()
+                    NotificationCenter.default.post(name: .notePatchDismissGlobalFeedback, object: nil)
+                    onSelection(tab)
                     withAnimation(.npInteractive) {
                         selection = tab
+                    }
+                    DispatchQueue.main.async {
+                        NotificationCenter.default.post(name: .notePatchDismissGlobalFeedback, object: nil)
                     }
                 } label: {
                     VStack(spacing: 3) {
@@ -707,7 +731,9 @@ private struct HomeTab: View {
 
                 summary
 
-                if let workflow = state.activeWorkflow {
+                if let task = state.activeTask, shouldPrioritizeTask(task) {
+                    activeTask(task)
+                } else if let workflow = state.activeWorkflow {
                     activeWorkflow(workflow)
                 } else if let task = state.activeTask {
                     activeTask(task)
@@ -820,6 +846,12 @@ private struct HomeTab: View {
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier("homeActiveWorkflow")
+    }
+
+    private func shouldPrioritizeTask(_ task: TaskItem) -> Bool {
+        model.canRetryDocumentPurge
+            || ["failed", "cancelled"].contains(task.status)
+            || task.cancelRequestedAt != nil
     }
 
     private var recentDocuments: some View {
@@ -1227,9 +1259,7 @@ private struct NotesTab: View {
             HStack(spacing: 8) {
                 ForEach(LearningSection.allCases) { section in
                     Button {
-                        withAnimation(.npInteractive) {
-                            model.selectedLearningSection = section
-                        }
+                        model.selectedLearningSection = section
                     } label: {
                         Text(section.title)
                             .font(.subheadline.weight(model.selectedLearningSection == section ? .semibold : .regular))
@@ -1240,6 +1270,8 @@ private struct NotesTab: View {
                             .clipShape(Capsule())
                     }
                     .buttonStyle(.plain)
+                    .contentShape(Capsule())
+                    .animation(.npInteractive, value: model.selectedLearningSection)
                     .accessibilityAddTraits(model.selectedLearningSection == section ? .isSelected : [])
                     .accessibilityIdentifier("notesSubsection.\(section.rawValue)")
                 }
@@ -1435,7 +1467,17 @@ private struct StudyNoteReader: View {
                 .navigationTitle(localized("note.reader.title"))
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
-                    ToolbarItem(placement: .navigationBarTrailing) {
+                    ToolbarItemGroup(placement: .navigationBarTrailing) {
+                        if model.canEditSelectedStudyNote {
+                            Button {
+                                model.beginStudyNoteEditing()
+                            } label: {
+                                Image(systemName: "pencil")
+                            }
+                            .disabled(model.isStudyNoteSaving)
+                            .accessibilityLabel(localized("common.edit"))
+                            .accessibilityIdentifier("editStudyNoteButton")
+                        }
                         Menu {
                             Button {
                                 model.presentNoteGaps(for: item.learningUnit.id)
@@ -3412,12 +3454,26 @@ private struct OpenClawChatTab: View {
                                 .id(chatBottomAnchorID)
                         }
                         }
+                        .simultaneousGesture(
+                            DragGesture(minimumDistance: 4)
+                                .onChanged { value in
+                                    if value.translation.height > 6 {
+                                        isChatAtBottom = false
+                                    }
+                                    if UIDevice.current.userInterfaceIdiom == .pad,
+                                       isComposerFocused,
+                                       value.translation.height > 12 {
+                                        dismissComposer()
+                                    }
+                                }
+                        )
                         .accessibilityIdentifier("openClawMessages")
 
                         if !chatState.messages.isEmpty, !isChatAtBottom {
                             Button {
                                 withAnimation(.easeOut(duration: 0.24)) {
                                     proxy.scrollTo(chatBottomAnchorID, anchor: .bottom)
+                                    isChatAtBottom = true
                                 }
                             } label: {
                                 Image(systemName: "arrow.down")
@@ -3611,7 +3667,11 @@ private struct OpenClawChatTab: View {
         GeometryReader { proxy in
             let drawerWidth = min(320, proxy.size.width * 0.82)
             let windowInsets = currentAppWindowSafeAreaInsets()
-            let topSafeAreaInset = max(proxy.safeAreaInsets.top, windowInsets.top)
+            let topSafeAreaInset = resolvedTopSafeAreaInset(
+                reportedSafeAreaTop: proxy.safeAreaInsets.top,
+                windowSafeAreaTop: windowInsets.top,
+                statusBarHeight: currentAppStatusBarHeight()
+            )
             let bottomSafeAreaInset = max(proxy.safeAreaInsets.bottom, windowInsets.bottom)
             ZStack(alignment: .leading) {
                 Color.black.opacity(0.32)
@@ -3679,7 +3739,7 @@ private struct OpenClawChatTab: View {
                 .accessibilityIdentifier("chatNewConversationButton")
             }
             .padding(.horizontal, NPSpacing.outer)
-            .padding(.top, topSafeAreaInset + 12)
+            .padding(.top, topSafeAreaInset + 19)
             .padding(.bottom, 10)
 
             if chatState.conversations.isEmpty {
@@ -3784,9 +3844,11 @@ private struct OpenClawChatTab: View {
         scrollBottomY: CGFloat
     ) {
         let composerControlsHeight: CGFloat = 56
-        let dismissalBoundary = keyboardFrame.isNull
-            ? scrollBottomY + composerState.measuredTextHeight
+        let composerBoundary = scrollBottomY + max(12, min(44, composerState.measuredTextHeight))
+        let keyboardBoundary = keyboardFrame.isNull
+            ? composerBoundary
             : keyboardFrame.minY - composerControlsHeight
+        let dismissalBoundary = min(composerBoundary, keyboardBoundary)
         guard isComposerFocused,
               translation.height > 12,
               translation.height > abs(translation.width),
@@ -4315,14 +4377,6 @@ private struct LearningUnitsSection: View {
         .sheet(isPresented: $model.isLearningUnitMergePresented) {
             LearningUnitMergeSheet(model: model)
         }
-        .alert(localized("merge.confirm.title"), isPresented: $model.isLearningUnitMergeConfirmationPresented) {
-            Button(localized("common.cancel"), role: .cancel) {}
-            Button(localized("merge.confirm.action"), role: .destructive) {
-                model.confirmLearningUnitMerge()
-            }
-        } message: {
-            Text(localized("merge.confirm.message"))
-        }
     }
 }
 
@@ -4445,6 +4499,14 @@ private struct LearningUnitMergeSheet: View {
         }
         .navigationViewStyle(.stack)
         .accessibilityIdentifier("learningUnitMergeSheet")
+        .alert(localized("merge.confirm.title"), isPresented: $model.isLearningUnitMergeConfirmationPresented) {
+            Button(localized("common.cancel"), role: .cancel) {}
+            Button(localized("merge.confirm.action"), role: .destructive) {
+                model.confirmLearningUnitMerge()
+            }
+        } message: {
+            Text(localized("merge.confirm.message"))
+        }
     }
 }
 
@@ -7091,6 +7153,9 @@ private struct ChatScrollPanObserver: UIViewRepresentable {
             scrollObservations.forEach { $0.invalidate() }
             scrollObservations.removeAll()
             observedScrollView = scrollView
+            if UIDevice.current.userInterfaceIdiom == .pad {
+                scrollView.keyboardDismissMode = .interactive
+            }
             observedPanGesture = scrollView.panGestureRecognizer
             scrollView.panGestureRecognizer.addTarget(self, action: #selector(handlePan))
             scrollObservations = [
@@ -7140,6 +7205,19 @@ private struct ChatScrollPanObserver: UIViewRepresentable {
             case .changed, .ended:
                 guard let startLocation else { return }
                 let translation = recognizer.translation(in: nil)
+                let visibleHeight = max(
+                    0,
+                    scrollView.bounds.height
+                        - scrollView.adjustedContentInset.top
+                        - scrollView.adjustedContentInset.bottom
+                )
+                if translation.y > 6,
+                   scrollView.contentSize.height > visibleHeight + 4,
+                   lastReportedAtBottom != false {
+                    lastReportedAtBottom = false
+                    let callback = onBottomChange
+                    DispatchQueue.main.async { callback?(false) }
+                }
                 onPan?(
                     ChatScrollPanValue(
                         startLocation: startLocation,
