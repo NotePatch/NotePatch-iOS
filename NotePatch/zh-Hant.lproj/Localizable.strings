@@ -330,7 +330,6 @@
 "note.origin.revised" = "已修訂";
 "note.version" = "版本 %@";
 "account.session_valid_until" = "工作階段有效至 %@";
-"workspace.switched" = "已切換至 %@。";
 "workspace.loaded" = "已載入個人空間：%@";
 "upload.added_to_queue" = "已將 %@ 加入上傳佇列。";
 "upload.batch_progress" = "%@/%@ · %@";
@@ -742,7 +741,6 @@
 "operation.server_saved" = "伺服器位址已儲存。";
 "operation.refreshing_documents" = "正在重新整理文件…";
 "operation.documents_refreshed" = "文件已重新整理。";
-"operation.switching_workspace" = "正在切換個人空間…";
 "operation.recovering_workspace" = "正在復原個人空間…";
 "operation.workspace_recovered" = "個人空間已復原。";
 "operation.reading_files" = "正在讀取所選檔案…";
@@ -856,16 +854,11 @@
 "chat.ai.auto_saved_after_first_message" = "傳送第一則訊息後自動儲存";
 "review.section.notes" = "筆記";
 "review.section.homework" = "作業";
-"chat.copy.conversation" = "複製整段對話";
 "chat.copy.message" = "複製訊息";
 "chat.select_text.action" = "選擇文字";
 "chat.select_text.title" = "選擇文字";
-"chat.copy.role.user" = "你";
-"chat.copy.role.assistant" = "NotePatch";
 "chat.copy.attachment" = "附件：%@";
 "chat.copy.message_complete" = "訊息已複製。";
-"chat.copy.conversation_complete" = "整段對話已複製。";
-"chat.copy.empty" = "目前沒有可複製的對話。";
 "chat.copy.code" = "複製程式碼";
 "chat.copy.code_complete" = "已複製";
 "chat.revision.action" = "修改訊息";

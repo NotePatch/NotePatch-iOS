@@ -330,7 +330,6 @@
 "note.origin.revised" = "Revised";
 "note.version" = "Version %@";
 "account.session_valid_until" = "Session valid until %@";
-"workspace.switched" = "Switched to %@.";
 "workspace.loaded" = "Workspace loaded: %@";
 "upload.added_to_queue" = "Added %@ to upload queue.";
 "upload.batch_progress" = "%@/%@ · %@";
@@ -742,7 +741,6 @@
 "operation.server_saved" = "Server addresses saved.";
 "operation.refreshing_documents" = "Refreshing documents...";
 "operation.documents_refreshed" = "Documents refreshed.";
-"operation.switching_workspace" = "Switching workspace...";
 "operation.recovering_workspace" = "Recovering workspace...";
 "operation.workspace_recovered" = "Workspace recovered.";
 "operation.reading_files" = "Reading selected files...";
@@ -856,16 +854,11 @@
 "chat.ai.auto_saved_after_first_message" = "Saved automatically after your first message";
 "review.section.notes" = "Notes";
 "review.section.homework" = "Homework";
-"chat.copy.conversation" = "Copy conversation";
 "chat.copy.message" = "Copy message";
 "chat.select_text.action" = "Select text";
 "chat.select_text.title" = "Select text";
-"chat.copy.role.user" = "You";
-"chat.copy.role.assistant" = "NotePatch";
 "chat.copy.attachment" = "Attachment: %@";
 "chat.copy.message_complete" = "Message copied.";
-"chat.copy.conversation_complete" = "Conversation copied.";
-"chat.copy.empty" = "There is no conversation to copy.";
 "chat.copy.code" = "Copy code";
 "chat.copy.code_complete" = "Copied";
 "chat.revision.action" = "Edit message";

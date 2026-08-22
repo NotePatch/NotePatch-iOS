@@ -2238,61 +2238,6 @@ private struct UploadScreen: View {
     }
 }
 
-private struct UploadOptionCard: View {
-    let icon: String
-    let iconColor: Color
-    let title: String
-    let description: String
-    let action: () -> Void
-    @State private var isPressed = false
-
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: NPSpacing.large) {
-                Image(systemName: icon)
-                    .font(.system(size: 28, weight: .regular))
-                    .foregroundStyle(iconColor)
-                    .frame(width: 48, height: 48)
-                    .background(iconColor.opacity(0.10))
-                    .clipShape(RoundedRectangle(cornerRadius: NPRadius.medium, style: .continuous))
-
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(localized(title))
-                        .npSubheading()
-                    Text(localized(description))
-                        .npCallout()
-                        .lineLimit(2)
-                }
-
-                Spacer()
-
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(NPColors.textTertiary)
-            }
-            .padding(NPSpacing.large)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(NPColors.surfaceCard)
-            .clipShape(RoundedRectangle(cornerRadius: NPRadius.card, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: NPRadius.card, style: .continuous)
-                    .stroke(NPColors.surfaceHighlight, lineWidth: 0.5)
-            }
-            .shadow(
-                color: NPShadow.medium.color,
-                radius: NPShadow.medium.radius,
-                x: 0,
-                y: NPShadow.medium.y
-            )
-            .scaleEffect(isPressed ? 0.985 : 1.0)
-        }
-        .buttonStyle(.plain)
-        .onLongPressGesture(minimumDuration: .infinity, pressing: { pressing in
-            withAnimation(Animation.npButton) { isPressed = pressing }
-        }, perform: {})
-    }
-}
-
 // MARK: - Upload Document Screen
 
 private struct UploadDocumentScreen: View {
@@ -7327,42 +7272,6 @@ private struct MarkdownInlineText: View {
 
 // MARK: - Reusable Building Blocks
 
-private struct CollapsibleSection<Content: View>: View {
-    let title: String
-    let summary: String
-    @Binding var expanded: Bool
-    @ViewBuilder let content: Content
-
-    var body: some View {
-        NPSection {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack {
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(localized(title))
-                            .npSubheading()
-                        Text(summary.isEmpty ? localized("filter.all") : summary)
-                            .npCaption()
-                            .lineLimit(1)
-                    }
-                    Spacer()
-                    Button {
-                        withAnimation(.npInteractive) { expanded.toggle() }
-                    } label: {
-                        Label(
-                            expanded ? localized("common.collapse") : localized("common.expand"),
-                            systemImage: expanded ? "chevron.up" : "chevron.down"
-                        )
-                    }
-                    .buttonStyle(.borderless)
-                }
-                if expanded {
-                    content
-                }
-            }
-        }
-    }
-}
-
 private struct ChoiceGrid<Content: View>: View {
     var minimum: CGFloat = 92
     @ViewBuilder let content: Content
@@ -7471,30 +7380,6 @@ private struct ChoiceChipButtonStyle: ButtonStyle {
     }
 }
 
-private struct TextButton: View {
-    let title: String
-    let systemImage: String
-    let enabled: Bool
-    let action: () -> Void
-
-    init(_ title: String, systemImage: String, enabled: Bool, action: @escaping () -> Void) {
-        self.title = title
-        self.systemImage = systemImage
-        self.enabled = enabled
-        self.action = action
-    }
-
-    var body: some View {
-        Button(action: action) {
-            Label(localized(title), systemImage: systemImage)
-                .lineLimit(1)
-                .minimumScaleFactor(0.8)
-        }
-        .buttonStyle(.borderless)
-        .disabled(!enabled)
-    }
-}
-
 private struct DetailText: View {
     let text: String
     let lineLimit: Int?
@@ -7564,18 +7449,6 @@ private func colorForStatus(_ status: String) -> Color {
         return NPColors.brand
     default:
         return NPColors.textSecondary
-    }
-}
-
-private func documentFileIcon(_ fileType: String) -> String {
-    switch fileType.lowercased() {
-    case "image": return "photo"
-    case "pdf": return "doc.richtext"
-    case "docx": return "doc.text"
-    case "pptx": return "rectangle.stack"
-    case "audio": return "waveform"
-    case "video": return "play.rectangle"
-    default: return "doc"
     }
 }
 
@@ -7745,22 +7618,11 @@ private func noteGapStatusVariant(_ status: String) -> NPStatusChip.NPStatusChip
     }
 }
 
-private func statusColor(_ status: String) -> Color {
-    return colorForStatus(status)
-}
-
 private func taskStatusLabel(_ task: TaskItem) -> String {
     if task.cancelRequestedAt != nil && !["succeeded", "failed", "cancelled"].contains(task.status) {
         return localized("task.status.cancelling")
     }
     return statusLabel(task.status)
-}
-
-private func taskStatusColor(_ task: TaskItem) -> Color {
-    if task.cancelRequestedAt != nil && !["succeeded", "failed", "cancelled"].contains(task.status) {
-        return NPColors.warning
-    }
-    return colorForStatus(task.status)
 }
 
 private func taskTypeLabel(_ taskType: String) -> String {

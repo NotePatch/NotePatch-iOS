@@ -26,17 +26,6 @@ func normalizeLearningBackendBaseURL(_ rawBaseURL: String) -> String {
     return components.string?.trimmingCharacters(in: CharacterSet(charactersIn: "/")) ?? normalized
 }
 
-func migrateLegacyLearningBackendBaseURL(_ rawBaseURL: String) -> String {
-    let normalized = normalizeLearningBackendBaseURL(rawBaseURL)
-    guard var components = URLComponents(string: normalized) else { return normalized }
-    var segments = components.path.split(separator: "/").map(String.init)
-    if segments.count >= 2, Array(segments.suffix(2)) == ["api", "v1"] {
-        segments.removeLast(2)
-        components.path = segments.isEmpty ? "" : "/\(segments.joined(separator: "/"))"
-    }
-    return components.string?.trimmingCharacters(in: CharacterSet(charactersIn: "/")) ?? normalized
-}
-
 func normalizeTUSBaseURL(_ rawBaseURL: String) -> String {
     let trimmed = rawBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)
     let withScheme: String
@@ -2255,17 +2244,6 @@ struct SavedSession: Equatable {
         return updated
     }
 
-    func withNotePreferences(
-        content: NoteContentEditLevel,
-        layout: NoteLayoutEditLevel,
-        historyLimit: Int
-    ) -> SavedSession {
-        var updated = self
-        updated.noteContentEditLevel = content
-        updated.noteLayoutEditLevel = layout
-        updated.noteHistoryLimit = historyLimit
-        return updated
-    }
 }
 
 enum JSONValue: Codable, Equatable {

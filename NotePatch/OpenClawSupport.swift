@@ -1,9 +1,5 @@
 import Foundation
 
-func extractOpenClawAnswer(_ resultText: String?) -> String {
-    formatOpenClawTaskResult(resultText)
-}
-
 func formatOpenClawTaskResult(_ resultText: String?) -> String {
     let text = resultText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
     guard !text.isEmpty, let data = text.data(using: .utf8) else {

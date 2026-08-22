@@ -3707,8 +3707,8 @@ struct NotePatchTests {
         model.selectedConversationId = "c-1"
         model.conversations = [ChatConversation(id: "c-1", workspaceId: "ws-1", title: "旧标题", lastMessageAt: nil, createdAt: "", updatedAt: "")]
 
-        model.renameCurrentConversation(to: "新标题")
-        model.renameCurrentConversation(to: "重复请求")
+        model.renameConversation("c-1", to: "新标题")
+        model.renameConversation("c-1", to: "重复请求")
         #expect(model.isConversationMutating)
         #expect(model.selectedConversation?.title == "旧标题")
         try await Self.waitUntil { !model.isConversationMutating }
@@ -3716,12 +3716,12 @@ struct NotePatchTests {
         #expect(model.selectedConversation?.title == "新标题")
         #expect(model.statusMessage == localized("chat.title_saved"))
 
-        model.renameCurrentConversation(to: String(repeating: "a", count: 161))
+        model.renameConversation("c-1", to: String(repeating: "a", count: 161))
         #expect(model.errorMessage == localized("chat.error.title_length"))
         #expect(renameCount == 1)
 
-        model.deleteCurrentConversation()
-        model.deleteCurrentConversation()
+        model.deleteConversation("c-1")
+        model.deleteConversation("c-1")
         #expect(model.isConversationMutating)
         #expect(model.conversations.count == 1)
         try await Self.waitUntil { !model.isConversationMutating }
@@ -4143,7 +4143,7 @@ struct NotePatchTests {
         #expect(model.aiHistoryEnabled == false)
         try await Self.waitUntil { !model.isAIPreferenceUpdating }
         #expect(requestCount == 1)
-        #expect(settings.loadAIHistoryEnabled() == false)
+        #expect(settings.loadSession()?.aiHistoryEnabled == false)
         #expect(model.statusMessage == localized("AI history setting saved."))
 
         MockURLProtocol.handler = { request in
@@ -4153,7 +4153,7 @@ struct NotePatchTests {
         model.updateAIHistoryEnabled(true)
         try await Self.waitUntil { !model.isAIPreferenceUpdating }
         #expect(model.aiHistoryEnabled == false)
-        #expect(settings.loadAIHistoryEnabled() == false)
+        #expect(settings.loadSession()?.aiHistoryEnabled == false)
         #expect(model.errorMessage == "preference rejected")
     }
 

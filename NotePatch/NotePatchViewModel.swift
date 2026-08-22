@@ -979,33 +979,6 @@ final class NotePatchViewModel: ObservableObject {
         }
     }
 
-    func selectWorkspace(_ workspaceId: String) {
-        guard let activeSession = currentSessionOrError() else {
-            return
-        }
-        clearLearningWorkspaceState()
-        saveSelectedWorkspace(workspaceId)
-        Task {
-            isBusy = true
-            defer {
-                if isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) {
-                    isBusy = false
-                }
-            }
-            errorMessage = nil
-            selectedArtifacts = []
-            selectedArtifactDocumentId = nil
-            setStatus("operation.switching_workspace")
-            do {
-                try await refreshWorkspaceContent(activeSession: session ?? activeSession, workspaceId: workspaceId)
-                let name = workspaces.first(where: { $0.id == workspaceId })?.name ?? workspaceId
-                setStatus("workspace.switched", name)
-            } catch {
-                showError(error)
-            }
-        }
-    }
-
     func recoverPersonalWorkspace() {
         guard let activeSession = currentSessionOrError() else {
             return
@@ -1055,10 +1028,6 @@ final class NotePatchViewModel: ObservableObject {
     func setFileTypeFilter(_ value: String) {
         fileTypeFilter = value
         refreshCurrentWorkspace()
-    }
-
-    func uploadPickedFile(from sourceURL: URL) {
-        uploadPickedFiles(from: [sourceURL])
     }
 
     func uploadPickedFiles(
@@ -2124,29 +2093,6 @@ final class NotePatchViewModel: ObservableObject {
         presentStatus("chat.copy.message_complete")
     }
 
-    func copyOpenClawConversation() {
-        let blocks = openClawMessages.compactMap { message -> String? in
-            guard (message.role == .user || message.role == .assistant),
-                  message.status != .error else { return nil }
-            let role = message.role == .user
-                ? localized("chat.copy.role.user")
-                : localized("chat.copy.role.assistant")
-            let content = message.content.trimmingCharacters(in: .whitespacesAndNewlines)
-            let attachmentLines = message.attachments.map {
-                localizedFormat("chat.copy.attachment", $0.file.filename)
-            }
-            let body = ([content].filter { !$0.isEmpty } + attachmentLines).joined(separator: "\n")
-            guard !body.isEmpty else { return nil }
-            return "\(role)\n\(body)"
-        }
-        guard !blocks.isEmpty else {
-            setError("chat.copy.empty")
-            return
-        }
-        UIPasteboard.general.string = blocks.joined(separator: "\n\n")
-        presentStatus("chat.copy.conversation_complete")
-    }
-
     func reviseOpenClawMessage(
         _ message: OpenClawChatMessage,
         prompt: String,
@@ -2677,11 +2623,6 @@ final class NotePatchViewModel: ObservableObject {
         openClawComposerState.clearDraft(removeAttachmentFiles: true)
     }
 
-    func renameCurrentConversation(to title: String) {
-        guard let conversationId = selectedConversationId else { return }
-        renameConversation(conversationId, to: title)
-    }
-
     func renameConversation(_ conversationId: String, to title: String) {
         guard let activeSession = currentSessionOrError(), let workspaceId = selectedWorkspaceId,
               !isConversationMutating else { return }
@@ -2717,12 +2658,6 @@ final class NotePatchViewModel: ObservableObject {
                 showError(error)
             }
         }
-    }
-
-    func deleteCurrentConversation() {
-        guard let activeSession = currentSessionOrError(), let workspaceId = selectedWorkspaceId,
-              let conversationId = selectedConversationId, !isConversationMutating else { return }
-        deleteConversation(conversationId, activeSession: activeSession, workspaceId: workspaceId)
     }
 
     func deleteConversation(_ conversationId: String) {

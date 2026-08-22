@@ -104,10 +104,6 @@ final class SettingsStore {
         defaults.set(enabled, forKey: Keys.globalFeedbackEnabled)
     }
 
-    func loadAIHistoryEnabled() -> Bool? {
-        defaults.object(forKey: Keys.aiHistoryEnabled) as? Bool
-    }
-
     func loadSession() -> SavedSession? {
         guard
             let accessToken = keychain.string(forKey: Keys.accessToken)?.nilIfBlank,

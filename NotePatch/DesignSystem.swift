@@ -119,12 +119,6 @@ struct NPShadow {
     static let small: (color: Color, radius: CGFloat, y: CGFloat)  = (.black.opacity(0.05), 10, 4)
     /// Card — premium notebook page floating above desk.
     static let medium: (color: Color, radius: CGFloat, y: CGFloat) = (.black.opacity(0.06), 24, 10)
-    /// Sheet — distant surface.
-    static let large: (color: Color, radius: CGFloat, y: CGFloat)  = (.black.opacity(0.06), 40, 16)
-    /// Hover lift — deeper shadow when interacting.
-    static let hover: (color: Color, radius: CGFloat, y: CGFloat)  = (.black.opacity(0.10), 28, 12)
-    /// Upload button — green-tinted, distinctive primary action.
-    static let upload: (color: Color, radius: CGFloat, y: CGFloat) = (Color(hex: "#5D9972").opacity(0.10), 18, 8)
 }
 
 // MARK: - Radius Tokens
@@ -133,18 +127,13 @@ struct NPRadius {
     static let xs         = 8.0
     static let small      = 10.0
     static let medium     = 14.0
-    static let large      = 20.0
     static let xl         = 22.0
     /// Card — premium notebook page corner.
     static let card: CGFloat       = 24.0
-    /// Tab bar — floating dock corner.
-    static let tabBar: CGFloat     = 28.0
     // Aliases
     static let button     = medium
     static let input      = medium
     static let sheet      = xl
-    static let chip       = small
-    static let segmented  = small
 }
 
 // MARK: - Spacing Tokens (4pt grid)
@@ -156,24 +145,12 @@ struct NPSpacing {
     static let medium  = 12.0
     static let large   = 20.0
     static let xl      = 24.0
-    static let xxl     = 32.0
     static let xxxl    = 40.0
-    static let huge    = 48.0
     // Legacy aliases
     static let outer   = xl
     static let section = xl
     static let card    = 18.0
     static let item    = 16.0
-}
-
-// MARK: - Elevation (Z-axis position)
-
-struct NPElevation {
-    static let base: Double     = 0
-    static let raised: Double   = 100
-    static let card: Double     = 200
-    static let sheet: Double    = 300
-    static let overlay: Double  = 400
 }
 
 // MARK: - Card Modifier (Premium notebook page)
@@ -282,55 +259,6 @@ struct NPSecondaryButtonStyle: ButtonStyle {
     }
 }
 
-// MARK: - Icon Button Style
-
-struct NPIconButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.system(size: 17))
-            .foregroundStyle(NPColors.textSecondary)
-            .scaleEffect(configuration.isPressed ? 0.92 : 1.0)
-            .animation(Animation.npButton, value: configuration.isPressed)
-    }
-}
-
-// MARK: - Upload Button Style (Visual anchor, primary action)
-
-struct NPUploadButtonStyle: ButtonStyle {
-    @Environment(\.isEnabled) private var isEnabled
-    @State private var isHovering = false
-
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.system(size: 15, weight: .medium, design: .default))
-            .foregroundStyle(NPColors.brandDark)
-            .frame(height: 48)
-            .frame(maxWidth: .infinity)
-            .background {
-                Capsule(style: .continuous)
-                    .fill(NPColors.interactive)
-            }
-            .overlay {
-                Capsule(style: .continuous)
-                    .stroke(NPColors.brand.opacity(0.16), lineWidth: 1)
-            }
-            .shadow(
-                color: NPShadow.upload.color,
-                radius: NPShadow.upload.radius,
-                x: 0,
-                y: NPShadow.upload.y
-            )
-            .scaleEffect(isHovering ? 1.02 : configuration.isPressed ? 0.98 : 1.0)
-            .offset(y: isHovering ? -3 : 0)
-            .opacity(isEnabled ? 1.0 : 0.5)
-            .animation(Animation.npButton, value: isHovering)
-            .animation(Animation.npButton, value: configuration.isPressed)
-            .onHover { h in
-                withAnimation(Animation.npButton) { isHovering = h }
-            }
-    }
-}
-
 // MARK: - Reprocess Button Style (Card primary action)
 
 struct NPDocumentPrimaryButtonStyle: ButtonStyle {
@@ -412,17 +340,6 @@ extension View {
     func npBody()       -> some View { self.font(.body).foregroundStyle(NPColors.textPrimary) }
     func npCallout()    -> some View { self.font(.callout).foregroundStyle(NPColors.textSecondary) }
     func npCaption()    -> some View { self.font(.caption).foregroundStyle(NPColors.textTertiary) }
-}
-
-// MARK: - Legacy Typography (backward compatibility)
-
-extension View {
-    @available(*, deprecated, message: "Use npTitle()")
-    func npScreenTitle() -> some View { npTitle() }
-    @available(*, deprecated, message: "Use npHeading()")
-    func npSectionTitle() -> some View { npHeading() }
-    @available(*, deprecated, message: "Use npSubheading()")
-    func npCardTitle() -> some View { npSubheading() }
 }
 
 // MARK: - Status Chip
@@ -547,19 +464,4 @@ extension View {
     func npInputField(isFocused: Bool = false) -> some View {
         modifier(NPInputFieldModifier(isFocused: isFocused))
     }
-}
-
-// MARK: - Segmented Control Styling
-
-enum NPSegmentedControl {
-    static let background    = Color.adaptive(light: "#F0F3EE", dark: "#121613")
-    static let selectedBg    = NPColors.surfaceCard
-    static let selectedShadow: (color: Color, radius: CGFloat, y: CGFloat) = (.black.opacity(0.04), 6, 2)
-}
-
-// MARK: - Tab Bar Styling (Floating Dock)
-
-enum NPTabBar {
-    static let background    = NPColors.surfaceCard
-    static let shadow: (color: Color, radius: CGFloat, y: CGFloat) = (.black.opacity(0.08), 30, 12)
 }
