@@ -129,16 +129,12 @@ final class NotePatchUITests: XCTestCase {
         let subsectionPicker = app.scrollViews["notesSubsectionPicker"]
         XCTAssertTrue(subsectionPicker.waitForExistence(timeout: 3))
         for identifier in [
-            "notesSubsection.notes", "notesSubsection.units", "notesSubsection.search",
-            "notesSubsection.homework", "notesSubsection.flashcards"
+            "notesSubsection.notes", "notesSubsection.search", "notesSubsection.homework",
+            "notesSubsection.flashcards", "notesSubsection.units"
         ] {
             assertMinimumHitSize(app.buttons[identifier], width: 44, height: 44)
         }
         keepScreenshot(app, name: "audit-notes")
-
-        app.buttons["notesSubsection.units"].tap()
-        XCTAssertTrue(app.descendants(matching: .any)["learningContentScroll"].waitForExistence(timeout: 3))
-        keepScreenshot(app, name: "audit-units")
 
         app.buttons["notesSubsection.search"].tap()
         XCTAssertTrue(app.textFields["knowledgeQueryField"].waitForExistence(timeout: 3))
@@ -157,6 +153,10 @@ final class NotePatchUITests: XCTestCase {
         XCTAssertTrue(flashcardUnitPicker.exists)
         XCTAssertLessThanOrEqual(flashcardSubtitle.frame.maxY, flashcardUnitPicker.frame.minY - 4)
         keepScreenshot(app, name: "audit-flashcards")
+
+        app.buttons["notesSubsection.units"].tap()
+        XCTAssertTrue(app.descendants(matching: .any)["learningContentScroll"].waitForExistence(timeout: 3))
+        keepScreenshot(app, name: "audit-units")
 
         app.buttons["tab.ai"].tap()
         XCTAssertTrue(app.textViews["openClawComposerTextView"].waitForExistence(timeout: 3))
@@ -830,7 +830,9 @@ final class NotePatchUITests: XCTestCase {
         app.buttons["notesSubsection.homework"].tap()
 
         let learningScroll = app.scrollViews["learningContentScroll"]
-        let latestResult = app.descendants(matching: .any)["gradingLatestResult"]
+        let latestResult = app.staticTexts.matching(
+            NSPredicate(format: "label == %@", "92 / 100")
+        ).element(boundBy: 0)
         for _ in 0..<5 where !latestResult.exists {
             learningScroll.swipeUp()
         }
@@ -853,6 +855,29 @@ final class NotePatchUITests: XCTestCase {
         XCTAssertTrue(priorResult.waitForExistence(timeout: 3))
         XCTAssertTrue(app.staticTexts["诊断性评分"].exists)
         keepScreenshot(app, name: "homework-grading-results")
+    }
+
+    @MainActor
+    func testHomeworkScrollPositionSurvivesTaskProgressUpdates() throws {
+        let app = makeApp(["-NotePatchUITestWorkbench", "-NotePatchUITestHomeworkTaskUpdates"])
+        app.launch()
+        XCTAssertTrue(app.otherElements["workbenchTabs"].waitForExistence(timeout: 5))
+        app.buttons["tab.notes"].tap()
+        app.buttons["notesSubsection.homework"].tap()
+
+        let learningScroll = app.scrollViews["learningContentScroll"]
+        let gradeButton = app.buttons["gradeHomeworkButton"]
+        for _ in 0..<6 where !gradeButton.exists || !gradeButton.isHittable {
+            learningScroll.swipeUp()
+        }
+        XCTAssertTrue(gradeButton.waitForExistence(timeout: 3))
+        let originalY = gradeButton.frame.minY
+        Thread.sleep(forTimeInterval: 2.4)
+        XCTAssertEqual(gradeButton.frame.minY, originalY, accuracy: 3)
+        for _ in 0..<5 where !app.staticTexts["作业评分"].isHittable {
+            learningScroll.swipeDown()
+        }
+        XCTAssertTrue(app.staticTexts["作业评分"].isHittable)
     }
 
     @MainActor
@@ -1245,6 +1270,59 @@ final class NotePatchUITests: XCTestCase {
         XCTAssertTrue(unavailableDisclosure.exists)
         unavailableDisclosure.tap()
         XCTAssertTrue(app.staticTexts["该模型本次没有提供思考摘要。"].waitForExistence(timeout: 2))
+    }
+
+    @MainActor
+    func testChatPDFAttachmentUsesRemarkAndOpensQuickLook() throws {
+        let app = makeApp(["-NotePatchUITestWorkbench", "-NotePatchUITestChatPDFAttachment"])
+        app.launch()
+        XCTAssertTrue(app.otherElements["workbenchTabs"].waitForExistence(timeout: 5))
+        app.buttons["tab.ai"].tap()
+
+        XCTAssertTrue(app.staticTexts["NFC 芯片研究资料"].waitForExistence(timeout: 3))
+        XCTAssertFalse(app.staticTexts["NFC_.pdf"].exists)
+        let attachment = app.buttons["chatAttachmentPreview.ui-pdf"]
+        XCTAssertTrue(attachment.waitForExistence(timeout: 3))
+        keepScreenshot(app, name: "chat-pdf-remark-bubble")
+        attachment.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["quickLookPreview"].waitForExistence(timeout: 5))
+        keepScreenshot(app, name: "chat-pdf-remark-preview")
+    }
+
+    @MainActor
+    func testCompactUploadLayoutKeepsQueueActionsVisible() throws {
+        let app = makeApp(["-NotePatchUITestWorkbench", "-NotePatchUITestPendingImage"])
+        app.launch()
+        XCTAssertTrue(app.otherElements["workbenchTabs"].waitForExistence(timeout: 5))
+        app.buttons["uploadFAB"].tap()
+        let uploadTitle = app.descendants(matching: .any)["uploadScreen"]
+        XCTAssertTrue(uploadTitle.waitForExistence(timeout: 3))
+        assertInsideScreen(uploadTitle, app: app)
+        assertInsideScreen(app.buttons["closeUploadScreenButton"], app: app)
+
+        let homework = app.buttons["uploadKind.homework"]
+        let corrected = app.buttons["uploadKind.corrected_homework"]
+        let courseware = app.buttons["uploadKind.courseware"]
+        XCTAssertTrue(homework.exists && corrected.exists && courseware.exists)
+        XCTAssertEqual(homework.frame.minY, corrected.frame.minY, accuracy: 1)
+        XCTAssertEqual(homework.frame.minY, courseware.frame.minY, accuracy: 1)
+
+        for identifier in ["uploadSource.camera", "uploadSource.photos", "uploadSource.file"] {
+            assertInsideScreen(app.buttons[identifier], app: app)
+        }
+        for identifier in ["queuedUploadPreviewButton", "queuedUploadRemoveButton"] {
+            let button = app.buttons[identifier]
+            XCTAssertTrue(button.waitForExistence(timeout: 3))
+            assertInsideScreen(button, app: app)
+            assertMinimumHitSize(button)
+        }
+        let remarkButton = app.buttons.matching(
+            NSPredicate(format: "identifier BEGINSWITH 'queuedUploadRemarkButton.'")
+        ).firstMatch
+        XCTAssertTrue(remarkButton.waitForExistence(timeout: 3))
+        assertInsideScreen(remarkButton, app: app)
+        assertMinimumHitSize(remarkButton)
+        keepScreenshot(app, name: "compact-upload-layout")
     }
 
     @MainActor

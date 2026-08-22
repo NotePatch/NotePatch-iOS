@@ -982,6 +982,7 @@ struct ChatMessageAttachment: Decodable, Equatable, Identifiable {
     let documentId: String
     let filename: String
     let title: String?
+    let remark: String?
     let mimeType: String?
     let fileType: String?
     let fileSize: Int64?
@@ -991,16 +992,30 @@ struct ChatMessageAttachment: Decodable, Equatable, Identifiable {
     let saveToDocuments: Bool?
 
     var id: String { documentId }
+    var displayName: String {
+        for candidate in [remark, title, filename] {
+            if let value = candidate?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty {
+                return value
+            }
+        }
+        return documentId
+    }
     var isImage: Bool {
         mimeType?.hasPrefix("image/") == true
             || fileType == "image"
             || ["jpg", "jpeg", "png", "webp", "heic"].contains((filename as NSString).pathExtension.lowercased())
+    }
+    var supportsAutomaticThumbnail: Bool {
+        isImage
+            || mimeType?.lowercased() == "application/pdf"
+            || (filename as NSString).pathExtension.lowercased() == "pdf"
     }
 
     enum CodingKeys: String, CodingKey {
         case documentId = "document_id"
         case filename
         case title
+        case remark
         case mimeType = "mime_type"
         case fileType = "file_type"
         case fileSize = "file_size"
@@ -1015,6 +1030,7 @@ struct ChatMessageAttachment: Decodable, Equatable, Identifiable {
         documentId = try container.decodeIfPresent(String.self, forKey: .documentId) ?? ""
         filename = try container.decodeIfPresent(String.self, forKey: .filename) ?? ""
         title = try container.decodeIfPresent(String.self, forKey: .title)
+        remark = try container.decodeIfPresent(String.self, forKey: .remark)
         mimeType = try container.decodeIfPresent(String.self, forKey: .mimeType)
         fileType = try container.decodeIfPresent(String.self, forKey: .fileType)
         fileSize = try container.decodeIfPresent(Int64.self, forKey: .fileSize)
@@ -1022,6 +1038,48 @@ struct ChatMessageAttachment: Decodable, Equatable, Identifiable {
         availability = try container.decodeIfPresent(String.self, forKey: .availability)
         retentionScope = try container.decodeIfPresent(String.self, forKey: .retentionScope)
         saveToDocuments = try container.decodeIfPresent(Bool.self, forKey: .saveToDocuments)
+    }
+
+    init(
+        documentId: String,
+        filename: String,
+        title: String? = nil,
+        remark: String? = nil,
+        mimeType: String? = nil,
+        fileType: String? = nil,
+        fileSize: Int64? = nil,
+        status: String? = nil,
+        availability: String? = nil,
+        retentionScope: String? = nil,
+        saveToDocuments: Bool? = nil
+    ) {
+        self.documentId = documentId
+        self.filename = filename
+        self.title = title
+        self.remark = remark
+        self.mimeType = mimeType
+        self.fileType = fileType
+        self.fileSize = fileSize
+        self.status = status
+        self.availability = availability
+        self.retentionScope = retentionScope
+        self.saveToDocuments = saveToDocuments
+    }
+
+    func applying(_ document: LearningDocumentItem) -> ChatMessageAttachment {
+        ChatMessageAttachment(
+            documentId: document.id,
+            filename: document.originalFilename,
+            title: document.title ?? title,
+            remark: document.remark,
+            mimeType: document.mimeType ?? mimeType,
+            fileType: document.fileType,
+            fileSize: document.fileSize ?? fileSize,
+            status: document.status,
+            availability: availability,
+            retentionScope: document.retentionScope ?? retentionScope,
+            saveToDocuments: document.saveToDocuments ?? saveToDocuments
+        )
     }
 }
 

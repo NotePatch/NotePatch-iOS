@@ -884,7 +884,7 @@ struct NotePatchTests {
         let model = NotePatchViewModel()
         #expect(model.selectedTab == .home)
         #expect(model.selectedLearningSection == .notes)
-        #expect(LearningSection.allCases == [.notes, .units, .search, .homework, .flashcards])
+        #expect(LearningSection.allCases == [.notes, .search, .homework, .flashcards, .units])
 
         var rootPublicationCount = 0
         let rootPublication = model.objectWillChange.sink { rootPublicationCount += 1 }
@@ -931,6 +931,8 @@ struct NotePatchTests {
         #expect(!isSupportedLearningUpload(filename: "workbook.xlsx", mimeType: nil))
         #expect(!isSupportedLearningUpload(filename: "archive.zip", mimeType: "application/zip"))
         #expect(replacingFilenameExtension("exam.pdf", with: "jpg") == "exam.jpg")
+        #expect(previewCacheFilename(displayName: "NFC 芯片研究资料", originalFilename: "NFC_.pdf") == "NFC 芯片研究资料.pdf")
+        #expect(previewCacheFilename(displayName: "课件.PDF", originalFilename: "source.pdf") == "课件.PDF")
         #expect(formatBytes(512) == "512 B")
         #expect(formatBytes(2048) == "2.0 KB")
     }
@@ -3828,6 +3830,81 @@ struct NotePatchTests {
         #expect(requestedPaths.contains("/question.png"))
     }
 
+    @Test @MainActor func restoredConversationUsesDocumentRemarkAndDownloadsPDFThumbnail() async throws {
+        let suiteName = "NotePatchRestoredChatPDFTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let cacheDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("NotePatchRestoredChatPDF-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: cacheDirectory) }
+        let pdfData = Data("%PDF-1.4\n1 0 obj<</Type/Catalog>>endobj\n%%EOF".utf8)
+        var requestedPaths: [String] = []
+        let backendSession = Self.mockSession { request in
+            requestedPaths.append(request.url?.path ?? "")
+            switch request.url?.path {
+            case "/api/v1/workspaces/ws-1/ai/conversations/c-pdf/messages":
+                return Self.response(
+                    request,
+                    status: 200,
+                    body: #"{"items":[{"id":"message-pdf","conversation_id":"c-pdf","role":"user","content":"研究一下","status":"succeeded","created_at":"","attachments":[{"document_id":"doc-pdf","filename":"NFC_.pdf","title":"NFC_.pdf","mime_type":"application/pdf","file_type":"pdf","file_size":128,"status":"ready","availability":"available"}]}],"page":1,"page_size":100,"total":1}"#
+                )
+            case "/api/v1/workspaces/ws-1/documents/doc-pdf":
+                return Self.response(
+                    request,
+                    status: 200,
+                    body: #"{"id":"doc-pdf","workspace_id":"ws-1","uploaded_by":"u","title":"NFC_.pdf","remark":"NFC 芯片研究资料","remark_source":"user","original_filename":"NFC_.pdf","mime_type":"application/pdf","file_size":128,"file_type":"pdf","document_kind":"chat_attachment","retention_scope":"workspace","save_to_documents":true,"storage_backend":"s3","bucket":"files","object_key":"doc-pdf/NFC_.pdf","status":"ready","created_at":"","updated_at":"","artifacts":[]}"#
+                )
+            case "/api/v1/workspaces/ws-1/documents/doc-pdf/download-url":
+                return Self.response(
+                    request,
+                    status: 200,
+                    body: #"{"document_id":"doc-pdf","filename":"NFC_.pdf","expires_in":900,"download_url":"https://download.test/NFC_.pdf"}"#
+                )
+            case "/NFC_.pdf":
+                let response = HTTPURLResponse(
+                    url: try #require(request.url),
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "application/pdf"]
+                )!
+                return (response, pdfData)
+            default:
+                return Self.response(request, status: 500, body: #"{"detail":"unexpected request"}"#)
+            }
+        }
+        let model = NotePatchViewModel(
+            settings: SettingsStore(defaults: defaults, keychain: KeychainStore(service: suiteName)),
+            backendSession: backendSession,
+            tusSession: backendSession,
+            cacheDirectory: cacheDirectory,
+            taskEventStreamingEnabled: false
+        )
+        model.session = SavedSession(
+            baseURL: "https://api.test", tusBaseURL: "https://tus.test/",
+            accessToken: "a", refreshToken: "r", expiresAt: "x", userId: "u",
+            email: "u@test", fullName: nil, selectedWorkspaceId: "ws-1", aiHistoryEnabled: true
+        )
+        model.selectedWorkspaceId = "ws-1"
+
+        model.selectConversation("c-pdf")
+        try await Self.waitUntil {
+            !model.isChatHistoryLoading && model.openClawMessages.first?.attachments.first?.status == .ready
+        }
+
+        let restored = try #require(model.openClawMessages.first?.attachments.first)
+        #expect(restored.displayName == "NFC 芯片研究资料")
+        #expect(restored.file.filename == "NFC 芯片研究资料.pdf")
+        #expect(FileManager.default.fileExists(atPath: restored.file.url.path))
+        #expect((try Data(contentsOf: restored.file.url)) == pdfData)
+        #expect(requestedPaths.contains("/api/v1/workspaces/ws-1/documents/doc-pdf"))
+        #expect(requestedPaths.contains("/api/v1/workspaces/ws-1/documents/doc-pdf/download-url"))
+
+        model.previewOpenClawAttachment(restored)
+        #expect(model.downloadedPreview?.filename == "NFC 芯片研究资料")
+        #expect(model.downloadedPreview?.url == restored.file.url)
+    }
+
     @Test @MainActor func documentPreviewRetriesExpiredURLOnceAndIsolatesSameNamedFiles() async throws {
         let suiteName = "NotePatchDocumentPreview.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suiteName))
@@ -3887,11 +3964,11 @@ struct NotePatchTests {
         )
         model.selectedWorkspaceId = "ws-1"
         let first = LearningDocumentItem(
-            id: "doc-1", workspaceId: "ws-1", originalFilename: "same.pdf",
+            id: "doc-1", workspaceId: "ws-1", remark: "Shared report", originalFilename: "same.pdf",
             mimeType: "application/pdf", fileType: "pdf", documentKind: "courseware", status: "scanning"
         )
         let second = LearningDocumentItem(
-            id: "doc-2", workspaceId: "ws-1", originalFilename: "same.pdf",
+            id: "doc-2", workspaceId: "ws-1", remark: "Shared report", originalFilename: "same.pdf",
             mimeType: "application/pdf", fileType: "pdf", documentKind: "courseware", status: "ready"
         )
 
@@ -3899,6 +3976,7 @@ struct NotePatchTests {
         model.downloadAndPreview(first)
         try await Self.waitUntil { model.downloadedPreview?.url.path.contains("/doc-1/") == true }
         let firstURL = try #require(model.downloadedPreview?.url)
+        #expect(model.downloadedPreview?.filename == "Shared report")
         model.downloadedPreview = nil
         model.downloadAndPreview(second)
         try await Self.waitUntil { model.downloadedPreview?.url.path.contains("/doc-2/") == true }
@@ -3909,6 +3987,7 @@ struct NotePatchTests {
         #expect(downloadURLRequests["doc-2"] == 1)
         #expect(firstURL != secondURL)
         #expect(firstURL.lastPathComponent == secondURL.lastPathComponent)
+        #expect(firstURL.lastPathComponent == "Shared report.pdf")
         #expect(!model.isDocumentPreviewLoading("doc-1"))
         #expect(!model.isDocumentPreviewLoading("doc-2"))
     }

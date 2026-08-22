@@ -206,6 +206,16 @@ nonisolated func sanitizeFileName(_ name: String) -> String {
     return sanitized.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "upload.bin" : sanitized
 }
 
+nonisolated func previewCacheFilename(displayName: String, originalFilename: String) -> String {
+    let trimmedDisplayName = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+    let base = sanitizeFileName(trimmedDisplayName.isEmpty ? originalFilename : trimmedDisplayName)
+    let originalExtension = (originalFilename as NSString).pathExtension
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !originalExtension.isEmpty else { return base }
+    let suffix = ".\(originalExtension.lowercased())"
+    return base.lowercased().hasSuffix(suffix) ? base : "\(base).\(originalExtension)"
+}
+
 nonisolated func replacingFilenameExtension(_ filename: String, with newExtension: String) -> String {
     let nsName = filename as NSString
     let base = nsName.deletingPathExtension

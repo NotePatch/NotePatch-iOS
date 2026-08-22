@@ -114,6 +114,7 @@ struct ContentView: View {
                 ImagePreview(url: preview.url)
             case .quickLook:
                 QuickLookPreview(url: preview.url)
+                    .accessibilityIdentifier("quickLookPreview")
             case .unsupported:
                 UnsupportedFilePreview(preview: preview)
             }
@@ -2251,14 +2252,16 @@ private struct UploadDocumentScreen: View {
     @State private var pickerWorkspaceId: String?
     @State private var remarkQueueItem: QueuedUploadItem?
     @State private var remarkDraft = ""
+    @State private var compactLayout = false
 
     var body: some View {
         ZStack {
             ScrollView {
-                VStack(spacing: NPSpacing.section) {
+                VStack(spacing: compactLayout ? 12 : NPSpacing.section) {
                     NPSection {
                         UploadPanel(
                             model: model,
+                            compactLayout: compactLayout,
                             onCameraUpload: { isShowingCamera = true },
                             onGalleryUpload: {
                                 capturePickerContext()
@@ -2328,9 +2331,9 @@ private struct UploadDocumentScreen: View {
                         }
                     }
                 }
-                .padding(.horizontal, NPSpacing.outer)
-                .padding(.top, 14)
-                .padding(.bottom, NPSpacing.section)
+                .padding(.horizontal, compactLayout ? 16 : NPSpacing.outer)
+                .padding(.top, compactLayout ? 8 : 14)
+                .padding(.bottom, compactLayout ? 16 : NPSpacing.section)
             }
             .allowsHitTesting(queuedPreview == nil)
 
@@ -2349,6 +2352,13 @@ private struct UploadDocumentScreen: View {
             }
         }
         .background(NPColors.background.ignoresSafeArea())
+        .background(
+            GeometryReader { proxy in
+                Color.clear
+                    .onAppear { updateCompactLayout(for: proxy.size) }
+                    .onChange(of: proxy.size) { updateCompactLayout(for: $0) }
+            }
+        )
         .fileImporter(isPresented: $isShowingFileImporter, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
             if case .success(let urls) = result {
                 model.uploadPickedFiles(
@@ -2421,6 +2431,13 @@ private struct UploadDocumentScreen: View {
         pickerUserId = model.session?.userId
         pickerWorkspaceId = model.selectedWorkspaceId
     }
+
+    private func updateCompactLayout(for size: CGSize) {
+        let shouldCompact = size.height <= 700 || size.width <= 350
+        if compactLayout != shouldCompact {
+            compactLayout = shouldCompact
+        }
+    }
 }
 
 private struct UploadQueuedPreviewOverlay: View {
@@ -2438,6 +2455,7 @@ private struct UploadQueuedPreviewOverlay: View {
             case .quickLook:
                 ZStack(alignment: .topTrailing) {
                     QuickLookPreview(url: preview.url)
+                        .accessibilityIdentifier("quickLookPreview")
                         .ignoresSafeArea()
                     previewCloseButton
                 }
@@ -2639,6 +2657,7 @@ private struct QueuedUploadRow: View {
                     .buttonStyle(.plain)
                     .disabled(isBusy)
                     .accessibilityLabel(localizedFormat("accessibility.preview_file", item.file.filename))
+                    .accessibilityIdentifier("queuedUploadPreviewButton")
 
                     Button(role: .destructive, action: onRemove) {
                         Image(systemName: "trash")
@@ -2648,6 +2667,7 @@ private struct QueuedUploadRow: View {
                     .buttonStyle(.plain)
                     .disabled(isBusy)
                     .accessibilityLabel(localizedFormat("accessibility.remove_file", item.file.filename))
+                    .accessibilityIdentifier("queuedUploadRemoveButton")
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -2685,16 +2705,17 @@ private struct QueuedUploadRow: View {
 
 private struct UploadPanel: View {
     @ObservedObject var model: NotePatchViewModel
+    let compactLayout: Bool
     let onCameraUpload: () -> Void
     let onGalleryUpload: () -> Void
     let onFileUpload: () -> Void
     @State private var isLearningInfoExpanded = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: compactLayout ? 10 : 12) {
             SectionLabel(localized("upload.document_type"))
 
-            ChoiceGrid(minimum: 108) {
+            ChoiceGrid(minimum: compactLayout ? 88 : 108) {
                 ForEach(["homework", "corrected_homework", "courseware", "note", "exam", "answer_key", "rubric", "other"], id: \.self) { kind in
                     UploadKindButton(
                         title: documentKindLabel(kind),
@@ -2708,9 +2729,9 @@ private struct UploadPanel: View {
             }
 
             HStack(spacing: NPSpacing.small) {
-                UploadSourceButton(title: "upload.source.camera", systemImage: "camera.fill", accessibilityIdentifier: "uploadSource.camera", emphasized: true, enabled: !model.isBusy && UIImagePickerController.isSourceTypeAvailable(.camera), action: onCameraUpload)
-                UploadSourceButton(title: "upload.source.photos", systemImage: "photo.on.rectangle", accessibilityIdentifier: "uploadSource.photos", emphasized: false, enabled: !model.isBusy, action: onGalleryUpload)
-                UploadSourceButton(title: "upload.source.file", systemImage: "folder", accessibilityIdentifier: "uploadSource.file", emphasized: false, enabled: !model.isBusy, action: onFileUpload)
+                UploadSourceButton(title: "upload.source.camera", systemImage: "camera.fill", accessibilityIdentifier: "uploadSource.camera", emphasized: true, compactLayout: compactLayout, enabled: !model.isBusy && UIImagePickerController.isSourceTypeAvailable(.camera), action: onCameraUpload)
+                UploadSourceButton(title: "upload.source.photos", systemImage: "photo.on.rectangle", accessibilityIdentifier: "uploadSource.photos", emphasized: false, compactLayout: compactLayout, enabled: !model.isBusy, action: onGalleryUpload)
+                UploadSourceButton(title: "upload.source.file", systemImage: "folder", accessibilityIdentifier: "uploadSource.file", emphasized: false, compactLayout: compactLayout, enabled: !model.isBusy, action: onFileUpload)
             }
 
             if let progress = model.uploadProgressPercent {
@@ -2859,12 +2880,13 @@ private struct UploadSourceButton: View {
     let systemImage: String
     let accessibilityIdentifier: String
     let emphasized: Bool
+    let compactLayout: Bool
     let enabled: Bool
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
-            UploadSourceLabel(title: title, systemImage: systemImage)
+            UploadSourceLabel(title: title, systemImage: systemImage, compactLayout: compactLayout)
         }
         .buttonStyle(UploadSourceButtonStyle(emphasized: emphasized))
         .disabled(!enabled)
@@ -2875,11 +2897,12 @@ private struct UploadSourceButton: View {
 private struct UploadSourceLabel: View {
     let title: String
     let systemImage: String
+    let compactLayout: Bool
 
     var body: some View {
         VStack(spacing: 6) {
             Image(systemName: systemImage)
-                .font(.system(size: 19, weight: .medium))
+                .font(.system(size: compactLayout ? 17 : 19, weight: .medium))
             Text(localized(title))
                 .font(.caption.weight(.medium))
                 .multilineTextAlignment(.center)
@@ -2887,7 +2910,7 @@ private struct UploadSourceLabel: View {
                 .minimumScaleFactor(0.85)
         }
         .frame(maxWidth: .infinity)
-        .frame(minHeight: 64)
+        .frame(minHeight: compactLayout ? 56 : 64)
     }
 }
 
@@ -3023,7 +3046,7 @@ private struct DocumentRow: View, Equatable {
             }
             .buttonStyle(.plain)
             .disabled(!canDownload || isPreviewLoading)
-            .accessibilityLabel(localizedFormat("accessibility.preview_file", document.originalFilename))
+            .accessibilityLabel(localizedFormat("accessibility.preview_file", document.displayRemark))
             .accessibilityIdentifier("documentPreviewArea-\(document.id)")
 
             HStack(spacing: 8) {
@@ -3709,6 +3732,7 @@ private struct OpenClawChatTab: View {
                                         message: message,
                                         onCopy: { model.copyOpenClawMessage(message) },
                                         onSelectText: { textSelectionMessage = message },
+                                        onPreviewAttachment: model.previewOpenClawAttachment,
                                         onEdit: canEdit(message) ? {
                                             beginInlineRevision(message)
                                         } : nil
@@ -4541,6 +4565,11 @@ private struct LearningTab: View {
                 .padding(.horizontal, 16)
                 .workbenchContentBottomPadding()
             }
+            .background {
+                if model.selectedLearningSection == .homework {
+                    HomeworkScrollPositionPreserver(identity: model.selectedHomeworkId)
+                }
+            }
             .accessibilityIdentifier("learningContentScroll")
         }
         .onChange(of: model.selectedLearningSection) { section in
@@ -4550,6 +4579,116 @@ private struct LearningTab: View {
         }
         .sheet(isPresented: $model.isStudyNoteGenerationPresented) {
             StudyNoteGenerationSheet(model: model)
+        }
+    }
+}
+
+private struct HomeworkScrollPositionPreserver: UIViewRepresentable {
+    let identity: String?
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(identity: identity)
+    }
+
+    func makeUIView(context: Context) -> ProbeView {
+        let view = ProbeView()
+        view.coordinator = context.coordinator
+        return view
+    }
+
+    func updateUIView(_ uiView: ProbeView, context: Context) {
+        context.coordinator.prepareForLayoutUpdate(identity: identity, from: uiView)
+    }
+
+    final class ProbeView: UIView {
+        weak var coordinator: Coordinator?
+
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            coordinator?.attachIfNeeded(from: self)
+        }
+    }
+
+    final class Coordinator: NSObject {
+        private weak var scrollView: UIScrollView?
+        private var observation: NSKeyValueObservation?
+        private var identity: String?
+        private var savedOffset = CGPoint.zero
+        private var layoutGeneration = 0
+        private var isProtectingLayout = false
+
+        init(identity: String?) {
+            self.identity = identity
+        }
+
+        deinit {
+            observation?.invalidate()
+        }
+
+        func attachIfNeeded(from view: UIView) {
+            guard scrollView == nil, let scrollView = enclosingScrollView(from: view) else { return }
+            self.scrollView = scrollView
+            savedOffset = scrollView.contentOffset
+            observation = scrollView.observe(\.contentOffset, options: [.new]) { [weak self, weak scrollView] _, change in
+                guard let self, let scrollView, let offset = change.newValue else { return }
+                if scrollView.isTracking || scrollView.isDragging || scrollView.isDecelerating {
+                    self.isProtectingLayout = false
+                    self.savedOffset = offset
+                } else if !self.isProtectingLayout {
+                    self.savedOffset = offset
+                }
+            }
+        }
+
+        func prepareForLayoutUpdate(identity newIdentity: String?, from view: UIView) {
+            attachIfNeeded(from: view)
+            guard let scrollView else { return }
+            if identity != newIdentity {
+                identity = newIdentity
+                savedOffset = scrollView.contentOffset
+                isProtectingLayout = false
+                return
+            }
+            guard !scrollView.isTracking, !scrollView.isDragging, !scrollView.isDecelerating else {
+                savedOffset = scrollView.contentOffset
+                return
+            }
+            let target = savedOffset
+            layoutGeneration &+= 1
+            let generation = layoutGeneration
+            isProtectingLayout = true
+            DispatchQueue.main.async { [weak self, weak scrollView] in
+                guard let self, let scrollView, self.layoutGeneration == generation else { return }
+                defer { self.isProtectingLayout = false }
+                guard !scrollView.isTracking, !scrollView.isDragging, !scrollView.isDecelerating else {
+                    self.savedOffset = scrollView.contentOffset
+                    return
+                }
+                let minimumY = -scrollView.adjustedContentInset.top
+                let maximumY = max(
+                    minimumY,
+                    scrollView.contentSize.height - scrollView.bounds.height + scrollView.adjustedContentInset.bottom
+                )
+                let restoredY = min(max(target.y, minimumY), maximumY)
+                if scrollView.contentOffset.y < restoredY - 1 {
+                    scrollView.setContentOffset(
+                        CGPoint(x: scrollView.contentOffset.x, y: restoredY),
+                        animated: false
+                    )
+                }
+                self.savedOffset = CGPoint(x: scrollView.contentOffset.x, y: restoredY)
+            }
+        }
+
+        private func enclosingScrollView(from view: UIView) -> UIScrollView? {
+            var candidate = view.superview
+            while let current = candidate {
+                if let scrollView = current as? UIScrollView {
+                    return scrollView
+                }
+                candidate = current.superview
+            }
+            return nil
         }
     }
 }
@@ -5203,7 +5342,7 @@ private struct KnowledgeSearchSection: View {
                     NPSection {
                         VStack(alignment: .leading, spacing: NPSpacing.small) {
                             HStack(alignment: .firstTextBaseline) {
-                                Text(item.metadataTitle ?? item.sourceType ?? localized("knowledge.snippet"))
+                                Text(documentDisplayName(item.documentId) ?? item.metadataTitle ?? item.sourceType ?? localized("knowledge.snippet"))
                                     .npSubheading()
                                     .foregroundStyle(NPColors.textPrimary)
                                     .lineLimit(2)
@@ -5234,6 +5373,12 @@ private struct KnowledgeSearchSection: View {
                 }
             }
         }
+    }
+
+    private func documentDisplayName(_ documentId: String?) -> String? {
+        guard let documentId else { return nil }
+        return model.documents.first(where: { $0.id == documentId })?.displayRemark
+            ?? model.gradingDocuments.first(where: { $0.id == documentId })?.displayRemark
     }
 }
 
@@ -5543,9 +5688,7 @@ private struct HomeworkGradingSection: View {
     }
 
     private func referenceDocumentName(_ documentId: String) -> String {
-        model.gradingDocuments.first(where: { $0.id == documentId })?.title
-            ?? model.gradingDocuments.first(where: { $0.id == documentId })?.originalFilename
-            ?? documentId
+        model.gradingDocuments.first(where: { $0.id == documentId })?.displayRemark ?? documentId
     }
 }
 
@@ -5642,6 +5785,7 @@ private struct OpenClawMessageBubble: View {
     let message: OpenClawChatMessage
     let onCopy: () -> Void
     let onSelectText: () -> Void
+    let onPreviewAttachment: (OpenClawChatAttachment) -> Void
     let onEdit: (() -> Void)?
     @State private var isReasoningExpanded = false
 
@@ -5777,7 +5921,10 @@ private struct OpenClawMessageBubble: View {
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: NPSpacing.small) {
                             ForEach(message.attachments) { attachment in
-                                OpenClawMessageAttachmentView(attachment: attachment)
+                                OpenClawMessageAttachmentView(
+                                    attachment: attachment,
+                                    onPreview: { onPreviewAttachment(attachment) }
+                                )
                             }
                         }
                     }
@@ -6080,38 +6227,45 @@ private struct SmoothStreamingText: View {
 
 private struct OpenClawMessageAttachmentView: View {
     let attachment: OpenClawChatAttachment
+    let onPreview: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 5) {
-            ZStack {
-                UploadThumbnailImage(
-                    file: attachment.file,
-                    size: CGSize(width: 112, height: 88),
-                    cornerRadius: 10
-                )
-                if attachment.status == .uploading {
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(Color.black.opacity(0.28))
-                    ProgressView()
-                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                } else if attachment.status == .unavailable {
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(Color.black.opacity(0.16))
-                    Image(systemName: "exclamationmark.icloud")
-                        .font(.system(size: 22, weight: .semibold))
-                        .foregroundStyle(Color.white)
+        Button(action: onPreview) {
+            VStack(alignment: .leading, spacing: 5) {
+                ZStack {
+                    UploadThumbnailImage(
+                        file: attachment.file,
+                        size: CGSize(width: 112, height: 88),
+                        cornerRadius: 10
+                    )
+                    if attachment.status == .uploading {
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .fill(Color.black.opacity(0.28))
+                        ProgressView()
+                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                    } else if attachment.status == .unavailable {
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .fill(Color.black.opacity(0.16))
+                        Image(systemName: "exclamationmark.icloud")
+                            .font(.system(size: 22, weight: .semibold))
+                            .foregroundStyle(Color.white)
+                    }
                 }
-            }
-            .frame(width: 112, height: 88)
+                .frame(width: 112, height: 88)
 
-            Text(attachment.file.filename)
-                .font(.caption2)
-                .foregroundStyle(NPColors.textSecondary)
-                .lineLimit(1)
-                .frame(width: 112, alignment: .leading)
+                Text(attachment.displayName)
+                    .font(.caption2)
+                    .foregroundStyle(NPColors.textSecondary)
+                    .lineLimit(2)
+                    .frame(width: 112, alignment: .leading)
+            }
         }
+        .buttonStyle(.plain)
+        .disabled(attachment.status == .uploading)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(localizedFormat("chat.attachment_accessibility", attachment.file.filename))
+        .accessibilityLabel(localizedFormat("chat.attachment_accessibility", attachment.displayName))
+        .accessibilityHint(localized("common.preview"))
+        .accessibilityIdentifier("chatAttachmentPreview.\(attachment.documentId ?? attachment.id.uuidString)")
     }
 }
 

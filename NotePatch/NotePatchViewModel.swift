@@ -94,10 +94,10 @@ enum HomeDestination: String, Identifiable {
 
 enum LearningSection: String, CaseIterable, Identifiable {
     case notes
-    case units
     case search
     case homework
     case flashcards
+    case units
 
     var id: String { rawValue }
     var title: String {
@@ -127,6 +127,7 @@ enum OpenClawMessageStatus: Equatable {
 enum OpenClawAttachmentStatus: Equatable {
     case uploading
     case ready
+    case remote
     case unavailable
 }
 
@@ -135,12 +136,23 @@ struct OpenClawChatAttachment: Identifiable, Equatable {
     let file: LocalUploadFile
     var documentId: String?
     var status: OpenClawAttachmentStatus
+    var displayName: String
+    var fileSize: Int64?
 
-    init(file: LocalUploadFile, documentId: String? = nil, status: OpenClawAttachmentStatus = .uploading) {
+    init(
+        file: LocalUploadFile,
+        documentId: String? = nil,
+        status: OpenClawAttachmentStatus = .uploading,
+        displayName: String? = nil,
+        fileSize: Int64? = nil
+    ) {
         id = file.id
         self.file = file
         self.documentId = documentId
         self.status = status
+        let trimmedName = displayName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        self.displayName = trimmedName.isEmpty ? file.filename : trimmedName
+        self.fileSize = fileSize
     }
 }
 
@@ -2085,7 +2097,7 @@ final class NotePatchViewModel: ObservableObject {
     func copyOpenClawMessage(_ message: OpenClawChatMessage) {
         let content = message.content.trimmingCharacters(in: .whitespacesAndNewlines)
         let attachmentLines = message.attachments.map {
-            localizedFormat("chat.copy.attachment", $0.file.filename)
+            localizedFormat("chat.copy.attachment", $0.displayName)
         }
         let text = ([content].filter { !$0.isEmpty } + attachmentLines).joined(separator: "\n")
         guard !text.isEmpty else { return }
@@ -5063,7 +5075,10 @@ final class NotePatchViewModel: ObservableObject {
             setStatus("document.fetching_download_link")
             do {
                 let client = clientFor(activeSession)
-                let safeFilename = sanitizeFileName(document.originalFilename)
+                let safeFilename = previewCacheFilename(
+                    displayName: document.displayRemark,
+                    originalFilename: document.originalFilename
+                )
                 let targetURL = cacheDirectory
                     .appendingPathComponent("downloads", isDirectory: true)
                     .appendingPathComponent(sanitizeFileName(document.id), isDirectory: true)
@@ -5089,7 +5104,7 @@ final class NotePatchViewModel: ObservableObject {
                 downloadedPreview = DownloadedPreview(
                     url: downloadedURL,
                     mimeType: document.mimeType ?? contentTypeForFilename(document.originalFilename),
-                    filename: document.originalFilename,
+                    filename: document.displayRemark,
                     fileSize: document.fileSize
                 )
                 setStatus(
@@ -5099,6 +5114,84 @@ final class NotePatchViewModel: ObservableObject {
                 )
             } catch {
                 guard isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) else { return }
+                showError(error)
+            }
+        }
+    }
+
+    func previewOpenClawAttachment(_ attachment: OpenClawChatAttachment) {
+        if FileManager.default.fileExists(atPath: attachment.file.url.path) {
+            downloadedPreview = DownloadedPreview(
+                url: attachment.file.url,
+                mimeType: attachment.file.mimeType,
+                filename: attachment.displayName,
+                fileSize: attachment.fileSize ?? attachment.file.fileSize
+            )
+            return
+        }
+        guard let documentId = attachment.documentId,
+              let activeSession = currentSessionOrError(),
+              let workspaceId = selectedWorkspaceId else {
+            setError("document.error.not_available")
+            return
+        }
+        updateOpenClawAttachments(documentId: documentId) { current in
+            var updated = current
+            updated.status = .uploading
+            return updated
+        }
+        Task {
+            do {
+                let client = clientFor(activeSession)
+                let document = try await client.getDocument(workspaceId: workspaceId, documentId: documentId)
+                guard isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) else { throw CancellationError() }
+                let serverAttachment = ChatMessageAttachment(
+                    documentId: document.id,
+                    filename: document.originalFilename,
+                    title: document.title,
+                    remark: document.remark,
+                    mimeType: document.mimeType,
+                    fileType: document.fileType,
+                    fileSize: document.fileSize,
+                    status: document.status,
+                    availability: "available",
+                    retentionScope: document.retentionScope,
+                    saveToDocuments: document.saveToDocuments
+                )
+                let localFile = localChatAttachmentFile(serverAttachment, workspaceId: workspaceId)
+                let response = try await client.getDownloadURL(workspaceId: workspaceId, documentId: documentId)
+                let downloadedURL = try await client.download(downloadURL: response.downloadURL, targetURL: localFile.url)
+                guard isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) else { throw CancellationError() }
+                let downloadedFile = LocalUploadFile(
+                    id: localFile.id,
+                    url: downloadedURL,
+                    filename: localFile.filename,
+                    mimeType: localFile.mimeType
+                )
+                updateOpenClawAttachments(documentId: documentId) { current in
+                    OpenClawChatAttachment(
+                        file: downloadedFile,
+                        documentId: documentId,
+                        status: .ready,
+                        displayName: document.displayRemark,
+                        fileSize: document.fileSize ?? current.fileSize
+                    )
+                }
+                downloadedPreview = DownloadedPreview(
+                    url: downloadedURL,
+                    mimeType: downloadedFile.mimeType,
+                    filename: document.displayRemark,
+                    fileSize: document.fileSize
+                )
+            } catch is CancellationError {
+                return
+            } catch {
+                guard isCurrentWorkspaceContext(activeSession, workspaceId: workspaceId) else { return }
+                updateOpenClawAttachments(documentId: documentId) { current in
+                    var updated = current
+                    updated.status = .unavailable
+                    return updated
+                }
                 showError(error)
             }
         }
@@ -5590,7 +5683,29 @@ final class NotePatchViewModel: ObservableObject {
                 )
             ]
         }
-        if ProcessInfo.processInfo.arguments.contains("-NotePatchUITestBubbleSizing") {
+        if ProcessInfo.processInfo.arguments.contains("-NotePatchUITestChatPDFAttachment"),
+           let file = makeUITestChatPDF(in: cacheDirectory) {
+            openClawMessages = [
+                OpenClawChatMessage(
+                    id: "ui-chat-pdf",
+                    role: .user,
+                    content: "研究一下这份资料",
+                    status: .done,
+                    taskId: nil,
+                    progress: nil,
+                    events: [],
+                    attachments: [
+                        OpenClawChatAttachment(
+                            file: file,
+                            documentId: "ui-pdf",
+                            status: .ready,
+                            displayName: "NFC 芯片研究资料",
+                            fileSize: file.fileSize
+                        )
+                    ]
+                )
+            ]
+        } else if ProcessInfo.processInfo.arguments.contains("-NotePatchUITestBubbleSizing") {
             openClawMessages = [
                 OpenClawChatMessage(
                     id: "ui-sizing-user-short",
@@ -5740,6 +5855,43 @@ final class NotePatchViewModel: ObservableObject {
             setStatus("operation.offline_test_mode")
         } else {
             statusMessage = ""
+        }
+        if launchArguments.contains("-NotePatchUITestHomeworkTaskUpdates") {
+            Task { [weak self] in
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                for progress in stride(from: 5, through: 95, by: 5) {
+                    guard let self, self.isOfflineTestMode else { return }
+                    self.activeTask = TaskItem(
+                        id: "homework-scroll-task",
+                        workspaceId: "ui-workspace",
+                        taskType: "grade_homework",
+                        status: "running",
+                        resourceType: "homework",
+                        resourceId: "homework-1",
+                        payload: .object(["homework_id": .string("homework-1")]),
+                        progress: progress
+                    )
+                    if let homework = self.homeworks.first(where: { $0.id == "homework-1" }) {
+                        self.homeworks = [HomeworkItem(
+                            id: homework.id,
+                            workspaceId: homework.workspaceId,
+                            title: homework.title,
+                            description: homework.description,
+                            documentId: homework.documentId,
+                            dueAt: homework.dueAt,
+                            status: homework.status,
+                            rubricText: homework.rubricText,
+                            maxScore: homework.maxScore,
+                            metadata: homework.metadata,
+                            createdByUserId: homework.createdByUserId,
+                            createdAt: homework.createdAt,
+                            updatedAt: "fixture-\(progress)",
+                            latestGradingResult: homework.latestGradingResult
+                        )]
+                    }
+                    try? await Task.sleep(nanoseconds: 180_000_000)
+                }
+            }
         }
     }
 
@@ -6837,15 +6989,29 @@ final class NotePatchViewModel: ObservableObject {
                FileManager.default.fileExists(atPath: local.file.url.path) {
                 var ready = local
                 ready.status = .ready
+                ready.displayName = attachment.displayName
+                ready.fileSize = attachment.fileSize
                 return ready
             }
             let file = localChatAttachmentFile(attachment, workspaceId: workspaceId)
             let fileExists = FileManager.default.fileExists(atPath: file.url.path)
-            let shouldDownload = attachment.isImage && attachment.availability != "unavailable"
+            let isUnavailable = attachment.availability == "unavailable"
+            let status: OpenClawAttachmentStatus
+            if fileExists {
+                status = .ready
+            } else if isUnavailable {
+                status = .unavailable
+            } else if attachment.supportsAutomaticThumbnail {
+                status = .uploading
+            } else {
+                status = .remote
+            }
             return OpenClawChatAttachment(
                 file: file,
                 documentId: attachment.documentId,
-                status: fileExists ? .ready : (shouldDownload ? .uploading : .unavailable)
+                status: status,
+                displayName: attachment.displayName,
+                fileSize: attachment.fileSize
             )
         }
         chatAttachmentsByMessageId[messageId] = restored
@@ -6861,12 +7027,48 @@ final class NotePatchViewModel: ObservableObject {
         guard !attachmentsByMessageId.isEmpty else { return }
         let client = clientFor(activeSession)
         for (messageId, attachments) in attachmentsByMessageId {
-            for attachment in attachments where !attachment.documentId.isEmpty && attachment.isImage && attachment.availability != "unavailable" {
+            for serverAttachment in attachments where !serverAttachment.documentId.isEmpty {
                 try Task.checkCancellation()
                 guard shouldApply() else { throw CancellationError() }
+                var attachment = serverAttachment
+                if let document = try? await client.getDocument(
+                    workspaceId: workspaceId,
+                    documentId: serverAttachment.documentId
+                ) {
+                    attachment = serverAttachment.applying(document)
+                }
                 let file = localChatAttachmentFile(attachment, workspaceId: workspaceId)
                 if FileManager.default.fileExists(atPath: file.url.path) {
-                    updateRestoredChatAttachment(messageId: messageId, documentId: attachment.documentId, file: file, status: .ready)
+                    updateRestoredChatAttachment(
+                        messageId: messageId,
+                        documentId: attachment.documentId,
+                        file: file,
+                        status: .ready,
+                        displayName: attachment.displayName,
+                        fileSize: attachment.fileSize
+                    )
+                    continue
+                }
+                guard attachment.availability != "unavailable" else {
+                    updateRestoredChatAttachment(
+                        messageId: messageId,
+                        documentId: attachment.documentId,
+                        file: file,
+                        status: .unavailable,
+                        displayName: attachment.displayName,
+                        fileSize: attachment.fileSize
+                    )
+                    continue
+                }
+                guard attachment.supportsAutomaticThumbnail else {
+                    updateRestoredChatAttachment(
+                        messageId: messageId,
+                        documentId: attachment.documentId,
+                        file: file,
+                        status: .remote,
+                        displayName: attachment.displayName,
+                        fileSize: attachment.fileSize
+                    )
                     continue
                 }
                 do {
@@ -6889,7 +7091,9 @@ final class NotePatchViewModel: ObservableObject {
                         messageId: messageId,
                         documentId: attachment.documentId,
                         file: downloadedFile,
-                        status: .ready
+                        status: .ready,
+                        displayName: attachment.displayName,
+                        fileSize: attachment.fileSize
                     )
                 } catch is CancellationError {
                     throw CancellationError()
@@ -6899,7 +7103,9 @@ final class NotePatchViewModel: ObservableObject {
                         messageId: messageId,
                         documentId: attachment.documentId,
                         file: file,
-                        status: .unavailable
+                        status: .unavailable,
+                        displayName: attachment.displayName,
+                        fileSize: attachment.fileSize
                     )
                 }
             }
@@ -6910,10 +7116,12 @@ final class NotePatchViewModel: ObservableObject {
         _ attachment: ChatMessageAttachment,
         workspaceId: String
     ) -> LocalUploadFile {
-        let filename = sanitizeFileName(
-            attachment.filename.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                ? (attachment.title ?? attachment.documentId)
-                : attachment.filename
+        let originalFilename = attachment.filename.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? attachment.documentId
+            : attachment.filename
+        let filename = previewCacheFilename(
+            displayName: attachment.displayName,
+            originalFilename: originalFilename
         )
         let directory = cacheDirectory
             .appendingPathComponent("chat-attachments", isDirectory: true)
@@ -6931,14 +7139,48 @@ final class NotePatchViewModel: ObservableObject {
         messageId: String,
         documentId: String,
         file: LocalUploadFile,
-        status: OpenClawAttachmentStatus
+        status: OpenClawAttachmentStatus,
+        displayName: String? = nil,
+        fileSize: Int64? = nil
     ) {
         var attachments = chatAttachmentsByMessageId[messageId] ?? []
         guard let index = attachments.firstIndex(where: { $0.documentId == documentId }) else { return }
-        attachments[index] = OpenClawChatAttachment(file: file, documentId: documentId, status: status)
+        let current = attachments[index]
+        attachments[index] = OpenClawChatAttachment(
+            file: file,
+            documentId: documentId,
+            status: status,
+            displayName: displayName ?? current.displayName,
+            fileSize: fileSize ?? current.fileSize
+        )
         chatAttachmentsByMessageId[messageId] = attachments
         updateOpenClawMessage(messageId) { message in
             message.attachments = attachments
+        }
+    }
+
+    private func updateOpenClawAttachments(
+        documentId: String,
+        transform: (OpenClawChatAttachment) -> OpenClawChatAttachment
+    ) {
+        for messageId in Array(chatAttachmentsByMessageId.keys) {
+            guard var attachments = chatAttachmentsByMessageId[messageId] else { continue }
+            var changed = false
+            for index in attachments.indices where attachments[index].documentId == documentId {
+                attachments[index] = transform(attachments[index])
+                changed = true
+            }
+            if changed {
+                chatAttachmentsByMessageId[messageId] = attachments
+            }
+        }
+        for messageIndex in openClawMessages.indices {
+            for attachmentIndex in openClawMessages[messageIndex].attachments.indices
+            where openClawMessages[messageIndex].attachments[attachmentIndex].documentId == documentId {
+                openClawMessages[messageIndex].attachments[attachmentIndex] = transform(
+                    openClawMessages[messageIndex].attachments[attachmentIndex]
+                )
+            }
         }
     }
 
@@ -7412,6 +7654,27 @@ private func makeUITestPendingFile(named filename: String, in cacheDirectory: UR
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         try Data("fixture".utf8).write(to: url, options: .atomic)
         return LocalUploadFile(url: url, filename: filename, mimeType: contentTypeForFilename(filename))
+    } catch {
+        return nil
+    }
+}
+
+private func makeUITestChatPDF(in cacheDirectory: URL) -> LocalUploadFile? {
+    let directory = cacheDirectory.appendingPathComponent("chat-attachments/ui-workspace/ui-pdf", isDirectory: true)
+    let url = directory.appendingPathComponent("NFC 芯片研究资料.pdf")
+    do {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let renderer = UIGraphicsPDFRenderer(bounds: CGRect(x: 0, y: 0, width: 320, height: 480))
+        let data = renderer.pdfData { context in
+            context.beginPage()
+            let text = "NFC research fixture" as NSString
+            text.draw(
+                at: CGPoint(x: 36, y: 48),
+                withAttributes: [.font: UIFont.systemFont(ofSize: 20, weight: .semibold)]
+            )
+        }
+        try data.write(to: url, options: .atomic)
+        return LocalUploadFile(url: url, filename: url.lastPathComponent, mimeType: "application/pdf")
     } catch {
         return nil
     }
